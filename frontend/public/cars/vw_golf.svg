@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 80" fill="none">
+  <defs>
+    <linearGradient id="golfBody" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#047857"/>
+      <stop offset="50%" stop-color="#10b981"/>
+      <stop offset="100%" stop-color="#065f46"/>
+    </linearGradient>
+    <linearGradient id="golfGlass" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#d1fae5" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#059669" stop-opacity="0.6"/>
+    </linearGradient>
+  </defs>
+  <!-- Hatchback Chassis -->
+  <path d="M25 52 C25 52, 28 34, 55 28 C85 22, 140 22, 160 28 C180 34, 210 42, 226 50 C232 54, 233 60, 220 60 L22 60 C12 60, 15 52, 25 52 Z" fill="url(#golfBody)" />
+  <!-- Hatchback Roof Windows -->
+  <path d="M60 27 C80 23, 135 23, 155 29 C145 38, 70 38, 60 27 Z" fill="url(#golfGlass)" />
+  <!-- B-Pillar divider -->
+  <line x1="108" y1="24" x2="108" y2="38" stroke="#065f46" stroke-width="2.5" />
+  <!-- Headlight LED -->
+  <path d="M218 48 L228 50 L218 53 Z" fill="#6ee7b7" />
+  <!-- Taillight LED -->
+  <path d="M15 50 L10 52 L15 55 Z" fill="#f87171" />
+  <!-- GTI Rims -->
+  <circle cx="50" cy="58" r="14" fill="#064e3b" stroke="#a7f3d0" stroke-width="2.5"/>
+  <circle cx="50" cy="58" r="6" fill="#34d399"/>
+  <circle cx="180" cy="58" r="14" fill="#064e3b" stroke="#a7f3d0" stroke-width="2.5"/>
+  <circle cx="180" cy="58" r="6" fill="#34d399"/>
+</svg>

@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 80" fill="none">
+  <defs>
+    <linearGradient id="bmwBody" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#1e3a8a"/>
+      <stop offset="50%" stop-color="#2563eb"/>
+      <stop offset="100%" stop-color="#1d4ed8"/>
+    </linearGradient>
+    <linearGradient id="bmwGlass" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#bae6fd" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#0284c7" stop-opacity="0.6"/>
+    </linearGradient>
+  </defs>
+  <!-- Main Chassis -->
+  <path d="M18 52 C22 52, 32 33, 62 27 C92 21, 142 21, 170 28 C190 33, 215 41, 228 49 C234 53, 235 60, 220 60 L16 60 C8 60, 8 52, 18 52 Z" fill="url(#bmwBody)" />
+  <!-- Roof Windows with Hofmeister Kink -->
+  <path d="M68 26 C86 22, 138 22, 160 28 C150 37, 76 37, 68 26 Z" fill="url(#bmwGlass)" />
+  <!-- B-Pillar divider -->
+  <line x1="112" y1="23" x2="112" y2="37" stroke="#1e3a8a" stroke-width="2.5" />
+  <!-- Headlight Laser -->
+  <path d="M220 47 L230 49 L220 52 Z" fill="#60a5fa" />
+  <!-- Taillight L-Shape LED -->
+  <path d="M10 49 L6 51 L10 54 Z" fill="#f87171" />
+  <!-- M-Sport Rims -->
+  <circle cx="48" cy="58" r="14" fill="#0f172a" stroke="#cbd5e1" stroke-width="2.5"/>
+  <circle cx="48" cy="58" r="6" fill="#64748b"/>
+  <circle cx="182" cy="58" r="14" fill="#0f172a" stroke="#cbd5e1" stroke-width="2.5"/>
+  <circle cx="182" cy="58" r="6" fill="#64748b"/>
+</svg>

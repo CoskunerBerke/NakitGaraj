@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 80" fill="none">
+  <defs>
+    <linearGradient id="mercBody" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#334155"/>
+      <stop offset="50%" stop-color="#64748b"/>
+      <stop offset="100%" stop-color="#1e293b"/>
+    </linearGradient>
+    <linearGradient id="mercGlass" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#e0f2fe" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#38bdf8" stop-opacity="0.6"/>
+    </linearGradient>
+  </defs>
+  <!-- Main Chassis -->
+  <path d="M20 52 C24 52, 34 34, 64 28 C94 22, 144 22, 172 29 C192 34, 216 42, 228 50 C234 54, 235 60, 222 60 L18 60 C8 60, 10 52, 20 52 Z" fill="url(#mercBody)" />
+  <!-- Roof Windows -->
+  <path d="M70 27 C88 23, 140 23, 162 29 C152 38, 78 38, 70 27 Z" fill="url(#mercGlass)" />
+  <!-- B-Pillar divider -->
+  <line x1="114" y1="24" x2="114" y2="38" stroke="#1e293b" stroke-width="2.5" />
+  <!-- Headlight Multibeam -->
+  <path d="M220 48 L230 50 L220 53 Z" fill="#93c5fd" />
+  <!-- Taillight LED -->
+  <path d="M12 50 L8 52 L12 55 Z" fill="#f87171" />
+  <!-- AMG Star Rims -->
+  <circle cx="50" cy="58" r="14" fill="#090d16" stroke="#f1f5f9" stroke-width="2.5"/>
+  <circle cx="50" cy="58" r="6" fill="#cbd5e1"/>
+  <circle cx="185" cy="58" r="14" fill="#090d16" stroke="#f1f5f9" stroke-width="2.5"/>
+  <circle cx="185" cy="58" r="6" fill="#cbd5e1"/>
+</svg>

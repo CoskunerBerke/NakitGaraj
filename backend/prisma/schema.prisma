@@ -1,0 +1,230 @@
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id           String     @id @default(uuid())
+  email        String     @unique
+  passwordHash String
+  firstName    String
+  lastName     String
+  roleId       String
+  role         Role       @relation(fields: [roleId], references: [id])
+  auditLogs    AuditLog[]
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+}
+
+model Role {
+  id          String       @id @default(uuid())
+  name        String       @unique
+  permissions Permission[] @relation("RolePermissions")
+  users       User[]
+}
+
+model Permission {
+  id    String @id @default(uuid())
+  name  String @unique
+  roles Role[] @relation("RolePermissions")
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id])
+  action     String
+  entityName String?
+  entityId   String?
+  ipAddress  String?
+  details    String?
+  timestamp  DateTime @default(now())
+}
+
+model Manufacturer {
+  id             String                 @id @default(uuid())
+  name           String                 @unique
+  popularityScore Float                  @default(0)
+  models         Model[]
+  specifications VehicleSpecification[]
+}
+
+model Model {
+  id              String                 @id @default(uuid())
+  name            String
+  manufacturerId  String
+  manufacturer    Manufacturer           @relation(fields: [manufacturerId], references: [id], onDelete: Cascade)
+  popularityScore Float                  @default(0)
+  variants        Variant[]
+  specifications  VehicleSpecification[]
+
+  @@unique([manufacturerId, name])
+}
+
+model Variant {
+  id             String                 @id @default(uuid())
+  name           String
+  modelId        String
+  model          Model                  @relation(fields: [modelId], references: [id], onDelete: Cascade)
+  engineSize     Int                    // cc (e.g. 1598)
+  horsepower     Int                    // hp (e.g. 110)
+  torque         Int                    // Nm (e.g. 250)
+  cylinders      Int                    @default(4)
+  packages       Package[]
+  specifications VehicleSpecification[]
+
+  @@unique([modelId, name])
+}
+
+model Package {
+  id             String                 @id @default(uuid())
+  name           String
+  variantId      String
+  variant        Variant                @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  specifications VehicleSpecification[]
+
+  @@unique([variantId, name])
+}
+
+model FuelType {
+  id             String                 @id @default(uuid())
+  name           String                 @unique // e.g. Benzin, Dizel, Hibrit, Elektrik, LPG
+  specifications VehicleSpecification[]
+}
+
+model TransmissionType {
+  id             String                 @id @default(uuid())
+  name           String                 @unique // e.g. Manuel, Otomatik, Yarı Otomatik
+  specifications VehicleSpecification[]
+}
+
+model BodyType {
+  id             String                 @id @default(uuid())
+  name           String                 @unique // e.g. Sedan, Hatchback, SUV, Coupe, Station Wagon, Cabrio
+  specifications VehicleSpecification[]
+}
+
+model DriveType {
+  id             String                 @id @default(uuid())
+  name           String                 @unique // e.g. Önden Çekiş, Arkadan İtiş, 4x4
+  specifications VehicleSpecification[]
+}
+
+model VehicleSpecification {
+  id                 String              @id @default(uuid())
+  year               Int
+  manufacturerId     String
+  manufacturer       Manufacturer        @relation(fields: [manufacturerId], references: [id])
+  modelId            String
+  model              Model               @relation(fields: [modelId], references: [id])
+  variantId          String
+  variant            Variant             @relation(fields: [variantId], references: [id])
+  packageId          String?
+  package            Package?            @relation(fields: [packageId], references: [id])
+  bodyTypeId         String
+  bodyType           BodyType            @relation(fields: [bodyTypeId], references: [id])
+  fuelTypeId         String
+  fuelType           FuelType            @relation(fields: [fuelTypeId], references: [id])
+  transmissionTypeId String
+  transmissionType   TransmissionType    @relation(fields: [transmissionTypeId], references: [id])
+  driveTypeId        String
+  driveType          DriveType           @relation(fields: [driveTypeId], references: [id])
+  
+  // Specifications details
+  doors              Int                 @default(4)
+  seats              Int                 @default(5)
+  fuelConsumption    Float               @default(0) // L/100km
+  emission           Float               @default(0) // CO2 g/km
+  equipmentLevel     String?             // comma-separated or text listing standard items
+  safetyEquipment    String?             // safety rating or listing
+  originalMSRP       Float?              // Launch price (MSRP)
+  popularityScore    Float               @default(5.0)
+  reliabilityScore   Float               @default(5.0)
+
+  marketPrices       VehicleMarketPrice[]
+  evaluations        VehicleEvaluation[]
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+}
+
+model VehicleMarketPrice {
+  id                       String               @id @default(uuid())
+  vehicleSpecificationId   String
+  vehicleSpecification     VehicleSpecification @relation(fields: [vehicleSpecificationId], references: [id], onDelete: Cascade)
+  currentMarketAverage     Float
+  averageListingPrice      Float
+  minPrice                 Float
+  maxPrice                 Float
+  regionalPriceDifferences String                 // e.g. {"Istanbul": 1.0, "Ankara": 0.98, "Izmir": 0.99} (JSON string)
+  averageSellingTime       Int                  // e.g. 15 (days)
+  cleanMarketAverage       Float?               // Average price of clean listings (excluding heavy damage/pert)
+  scrapedAt                DateTime?            // Last scraped timestamp
+  updatedAt                DateTime             @updatedAt
+}
+
+model VehicleEvaluation {
+  id                     String                  @id @default(uuid())
+  vehicleSpecificationId String
+  vehicleSpecification   VehicleSpecification    @relation(fields: [vehicleSpecificationId], references: [id])
+  licensePlate           String
+  mileage                Int
+  color                  String
+  damageStatus           String                  // "YES", "NO", "UNKNOWN"
+  damageDetails          String?
+  estimatedValue         Float
+  minExpectedValue       Float
+  maxExpectedValue       Float
+  quickSaleValue         Float
+  confidenceScore        Int                     @default(90)
+  aiAnalysis             String                  // string[] listing key observations (JSON string)
+  userIp                 String?
+  createdAt              DateTime                @default(now())
+  consignment            ConsignmentApplication?
+
+  // Müşteri bilgileri (güvenlik için public API'lerden gizlenecektir)
+  firstName              String?
+  lastName               String?
+  phone                  String?
+
+  // Yeni sorular ve pazarlık bilgileri
+  sellingTimeline        String?                 // hemen, 1_week, 2_weeks, vb.
+  userDesiredPrice       Float?
+  finalOfferedPrice      Float?
+
+  // Detaylı donanım özellikleri checklist (JSON string)
+  features               String?
+}
+
+model ConsignmentApplication {
+  id                  String             @id @default(uuid())
+  vehicleEvaluationId String?            @unique
+  vehicleEvaluation   VehicleEvaluation? @relation(fields: [vehicleEvaluationId], references: [id], onDelete: Cascade)
+  firstName           String
+  lastName            String
+  phone               String
+  email               String
+  province            String
+  district            String
+  preferredContact    String             // PHONE, EMAIL, WHATSAPP
+  status              String             @default("PENDING") // PENDING, APPROVED, REJECTED, COMPLETED
+  notes               String?
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+}
+
+model VehicleRequest {
+  id        String   @id @default(uuid())
+  brand     String
+  model     String
+  year      Int?
+  note      String?
+  phone     String?
+  email     String?
+  status    String   @default("PENDING") // PENDING, ADDED, REJECTED
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}

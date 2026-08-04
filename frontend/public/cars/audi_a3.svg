@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 80" fill="none">
+  <defs>
+    <linearGradient id="audiBody" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#1e293b"/>
+      <stop offset="50%" stop-color="#334155"/>
+      <stop offset="100%" stop-color="#0f172a"/>
+    </linearGradient>
+    <linearGradient id="audiGlass" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#0284c7" stop-opacity="0.6"/>
+    </linearGradient>
+  </defs>
+  <!-- Main Chassis -->
+  <path d="M20 52 C25 52, 35 34, 65 28 C95 22, 145 22, 172 29 C192 34, 215 42, 228 50 C234 54, 235 60, 222 60 L18 60 C8 60, 10 52, 20 52 Z" fill="url(#audiBody)" />
+  <!-- Roof Windows -->
+  <path d="M72 27 C90 23, 140 23, 162 29 C152 38, 80 38, 72 27 Z" fill="url(#audiGlass)" />
+  <!-- B-Pillar divider -->
+  <line x1="115" y1="24" x2="115" y2="38" stroke="#0f172a" stroke-width="2.5" />
+  <!-- Headlight LED -->
+  <path d="M220 48 L230 50 L220 53 Z" fill="#38bdf8" />
+  <!-- Taillight LED -->
+  <path d="M12 50 L8 52 L12 55 Z" fill="#ef4444" />
+  <!-- Wheels -->
+  <circle cx="50" cy="58" r="14" fill="#090d16" stroke="#e2e8f0" stroke-width="2.5"/>
+  <circle cx="50" cy="58" r="6" fill="#94a3b8"/>
+  <circle cx="185" cy="58" r="14" fill="#090d16" stroke="#e2e8f0" stroke-width="2.5"/>
+  <circle cx="185" cy="58" r="6" fill="#94a3b8"/>
+</svg>
