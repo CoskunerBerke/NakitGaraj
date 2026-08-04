@@ -46,7 +46,7 @@ export class EvaluationService {
     const brandName = spec.manufacturer.name;
     const modelName = spec.model.name;
     const lowerBrand = brandName.toLowerCase();
-    const lowerModel = modelName.toLowerCase();
+    const lowerModel = (modelName + ' ' + (spec.variant?.name || '')).toLowerCase();
 
     // =====================================================================
     // TÜRK İKİNCİ EL OTOMOBİL PİYASASI - DİNAMİK DEĞERLEME MOTORU
@@ -83,24 +83,24 @@ export class EvaluationService {
       floorPrice = 6000000;
       isExotic = true;
     }
-    // 3. Lüks / Executive Tier (Sahibinden 2026: 8-15M)
+    // 3. Lüks / Executive Tier (Sahibinden 2026: 15-28M)
     else if (
       lowerModel.includes('s-class') || lowerModel.includes('s serisi') ||
       lowerModel.includes('7 series') || lowerModel.includes('7 serisi') ||
       lowerModel.includes('a8') ||
       lowerModel.includes('panamera') ||
       lowerModel.includes('cayenne') ||
-      lowerModel.includes('macan') ||
       lowerModel.includes('x7') ||
       lowerModel.includes('q8') ||
       lowerModel.includes('gls') ||
+      lowerModel.includes('g-class') || lowerModel.includes('g serisi') || lowerModel.includes('g 63') ||
       (lowerBrand.includes('land rover') && lowerModel.includes('range rover') && !lowerModel.includes('evoque') && !lowerModel.includes('velar'))
     ) {
-      basePrice2026 = 12000000;
-      floorPrice = 3800000;
+      basePrice2026 = 18500000;
+      floorPrice = 6500000;
       isPremium = true;
     }
-    // 4. Mid-Premium Tier (Sahibinden 2026: 4.5-8M)
+    // 4. Mid-Premium Tier (Sahibinden 2026: 8-15M)
     else if (
       lowerModel.includes('e-class') || lowerModel.includes('e serisi') ||
       lowerModel.includes('5 series') || lowerModel.includes('5 serisi') ||
@@ -114,11 +114,12 @@ export class EvaluationService {
       lowerModel.includes('q7') ||
       lowerModel.includes('gle') ||
       lowerModel.includes('glc coupe') ||
+      lowerModel.includes('macan') ||
       lowerModel.includes('velar') ||
       lowerModel.includes('discovery')
     ) {
-      basePrice2026 = 6500000;
-      floorPrice = 2200000;
+      basePrice2026 = 12500000;
+      floorPrice = 3500000;
       isPremium = true;
     }
     // 5. Compact Premium Tier (Sahibinden 2026: 3.2-4.5M)
@@ -147,9 +148,9 @@ export class EvaluationService {
       lowerBrand.includes('jaguar') ||
       lowerBrand.includes('lexus') ||
       lowerBrand.includes('mini') ||
-      (lowerBrand.includes('mercedes') && !lowerModel.includes('a serisi') && !lowerModel.includes('a-class') && !lowerModel.includes('b serisi') && !lowerModel.includes('b-class')) ||
-      (lowerBrand.includes('bmw') && !lowerModel.includes('1 ser') && !lowerModel.includes('2 ser') && !lowerModel.includes('1 series') && !lowerModel.includes('2 series')) ||
-      (lowerBrand.includes('audi') && !lowerModel.includes('a1'))
+      (lowerBrand.includes('mercedes') && !lowerModel.includes('a serisi') && !lowerModel.includes('a-class') && !lowerModel.includes('b serisi') && !lowerModel.includes('b-class') && !lowerModel.includes('e-class') && !lowerModel.includes('e serisi') && !lowerModel.includes('s-class') && !lowerModel.includes('s serisi')) ||
+      (lowerBrand.includes('bmw') && !lowerModel.includes('1 ser') && !lowerModel.includes('2 ser') && !lowerModel.includes('1 series') && !lowerModel.includes('2 series') && !lowerModel.includes('5 ser') && !lowerModel.includes('5 series') && !lowerModel.includes('7 ser') && !lowerModel.includes('7 series')) ||
+      (lowerBrand.includes('audi') && !lowerModel.includes('a1') && !lowerModel.includes('a6') && !lowerModel.includes('a7') && !lowerModel.includes('a8'))
     ) {
       basePrice2026 = 4200000;
       floorPrice = 1600000;
@@ -295,23 +296,25 @@ export class EvaluationService {
       isEconomy = true;
     }
 
-    // Use database market price if present
+    // Use database market price or max of spec.originalMSRP and calibrated basePrice2026
     const dbMarket = spec.marketPrices && spec.marketPrices.length > 0 ? spec.marketPrices[0] : null;
-    let baseValuation = basePrice2026;
+    let baseValuation = Math.max(spec.originalMSRP || 0, basePrice2026);
     if (dbMarket && dbMarket.currentMarketAverage > 0) {
       baseValuation = dbMarket.currentMarketAverage;
+    } else if (dto.year < 2026) {
+      const carAge = 2026 - dto.year;
+      const decayRate = (isPremium || isExotic) ? 0.94 : 0.88;
+      baseValuation = Math.max(floorPrice, Math.round(baseValuation * Math.pow(decayRate, carAge)));
     }
 
-    const carAge = Math.max(0, 2026 - dto.year);
     const calculatedBasePrice = baseValuation;
-
     let baseValuationFinal = baseValuation;
     const averageSellingTime = isPremium || isExotic ? 28 : (isEconomy ? 14 : 19);
 
     // Hard ceiling for maximum Sahibinden market listing price
     const sahibindenMaxCap = (dbMarket && dbMarket.maxPrice > 0) 
       ? dbMarket.maxPrice 
-      : Math.round(calculatedBasePrice * 1.10);
+      : Math.round(calculatedBasePrice * 1.35);
 
     // A. 7-Day Local Cache Lookup - Bypassed to ensure every evaluation creates a unique secure DB entry
     /*

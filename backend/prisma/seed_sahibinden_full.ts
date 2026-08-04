@@ -163,6 +163,33 @@ export const masterSahibindenData: BrandSeed[] = [
           { name: '2.0 TDI', engineSize: 1968, horsepower: 190, torque: 400, cylinders: 4, body: 'Sedan', fuel: 'Dizel', trans: 'Otomatik', drive: 'Önden Çekiş', basePrice: 2400000, packages: ['Design', 'Sport', 'S Line'] },
         ],
       },
+      {
+        name: 'A6',
+        popularityScore: 9.8,
+        variants: [
+          { name: '40 TDI', engineSize: 1968, horsepower: 204, torque: 400, cylinders: 4, body: 'Sedan', fuel: 'Dizel', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 11000000, packages: ['Design', 'Sport', 'S Line', 'Quattro S Line', 'Standart'] },
+          { name: '45 TFSI', engineSize: 1984, horsepower: 265, torque: 370, cylinders: 4, body: 'Sedan', fuel: 'Benzin', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 11800000, packages: ['Design', 'Sport', 'S Line', 'Quattro S Line'] },
+          { name: '50 TFSI e', engineSize: 1984, horsepower: 299, torque: 450, cylinders: 4, body: 'Sedan', fuel: 'Hibrit', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 12800000, packages: ['S Line', 'Quattro S Line'] },
+          { name: '55 TFSI', engineSize: 2995, horsepower: 340, torque: 500, cylinders: 6, body: 'Sedan', fuel: 'Benzin', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 14800000, packages: ['S Line', 'Quattro S Line', 'Design S Line'] },
+          { name: '2.0 TDI', engineSize: 1968, horsepower: 190, torque: 400, cylinders: 4, body: 'Sedan', fuel: 'Dizel', trans: 'Otomatik', drive: 'Önden Çekiş', basePrice: 8500000, packages: ['Design', 'Sport', 'S Line', 'Standart'] },
+        ],
+      },
+      {
+        name: 'A7',
+        popularityScore: 9.6,
+        variants: [
+          { name: '40 TDI Quattro', engineSize: 1968, horsepower: 204, torque: 400, cylinders: 4, body: 'Coupe', fuel: 'Dizel', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 13500000, packages: ['S Line', 'Quattro S Line'] },
+          { name: '55 TFSI Quattro', engineSize: 2995, horsepower: 340, torque: 500, cylinders: 6, body: 'Coupe', fuel: 'Benzin', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 16500000, packages: ['S Line', 'Quattro S Line'] },
+        ],
+      },
+      {
+        name: 'A8',
+        popularityScore: 9.7,
+        variants: [
+          { name: '50 TDI Quattro', engineSize: 2998, horsepower: 286, torque: 600, cylinders: 6, body: 'Sedan', fuel: 'Dizel', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 18500000, packages: ['Long', 'Executive', 'S Line'] },
+          { name: '55 TFSI Quattro', engineSize: 2995, horsepower: 340, torque: 500, cylinders: 6, body: 'Sedan', fuel: 'Benzin', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 20500000, packages: ['Long', 'Executive', 'S Line'] },
+        ],
+      },
     ],
   },
 

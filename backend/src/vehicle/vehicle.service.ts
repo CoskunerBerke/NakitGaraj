@@ -206,16 +206,60 @@ export class VehicleService {
 
     // Segment Pricing Base
     if (
+      lowerBrand.includes('lamborghini') ||
+      lowerBrand.includes('ferrari') ||
+      lowerBrand.includes('bentley') ||
+      lowerBrand.includes('rolls-royce') ||
+      lowerBrand.includes('aston martin') ||
+      lowerBrand.includes('mclaren')
+    ) {
+      basePrice2026 = 35000000;
+      floorPrice = 12000000;
+      isExotic = true;
+    } else if (
       lowerBrand.includes('porsche') ||
       lowerBrand.includes('maserati') ||
-      lowerBrand.includes('aston') ||
-      lowerBrand.includes('ferrari') ||
-      lowerBrand.includes('lamborghini') ||
-      lowerBrand.includes('bentley')
+      lowerModel.includes('r8') ||
+      lowerModel.includes('amg gt')
     ) {
-      basePrice2026 = 13000000;
-      floorPrice = 3500000;
+      basePrice2026 = 18000000;
+      floorPrice = 6000000;
       isExotic = true;
+    } else if (
+      lowerModel.includes('s-class') || lowerModel.includes('s serisi') ||
+      lowerModel.includes('7 series') || lowerModel.includes('7 serisi') ||
+      lowerModel.includes('a8') ||
+      lowerModel.includes('panamera') ||
+      lowerModel.includes('cayenne') ||
+      lowerModel.includes('x7') ||
+      lowerModel.includes('q8') ||
+      lowerModel.includes('gls') ||
+      lowerModel.includes('g-class') || lowerModel.includes('g serisi') || lowerModel.includes('g 63') ||
+      (lowerBrand.includes('land rover') && lowerModel.includes('range rover') && !lowerModel.includes('evoque') && !lowerModel.includes('velar'))
+    ) {
+      basePrice2026 = 18500000;
+      floorPrice = 6500000;
+      isPremium = true;
+    } else if (
+      lowerModel.includes('e-class') || lowerModel.includes('e serisi') ||
+      lowerModel.includes('5 series') || lowerModel.includes('5 serisi') ||
+      lowerModel.includes('a6') ||
+      lowerModel.includes('a7') ||
+      lowerModel.includes('s90') ||
+      lowerModel.includes('v90') ||
+      lowerModel.includes('xc90') ||
+      lowerModel.includes('x5') ||
+      lowerModel.includes('x6') ||
+      lowerModel.includes('q7') ||
+      lowerModel.includes('gle') ||
+      lowerModel.includes('glc coupe') ||
+      lowerModel.includes('macan') ||
+      lowerModel.includes('velar') ||
+      lowerModel.includes('discovery')
+    ) {
+      basePrice2026 = 12500000;
+      floorPrice = 3500000;
+      isPremium = true;
     } else if (
       lowerBrand.includes('mercedes') ||
       lowerBrand.includes('bmw') ||
@@ -226,7 +270,7 @@ export class VehicleService {
       lowerBrand.includes('jaguar')
     ) {
       basePrice2026 = 4500000;
-      floorPrice = 1200000;
+      floorPrice = 1600000;
       isPremium = true;
     } else if (
       lowerBrand.includes('fiat') ||

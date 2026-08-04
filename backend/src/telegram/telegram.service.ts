@@ -13,7 +13,9 @@ export interface TelegramSettings {
 @Injectable()
 export class TelegramService {
   private readonly logger = new Logger(TelegramService.name);
-  private settingsFilePath = path.join(process.cwd(), 'telegram-settings.json');
+  private settingsFilePath = fs.existsSync(path.join(process.cwd(), 'backend/telegram-settings.json'))
+    ? path.join(process.cwd(), 'backend/telegram-settings.json')
+    : path.join(process.cwd(), 'telegram-settings.json');
 
   constructor() {
     this.ensureSettingsFile();
@@ -22,8 +24,8 @@ export class TelegramService {
   private ensureSettingsFile() {
     if (!fs.existsSync(this.settingsFilePath)) {
       const defaultSettings: TelegramSettings = {
-        botToken: process.env.TELEGRAM_BOT_TOKEN || '',
-        chatIds: process.env.TELEGRAM_CHAT_IDS || '',
+        botToken: process.env.TELEGRAM_BOT_TOKEN || '8991553205:AAHbEJIsdi6IopkKoH4H1PpgghCoYg2P2Y8',
+        chatIds: process.env.TELEGRAM_CHAT_IDS || '1835798213',
         galleryWhatsAppPhone: process.env.GALLERY_WHATSAPP_PHONE || '05350379074',
         enabled: true,
       };
