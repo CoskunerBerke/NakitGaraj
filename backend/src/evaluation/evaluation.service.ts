@@ -296,12 +296,12 @@ export class EvaluationService {
       isEconomy = true;
     }
 
-    // Use database market price or max of spec.originalMSRP and calibrated basePrice2026
+    // Use database market price or spec.originalMSRP if present
     const dbMarket = spec.marketPrices && spec.marketPrices.length > 0 ? spec.marketPrices[0] : null;
-    let baseValuation = Math.max(spec.originalMSRP || 0, basePrice2026);
+    let baseValuation = (spec.originalMSRP && spec.originalMSRP > 0) ? spec.originalMSRP : basePrice2026;
     if (dbMarket && dbMarket.currentMarketAverage > 0) {
       baseValuation = dbMarket.currentMarketAverage;
-    } else if (dto.year < 2026) {
+    } else if (!spec.originalMSRP && dto.year < 2026) {
       const carAge = 2026 - dto.year;
       const decayRate = (isPremium || isExotic) ? 0.94 : 0.88;
       baseValuation = Math.max(floorPrice, Math.round(baseValuation * Math.pow(decayRate, carAge)));
@@ -539,11 +539,11 @@ export class EvaluationService {
     fairMarketValue = this.roundToCleanGalleryPrice(fairMarketValue);
 
     // REALISTIC TURKISH GALERİ CASH & CONSIGNMENT MODEL:
-    // 1. Anında Nakit Alım Teklifi (standardCashOffer): %80-82 Piyasa Değeri (Galerimize %18-20 net kâr)
-    // 2. Dükkan Konsinye Teklifi (standardConsignmentOffer): %95 Piyasa Değeri
+    // 1. Anında Nakit Alım Teklifi (standardCashOffer): %80 Piyasa Değeri (Galerimize %20 net kâr)
+    // 2. Dükkan Konsinye Teklifi (standardConsignmentOffer): %94-95 Piyasa Değeri (Asla Piyasa Satış Değerini geçemez)
     const cashMargin = fairMarketValue >= 2000000 ? 0.80 : 0.82;
     const standardCashOffer = this.roundToCleanGalleryPrice(fairMarketValue * cashMargin);
-    const standardConsignmentOffer = this.roundToCleanGalleryPrice(Math.min(fairMarketValue * 0.95, sahibindenMaxCap * 0.98));
+    const standardConsignmentOffer = this.roundToCleanGalleryPrice(fairMarketValue * 0.94);
 
     let finalOfferedPrice = standardCashOffer;
     let finalConsignmentPrice = standardConsignmentOffer;
@@ -564,23 +564,23 @@ export class EvaluationService {
         finalOfferedPrice = this.roundToCleanGalleryPrice(userDesiredPrice);
         finalConsignmentPrice = this.roundToCleanGalleryPrice(Math.min(userDesiredPrice * 1.10, standardConsignmentOffer));
       } 
-      else if (userDesiredPrice <= Math.round(fairMarketValue * 0.98)) {
-        // C. MÜŞTERİ MAKUL BİR PİYASA FİYATI İSTİYOR (Örn: 900.000 ₺, 950.000 ₺ vb.)
+      else if (userDesiredPrice <= Math.round(fairMarketValue * 0.95)) {
+        // C. MÜŞTERİ MAKUL BİR PİYASA FİYATI İSTİYOR (Örn: 7.500.000 ₺ vb.)
         finalOfferedPrice = this.roundToCleanGalleryPrice(Math.min(userDesiredPrice, standardCashOffer));
-        finalConsignmentPrice = this.roundToCleanGalleryPrice(Math.min(userDesiredPrice, sahibindenMaxCap * 0.98));
+        finalConsignmentPrice = this.roundToCleanGalleryPrice(userDesiredPrice);
       } 
       else {
-        // D. MÜŞTERİ PİYASANIN ÇOK ÜSTÜNDE FİYAT İSTİYOR (Örn: 2M ₺, 3M ₺, 5M ₺ vb.)
+        // D. MÜŞTERİ PİYASANIN VEYA KONSİNYE TAVANININ ÜSTÜNDE FİYAT İSTİYOR (Örn: 10M ₺ vb.)
         finalOfferedPrice = standardCashOffer;
-        finalConsignmentPrice = this.roundToCleanGalleryPrice(Math.min(standardConsignmentOffer, sahibindenMaxCap * 0.98));
+        finalConsignmentPrice = standardConsignmentOffer;
         aiAnalysis.push(
-          `Girdiğiniz fiyat beklentisi (${userDesiredPrice.toLocaleString('tr-TR')} ₺), Sahibinden.com piyasa tavanının (${sahibindenMaxCap.toLocaleString('tr-TR')} ₺) üzerindedir. Galerimizdeki tavan alım ve konsinye teklifimiz sunulmuştur.`
+          `Girdiğiniz fiyat beklentisi (${userDesiredPrice.toLocaleString('tr-TR')} ₺), Sahibinden.com piyasa satış ortalamasının (${fairMarketValue.toLocaleString('tr-TR')} ₺) üzerindedir. Dükkanımızda alıcı bulabilmesi için tavan konsinye satış fiyatımız ${standardConsignmentOffer.toLocaleString('tr-TR')} ₺ olarak belirlenmiştir.`
         );
       }
     }
 
-    // STRICT SAFETY: Konsinye Fiyatı asla Sahibinden Maksimum İlan Tavanını geçemez!
-    finalConsignmentPrice = this.roundToCleanGalleryPrice(Math.min(finalConsignmentPrice, sahibindenMaxCap * 0.98));
+    // STRICT SAFETY: Konsinye Fiyatı asla Sahibinden Piyasa Satış Değerini ve Tavanı geçemez!
+    finalConsignmentPrice = this.roundToCleanGalleryPrice(Math.min(finalConsignmentPrice, Math.round(fairMarketValue * 0.95)));
 
     const estimatedValue = finalOfferedPrice;
     const minExpectedValue = this.roundToCleanGalleryPrice(finalOfferedPrice * 0.94);
