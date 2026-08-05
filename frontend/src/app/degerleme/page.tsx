@@ -1855,8 +1855,21 @@ export default function ValuationWizard() {
               exit={{ scale: 0.95, opacity: 0 }}
               className="glass-card max-w-md w-full p-6 md:p-8 border border-zinc-200 dark:border-white/10 rounded-3xl flex flex-col gap-5 relative bg-white dark:bg-zinc-900 shadow-2xl"
             >
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-brand-orange/10 text-brand-orange flex items-center justify-center border border-brand-orange/20">
+              {/* Top-Right Close (X) Button */}
+              <button
+                type="button"
+                onClick={() => {
+                  setShowUserModal(false);
+                  setUserModalError('');
+                }}
+                className="absolute top-5 right-5 w-8 h-8 rounded-full bg-zinc-100 dark:bg-zinc-800 text-zinc-400 hover:text-zinc-900 dark:hover:text-white hover:bg-zinc-200 dark:hover:bg-zinc-700 flex items-center justify-center transition-all"
+                title="Kapat / İptal"
+              >
+                <X className="w-4 h-4" />
+              </button>
+
+              <div className="flex items-center gap-3 pr-8">
+                <div className="w-10 h-10 rounded-xl bg-brand-orange/10 text-brand-orange flex items-center justify-center border border-brand-orange/20 shrink-0">
                   <User className="w-5 h-5" />
                 </div>
                 <div>
