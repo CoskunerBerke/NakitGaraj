@@ -12,17 +12,19 @@ export class EvaluationService {
 
   async evaluateVehicle(dto: CreateEvaluationDto, userIp?: string) {
     // 1. Query matching VehicleSpecification
-    const spec = await this.prisma.vehicleSpecification.findFirst({
-      where: {
-        year: dto.year,
-        manufacturerId: dto.manufacturerId,
-        modelId: dto.modelId,
-        variantId: dto.variantId,
-        packageId: dto.packageId,
-        bodyTypeId: dto.bodyTypeId,
-        fuelTypeId: dto.fuelTypeId,
-        transmissionTypeId: dto.transmissionTypeId,
-      },
+    const whereCondition: any = {
+      year: dto.year,
+      manufacturerId: dto.manufacturerId,
+      modelId: dto.modelId,
+    };
+    if (dto.variantId) whereCondition.variantId = dto.variantId;
+    if (dto.packageId) whereCondition.packageId = dto.packageId;
+    if (dto.bodyTypeId) whereCondition.bodyTypeId = dto.bodyTypeId;
+    if (dto.fuelTypeId) whereCondition.fuelTypeId = dto.fuelTypeId;
+    if (dto.transmissionTypeId) whereCondition.transmissionTypeId = dto.transmissionTypeId;
+
+    let spec = await this.prisma.vehicleSpecification.findFirst({
+      where: whereCondition,
       include: {
         manufacturer: true,
         model: true,
@@ -35,6 +37,29 @@ export class EvaluationService {
         marketPrices: true,
       },
     });
+
+    // Fallback if specific package/body filter yielded no spec but variant exists
+    if (!spec && dto.variantId) {
+      spec = await this.prisma.vehicleSpecification.findFirst({
+        where: {
+          year: dto.year,
+          manufacturerId: dto.manufacturerId,
+          modelId: dto.modelId,
+          variantId: dto.variantId,
+        },
+        include: {
+          manufacturer: true,
+          model: true,
+          variant: true,
+          package: true,
+          bodyType: true,
+          fuelType: true,
+          transmissionType: true,
+          driveType: true,
+          marketPrices: true,
+        },
+      });
+    }
 
     if (!spec) {
       throw new NotFoundException(
