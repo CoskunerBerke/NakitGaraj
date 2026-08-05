@@ -414,11 +414,90 @@ export const masterSahibindenData: BrandSeed[] = [
     popularityScore: 9.5,
     models: [
       {
-        name: 'i20',
+        name: 'Accent Era',
+        popularityScore: 9.7,
+        variants: [
+          { name: '1.4', engineSize: 1399, horsepower: 97, torque: 125, cylinders: 4, body: 'Sedan', fuel: 'Benzin', trans: 'Manuel', drive: 'Önden Çekiş', basePrice: 420000, packages: ['Eco', 'Expo Gold', 'Mode', 'Prime', 'Select', 'Select Expo Gold', 'Start', 'Team'] },
+          { name: '1.5 CRDi', engineSize: 1493, horsepower: 110, torque: 235, cylinders: 4, body: 'Sedan', fuel: 'Dizel', trans: 'Manuel', drive: 'Önden Çekiş', basePrice: 450000, packages: ['Select', 'Start', 'Team', 'Style'] },
+          { name: '1.5 CRDi-VGT', engineSize: 1493, horsepower: 110, torque: 235, cylinders: 4, body: 'Sedan', fuel: 'Dizel', trans: 'Manuel', drive: 'Önden Çekiş', basePrice: 470000, packages: ['Mode', 'Prime', 'Select', 'Start', 'Team'] },
+          { name: '1.6', engineSize: 1599, horsepower: 112, torque: 145, cylinders: 4, body: 'Sedan', fuel: 'Benzin', trans: 'Otomatik', drive: 'Önden Çekiş', basePrice: 480000, packages: ['Prime', 'Select', 'Start', 'Team'] },
+        ],
+      },
+      {
+        name: 'Accent',
+        popularityScore: 9.4,
+        variants: [
+          { name: '1.3', engineSize: 1341, horsepower: 85, torque: 118, cylinders: 4, body: 'Sedan', fuel: 'Benzin', trans: 'Manuel', drive: 'Önden Çekiş', basePrice: 320000, packages: ['1.3i L', 'Admire', 'GL Active', 'GL Comfort', 'GLS', 'GLS Active', 'L Comfort', 'LS'] },
+          { name: '1.5 CRDi', engineSize: 1493, horsepower: 82, torque: 180, cylinders: 3, body: 'Sedan', fuel: 'Dizel', trans: 'Manuel', drive: 'Önden Çekiş', basePrice: 350000, packages: ['Active', 'Admire', 'Comfort', 'GLS', 'LS'] },
+          { name: '1.5 D', engineSize: 1493, horsepower: 82, torque: 180, cylinders: 3, body: 'Sedan', fuel: 'Dizel', trans: 'Manuel', drive: 'Önden Çekiş', basePrice: 310000, packages: ['GL', 'GLS'] },
+          { name: '1.6', engineSize: 1599, horsepower: 105, torque: 143, cylinders: 4, body: 'Sedan', fuel: 'Benzin', trans: 'Otomatik', drive: 'Önden Çekiş', basePrice: 380000, packages: ['Admire', 'GLS'] },
+        ],
+      },
+      {
+        name: 'Accent Blue',
+        popularityScore: 9.6,
+        variants: [
+          { name: '1.4 D-CVVT', engineSize: 1368, horsepower: 100, torque: 133, cylinders: 4, body: 'Sedan', fuel: 'Benzin', trans: 'Otomatik', drive: 'Önden Çekiş', basePrice: 650000, packages: ['Biz', 'Mode', 'Mode Plus', 'Prime'] },
+          { name: '1.6 CRDi', engineSize: 1582, horsepower: 128, torque: 260, cylinders: 4, body: 'Sedan', fuel: 'Dizel', trans: 'Otomatik', drive: 'Önden Çekiş', basePrice: 720000, packages: ['Biz', 'Mode', 'Mode Plus', 'Prime'] },
+        ],
+      },
+      {
+        name: 'Elantra',
         popularityScore: 9.5,
+        variants: [
+          { name: '1.6 D-CVVT', engineSize: 1591, horsepower: 127, torque: 155, cylinders: 4, body: 'Sedan', fuel: 'Benzin', trans: 'Otomatik', drive: 'Önden Çekiş', basePrice: 1150000, packages: ['Style', 'Style Plus', 'Elite', 'Prime'] },
+          { name: '1.6 CRDi', engineSize: 1582, horsepower: 136, torque: 300, cylinders: 4, body: 'Sedan', fuel: 'Dizel', trans: 'Otomatik', drive: 'Önden Çekiş', basePrice: 1050000, packages: ['Style', 'Style Plus', 'Elite'] },
+        ],
+      },
+      {
+        name: 'Getz',
+        popularityScore: 9.3,
+        variants: [
+          { name: '1.3', engineSize: 1341, horsepower: 85, torque: 118, cylinders: 4, body: 'Hatchback', fuel: 'Benzin', trans: 'Manuel', drive: 'Önden Çekiş', basePrice: 320000, packages: ['GL', 'GLS'] },
+          { name: '1.4', engineSize: 1399, horsepower: 97, torque: 125, cylinders: 4, body: 'Hatchback', fuel: 'Benzin', trans: 'Otomatik', drive: 'Önden Çekiş', basePrice: 380000, packages: ['GL', 'GLS', 'Cool'] },
+          { name: '1.5 CRDi', engineSize: 1493, horsepower: 88, torque: 215, cylinders: 4, body: 'Hatchback', fuel: 'Dizel', trans: 'Manuel', drive: 'Önden Çekiş', basePrice: 360000, packages: ['GL', 'GLS', 'Cool'] },
+        ],
+      },
+      {
+        name: 'i10',
+        popularityScore: 9.3,
+        variants: [
+          { name: '1.0 MPI', engineSize: 998, horsepower: 67, torque: 96, cylinders: 3, body: 'Hatchback', fuel: 'Benzin', trans: 'Otomatik', drive: 'Önden Çekiş', basePrice: 850000, packages: ['Jump', 'Style', 'Elite'] },
+          { name: '1.2 MPI', engineSize: 1197, horsepower: 84, torque: 118, cylinders: 4, body: 'Hatchback', fuel: 'Benzin', trans: 'Otomatik', drive: 'Önden Çekiş', basePrice: 950000, packages: ['Style', 'Elite'] },
+        ],
+      },
+      {
+        name: 'i20',
+        popularityScore: 9.6,
         variants: [
           { name: '1.4 MPI', engineSize: 1368, horsepower: 100, torque: 132, cylinders: 4, body: 'Hatchback', fuel: 'Benzin', trans: 'Otomatik', drive: 'Önden Çekiş', basePrice: 1150000, packages: ['Jump', 'Style', 'Style Design', 'Elite', 'Elite Smart', 'N Line'] },
           { name: '1.2 MPI', engineSize: 1197, horsepower: 84, torque: 118, cylinders: 4, body: 'Hatchback', fuel: 'Benzin', trans: 'Manuel', drive: 'Önden Çekiş', basePrice: 950000, packages: ['Jump', 'Style'] },
+          { name: '1.0 T-GDI', engineSize: 998, horsepower: 100, torque: 172, cylinders: 3, body: 'Hatchback', fuel: 'Benzin', trans: 'Otomatik', drive: 'Önden Çekiş', basePrice: 1250000, packages: ['Style', 'Style Plus', 'Elite', 'N Line'] },
+        ],
+      },
+      {
+        name: 'i30',
+        popularityScore: 9.4,
+        variants: [
+          { name: '1.6 CRDi', engineSize: 1582, horsepower: 136, torque: 300, cylinders: 4, body: 'Hatchback', fuel: 'Dizel', trans: 'Otomatik', drive: 'Önden Çekiş', basePrice: 1150000, packages: ['Style', 'Elite', 'Elite Smart'] },
+          { name: '1.4 T-GDI', engineSize: 1353, horsepower: 140, torque: 242, cylinders: 4, body: 'Hatchback', fuel: 'Benzin', trans: 'Otomatik', drive: 'Önden Çekiş', basePrice: 1250000, packages: ['Style', 'Elite'] },
+        ],
+      },
+      {
+        name: 'Bayon',
+        popularityScore: 9.5,
+        variants: [
+          { name: '1.4 MPI', engineSize: 1368, horsepower: 100, torque: 134, cylinders: 4, body: 'SUV', fuel: 'Benzin', trans: 'Otomatik', drive: 'Önden Çekiş', basePrice: 1250000, packages: ['Jump', 'Style', 'Elite'] },
+          { name: '1.0 T-GDI', engineSize: 998, horsepower: 100, torque: 172, cylinders: 3, body: 'SUV', fuel: 'Benzin', trans: 'Otomatik', drive: 'Önden Çekiş', basePrice: 1350000, packages: ['Style', 'Elite'] },
+        ],
+      },
+      {
+        name: 'Kona',
+        popularityScore: 9.5,
+        variants: [
+          { name: '1.0 T-GDI', engineSize: 998, horsepower: 120, torque: 172, cylinders: 3, body: 'SUV', fuel: 'Benzin', trans: 'Otomatik', drive: 'Önden Çekiş', basePrice: 1450000, packages: ['Style', 'Elite', 'N Line'] },
+          { name: '1.6 T-GDI', engineSize: 1598, horsepower: 198, torque: 265, cylinders: 4, body: 'SUV', fuel: 'Benzin', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 1850000, packages: ['N Line', 'Prime'] },
+          { name: '1.6 CRDi', engineSize: 1598, horsepower: 136, torque: 320, cylinders: 4, body: 'SUV', fuel: 'Dizel', trans: 'Otomatik', drive: 'Önden Çekiş', basePrice: 1550000, packages: ['Style', 'Elite'] },
         ],
       },
       {
@@ -427,6 +506,14 @@ export const masterSahibindenData: BrandSeed[] = [
         variants: [
           { name: '1.6 T-GDI', engineSize: 1598, horsepower: 180, torque: 265, cylinders: 4, body: 'SUV', fuel: 'Benzin', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 2500000, packages: ['Style', 'Style Plus', 'Elite', 'Elite Plus', 'Prime', 'N Line'] },
           { name: '1.6 CRDi', engineSize: 1598, horsepower: 136, torque: 320, cylinders: 4, body: 'SUV', fuel: 'Dizel', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 2350000, packages: ['Style', 'Elite', 'Elite Plus'] },
+        ],
+      },
+      {
+        name: 'ix35',
+        popularityScore: 9.3,
+        variants: [
+          { name: '1.6 GDI', engineSize: 1591, horsepower: 135, torque: 165, cylinders: 4, body: 'SUV', fuel: 'Benzin', trans: 'Manuel', drive: 'Önden Çekiş', basePrice: 750000, packages: ['Style', 'Style Plus', 'Elite'] },
+          { name: '2.0 CRDi', engineSize: 1995, horsepower: 184, torque: 392, cylinders: 4, body: 'SUV', fuel: 'Dizel', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 850000, packages: ['Style 4x4', 'Elite 4x4'] },
         ],
       },
     ],
