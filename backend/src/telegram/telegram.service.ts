@@ -24,9 +24,9 @@ export class TelegramService {
   private ensureSettingsFile() {
     if (!fs.existsSync(this.settingsFilePath)) {
       const defaultSettings: TelegramSettings = {
-        botToken: process.env.TELEGRAM_BOT_TOKEN || '8991553205:AAHbEJIsdi6IopkKoH4H1PpgghCoYg2P2Y8',
-        chatIds: process.env.TELEGRAM_CHAT_IDS || '1835798213',
-        galleryWhatsAppPhone: process.env.GALLERY_WHATSAPP_PHONE || '05350379074',
+        botToken: process.env.TELEGRAM_BOT_TOKEN || '',
+        chatIds: process.env.TELEGRAM_CHAT_IDS || '',
+        galleryWhatsAppPhone: process.env.GALLERY_WHATSAPP_PHONE || '',
         enabled: true,
       };
       fs.writeFileSync(this.settingsFilePath, JSON.stringify(defaultSettings, null, 2), 'utf-8');
