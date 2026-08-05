@@ -175,6 +175,58 @@ export const masterSahibindenData: BrandSeed[] = [
         ],
       },
       {
+        name: 'A5',
+        popularityScore: 9.6,
+        variants: [
+          { name: 'A5 Sedan 2.0 TDI Quattro', engineSize: 1968, horsepower: 190, torque: 400, cylinders: 4, body: 'Sedan', fuel: 'Dizel', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 4200000, packages: ['Design', 'Sport', 'S Line', 'Standart'] },
+          { name: 'A5 Sedan 2.0 TFSI', engineSize: 1984, horsepower: 252, torque: 370, cylinders: 4, body: 'Sedan', fuel: 'Benzin', trans: 'Otomatik', drive: 'Önden Çekiş', basePrice: 4100000, packages: ['Design', 'Sport', 'S Line', 'Standart'] },
+          { name: 'A5 Sedan 2.0 TFSI Quattro', engineSize: 1984, horsepower: 252, torque: 370, cylinders: 4, body: 'Sedan', fuel: 'Benzin', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 4500000, packages: ['Design', 'Sport', 'S Line', 'Standart'] },
+          { name: 'A5 Sedan 40 TDI', engineSize: 1968, horsepower: 204, torque: 400, cylinders: 4, body: 'Sedan', fuel: 'Dizel', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 4800000, packages: ['Advanced', 'S Line', 'Standart'] },
+          { name: 'A5 Sedan 45 TFSI', engineSize: 1984, horsepower: 265, torque: 370, cylinders: 4, body: 'Sedan', fuel: 'Benzin', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 5100000, packages: ['Advanced', 'S Line', 'Standart'] },
+          { name: 'A5 Sportback 2.0 TDI Quattro', engineSize: 1968, horsepower: 190, torque: 400, cylinders: 4, body: 'Hatchback', fuel: 'Dizel', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 4300000, packages: ['Design', 'Sport', 'S Line', 'Standart'] },
+          { name: 'A5 Sportback 2.0 TFSI Quattro', engineSize: 1984, horsepower: 252, torque: 370, cylinders: 4, body: 'Hatchback', fuel: 'Benzin', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 4600000, packages: ['Design', 'Sport', 'S Line', 'Standart'] },
+          { name: 'A5 Coupe 2.0 TFSI Quattro', engineSize: 1984, horsepower: 252, torque: 370, cylinders: 4, body: 'Coupe', fuel: 'Benzin', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 4700000, packages: ['Design', 'Sport', 'S Line', 'Standart'] },
+          { name: 'A5 Cabrio 2.0 TDI Quattro', engineSize: 1968, horsepower: 190, torque: 400, cylinders: 4, body: 'Cabrio', fuel: 'Dizel', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 4800000, packages: ['Design', 'Sport', 'S Line', 'Standart'] },
+        ],
+      },
+      {
+        name: 'A5 Sedan',
+        popularityScore: 9.7,
+        variants: [
+          { name: '2.0 TDI Quattro', engineSize: 1968, horsepower: 190, torque: 400, cylinders: 4, body: 'Sedan', fuel: 'Dizel', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 4200000, packages: ['Design', 'Sport', 'S Line', 'Standart'] },
+          { name: '2.0 TFSI', engineSize: 1984, horsepower: 252, torque: 370, cylinders: 4, body: 'Sedan', fuel: 'Benzin', trans: 'Otomatik', drive: 'Önden Çekiş', basePrice: 4100000, packages: ['Design', 'Sport', 'S Line', 'Standart'] },
+          { name: '2.0 TFSI Quattro', engineSize: 1984, horsepower: 252, torque: 370, cylinders: 4, body: 'Sedan', fuel: 'Benzin', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 4500000, packages: ['Design', 'Sport', 'S Line', 'Standart'] },
+          { name: '40 TDI', engineSize: 1968, horsepower: 204, torque: 400, cylinders: 4, body: 'Sedan', fuel: 'Dizel', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 4800000, packages: ['Advanced', 'S Line', 'Standart'] },
+          { name: '45 TFSI', engineSize: 1984, horsepower: 265, torque: 370, cylinders: 4, body: 'Sedan', fuel: 'Benzin', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 5100000, packages: ['Advanced', 'S Line', 'Standart'] },
+        ],
+      },
+      {
+        name: 'A5 Sportback',
+        popularityScore: 9.6,
+        variants: [
+          { name: '2.0 TDI Quattro', engineSize: 1968, horsepower: 190, torque: 400, cylinders: 4, body: 'Hatchback', fuel: 'Dizel', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 4300000, packages: ['Design', 'Sport', 'S Line', 'Standart'] },
+          { name: '2.0 TFSI', engineSize: 1984, horsepower: 252, torque: 370, cylinders: 4, body: 'Hatchback', fuel: 'Benzin', trans: 'Otomatik', drive: 'Önden Çekiş', basePrice: 4200000, packages: ['Design', 'Sport', 'S Line', 'Standart'] },
+          { name: '2.0 TFSI Quattro', engineSize: 1984, horsepower: 252, torque: 370, cylinders: 4, body: 'Hatchback', fuel: 'Benzin', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 4600000, packages: ['Design', 'Sport', 'S Line', 'Standart'] },
+          { name: '40 TDI', engineSize: 1968, horsepower: 204, torque: 400, cylinders: 4, body: 'Hatchback', fuel: 'Dizel', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 4900000, packages: ['Advanced', 'S Line', 'Standart'] },
+        ],
+      },
+      {
+        name: 'A5 Coupe',
+        popularityScore: 9.5,
+        variants: [
+          { name: '2.0 TDI Quattro', engineSize: 1968, horsepower: 190, torque: 400, cylinders: 4, body: 'Coupe', fuel: 'Dizel', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 4400000, packages: ['Design', 'Sport', 'S Line', 'Standart'] },
+          { name: '2.0 TFSI Quattro', engineSize: 1984, horsepower: 252, torque: 370, cylinders: 4, body: 'Coupe', fuel: 'Benzin', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 4700000, packages: ['Design', 'Sport', 'S Line', 'Standart'] },
+        ],
+      },
+      {
+        name: 'A5 Cabrio',
+        popularityScore: 9.4,
+        variants: [
+          { name: '2.0 TDI Quattro', engineSize: 1968, horsepower: 190, torque: 400, cylinders: 4, body: 'Cabrio', fuel: 'Dizel', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 4800000, packages: ['Design', 'Sport', 'S Line', 'Standart'] },
+          { name: '2.0 TFSI Quattro', engineSize: 1984, horsepower: 252, torque: 370, cylinders: 4, body: 'Cabrio', fuel: 'Benzin', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 5100000, packages: ['Design', 'Sport', 'S Line', 'Standart'] },
+        ],
+      },
+      {
         name: 'A7',
         popularityScore: 9.6,
         variants: [

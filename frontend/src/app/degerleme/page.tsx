@@ -155,6 +155,7 @@ export default function ValuationWizard() {
   const [scratchDent, setScratchDent] = useState(false);
   const [crackedGlass, setCrackedGlass] = useState(false);
   const [tramerAmount, setTramerAmount] = useState<number | ''>('');
+  const [modelSearchQuery, setModelSearchQuery] = useState('');
 
   // Missing Vehicle Request Modal
   const [showRequestModal, setShowRequestModal] = useState(false);
@@ -563,21 +564,74 @@ export default function ValuationWizard() {
             initial={{ opacity: 0, x: 20 }}
             animate={{ opacity: 1, x: 0 }}
             exit={{ opacity: 0, x: -20 }}
-            className="glass-card rounded-3xl p-6 md:p-10 border border-zinc-800/10 dark:border-white/5"
+            className="glass-card rounded-3xl p-6 md:p-10 border border-zinc-800/10 dark:border-white/5 flex flex-col gap-6"
           >
-            <div className="flex items-center gap-3 mb-6">
-              <div className="w-10 h-10 rounded-xl bg-brand-orange/10 flex items-center justify-center text-brand-orange border border-brand-orange/20">
-                <Car className="w-5 h-5" />
+            <div className="flex items-center justify-between border-b border-zinc-200 dark:border-white/10 pb-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-brand-orange/10 flex items-center justify-center text-brand-orange border border-brand-orange/20">
+                  <Car className="w-5 h-5" />
+                </div>
+                <div>
+                  <h2 className="text-xl md:text-2xl font-bold text-zinc-900 dark:text-white">
+                    <ShinyText text={t('wiz.step1.title')} speed={5} />
+                  </h2>
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400">{t('wiz.step1.desc')}</p>
+                </div>
               </div>
-              <div>
-                <h2 className="text-xl md:text-2xl font-bold text-zinc-900 dark:text-white">
-                  <ShinyText text={t('wiz.step1.title')} speed={5} />
-                </h2>
-                <p className="text-xs text-zinc-500 dark:text-zinc-400">{t('wiz.step1.desc')}</p>
+
+              {/* Reset selection button */}
+              {(selectedYear || selectedBrand || selectedModel) && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSelectedYear('');
+                    setSelectedBrand('');
+                    setModels([]);
+                    resetSubordinateOptions();
+                  }}
+                  className="text-xs text-zinc-400 hover:text-brand-orange flex items-center gap-1 font-semibold transition-all"
+                >
+                  <X className="w-3.5 h-3.5" /> Temizle
+                </button>
+              )}
+            </div>
+
+            {/* Quick Popular Brand Badges */}
+            <div className="flex flex-col gap-2">
+              <label className="text-[11px] font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
+                <Sparkles className="w-3.5 h-3.5 text-brand-orange" /> Popüler Markalar (Hızlı Seçim)
+              </label>
+              <div className="flex flex-wrap gap-2">
+                {[
+                  'Audi', 'BMW', 'Mercedes-Benz', 'Volkswagen', 'Fiat', 'Renault', 'Ford', 'Peugeot', 'Toyota', 'Hyundai', 'TOGG', 'Tesla', 'Opel', 'Citroen', 'Skoda'
+                ].map((bName) => {
+                  const bObj = brands.find((b) => b.name.toLowerCase() === bName.toLowerCase());
+                  const isSelected = bObj && selectedBrand === bObj.id;
+                  return (
+                    <button
+                      key={bName}
+                      type="button"
+                      onClick={() => {
+                        if (bObj) {
+                          if (!selectedYear) setSelectedYear(2024);
+                          setSelectedBrand(bObj.id);
+                        }
+                      }}
+                      className={`px-3 py-1.5 rounded-xl border text-xs font-bold transition-all flex items-center gap-1.5 ${
+                        isSelected
+                          ? 'bg-brand-orange text-white border-brand-orange shadow-md shadow-brand-orange/20 scale-105'
+                          : 'bg-zinc-100/80 dark:bg-zinc-900/80 border-zinc-200 dark:border-zinc-800 text-zinc-700 dark:text-zinc-300 hover:border-brand-orange/40 hover:text-brand-orange'
+                      }`}
+                    >
+                      {bName}
+                    </button>
+                  );
+                })}
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Main Selection Form Controls */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
               {/* Year Select */}
               <div className="flex flex-col gap-2">
                 <label className="text-xs font-semibold text-zinc-500 dark:text-zinc-400">{t('wiz.year')}</label>
@@ -589,7 +643,7 @@ export default function ValuationWizard() {
                     setModels([]);
                     resetSubordinateOptions();
                   }}
-                  className="glass-input rounded-xl p-3.5 text-sm w-full"
+                  className="glass-input rounded-xl p-3.5 text-sm w-full font-semibold"
                 >
                   <option value="">{t('wiz.select')}</option>
                   {years.map((y) => (
@@ -608,7 +662,7 @@ export default function ValuationWizard() {
                   disabled={!selectedYear}
                   value={selectedBrand}
                   onChange={(e) => setSelectedBrand(e.target.value)}
-                  className="glass-input rounded-xl p-3.5 text-sm w-full disabled:opacity-40"
+                  className="glass-input rounded-xl p-3.5 text-sm w-full font-semibold disabled:opacity-40"
                 >
                   <option value="">{t('wiz.select')}</option>
                   {brands.map((b) => (
@@ -619,22 +673,41 @@ export default function ValuationWizard() {
                 </select>
               </div>
 
-              {/* Model Select */}
+              {/* Model Select with Search Input */}
               <div className="flex flex-col gap-2">
-                <label className="text-xs font-semibold text-zinc-500 dark:text-zinc-400">{t('wiz.model')}</label>
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-semibold text-zinc-500 dark:text-zinc-400">{t('wiz.model')}</label>
+                  {selectedBrand && models.length > 5 && (
+                    <span className="text-[10px] text-zinc-400">{models.length} model listelendi</span>
+                  )}
+                </div>
+                {selectedBrand && models.length > 8 && (
+                  <div className="relative mb-1">
+                    <Search className="w-3.5 h-3.5 absolute left-3 top-3 text-zinc-400" />
+                    <input
+                      type="text"
+                      placeholder="Model Filtrele (Örn: A5 Sedan, Egea, Passat)..."
+                      value={modelSearchQuery}
+                      onChange={(e) => setModelSearchQuery(e.target.value)}
+                      className="glass-input rounded-lg py-2 pl-9 pr-3 text-xs w-full"
+                    />
+                  </div>
+                )}
                 <select
                   suppressHydrationWarning
                   disabled={!selectedBrand}
                   value={selectedModel}
                   onChange={(e) => setSelectedModel(e.target.value)}
-                  className="glass-input rounded-xl p-3.5 text-sm w-full disabled:opacity-40"
+                  className="glass-input rounded-xl p-3.5 text-sm w-full font-semibold disabled:opacity-40"
                 >
                   <option value="">{t('wiz.select')}</option>
-                  {models.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.name}
-                    </option>
-                  ))}
+                  {models
+                    .filter((m) => m.name.toLowerCase().includes(modelSearchQuery.toLowerCase()))
+                    .map((m) => (
+                      <option key={m.id} value={m.id}>
+                        {m.name}
+                      </option>
+                    ))}
                 </select>
               </div>
 
@@ -651,7 +724,7 @@ export default function ValuationWizard() {
                       setSelectedFuelType('');
                       setSelectedTransmission('');
                     }}
-                    className="glass-input rounded-xl p-3.5 text-sm w-full"
+                    className="glass-input rounded-xl p-3.5 text-sm w-full font-semibold"
                   >
                     <option value="">{t('wiz.select')}</option>
                     {availableVariants.map((v) => (
@@ -675,7 +748,7 @@ export default function ValuationWizard() {
                       setSelectedFuelType('');
                       setSelectedTransmission('');
                     }}
-                    className="glass-input rounded-xl p-3.5 text-sm w-full"
+                    className="glass-input rounded-xl p-3.5 text-sm w-full font-semibold"
                   >
                     <option value="">{t('wiz.select')}</option>
                     {availablePackages.map((p) => (
@@ -698,7 +771,7 @@ export default function ValuationWizard() {
                       setSelectedFuelType('');
                       setSelectedTransmission('');
                     }}
-                    className="glass-input rounded-xl p-3.5 text-sm w-full"
+                    className="glass-input rounded-xl p-3.5 text-sm w-full font-semibold"
                   >
                     <option value="">{t('wiz.select')}</option>
                     {availableBodies.map((b) => (
@@ -716,11 +789,8 @@ export default function ValuationWizard() {
                   <label className="text-xs font-semibold text-zinc-500 dark:text-zinc-400">{t('wiz.fuel')}</label>
                   <select
                     value={selectedFuelType}
-                    onChange={(e) => {
-                      setSelectedFuelType(e.target.value);
-                      setSelectedTransmission('');
-                    }}
-                    className="glass-input rounded-xl p-3.5 text-sm w-full"
+                    onChange={(e) => setSelectedFuelType(e.target.value)}
+                    className="glass-input rounded-xl p-3.5 text-sm w-full font-semibold"
                   >
                     <option value="">{t('wiz.select')}</option>
                     {availableFuels.map((f) => (
@@ -739,18 +809,40 @@ export default function ValuationWizard() {
                   <select
                     value={selectedTransmission}
                     onChange={(e) => setSelectedTransmission(e.target.value)}
-                    className="glass-input rounded-xl p-3.5 text-sm w-full"
+                    className="glass-input rounded-xl p-3.5 text-sm w-full font-semibold"
                   >
                     <option value="">{t('wiz.select')}</option>
-                    {availableTransmissions.map((t) => (
-                      <option key={t.id} value={t.id}>
-                        {t.name}
+                    {availableTransmissions.map((tr) => (
+                      <option key={tr.id} value={tr.id}>
+                        {tr.name}
                       </option>
                     ))}
                   </select>
                 </div>
               )}
             </div>
+
+            {/* Live Vehicle Selection Summary Badge */}
+            {(selectedBrand || selectedModel) && (
+              <motion.div
+                initial={{ opacity: 0, y: 10 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="mt-4 p-4 rounded-2xl bg-brand-orange/10 border border-brand-orange/20 flex items-center justify-between flex-wrap gap-2"
+              >
+                <div className="flex items-center gap-2">
+                  <Car className="w-4 h-4 text-brand-orange" />
+                  <span className="text-xs font-bold text-zinc-800 dark:text-zinc-200">
+                    Seçilen Araç: {selectedYear} {brands.find((b) => b.id === selectedBrand)?.name} {models.find((m) => m.id === selectedModel)?.name}{' '}
+                    {availableVariants.find((v) => v.id === selectedVariant)?.name} {availablePackages.find((p) => p.id === selectedPackage)?.name}
+                  </span>
+                </div>
+                {isStep1Complete && (
+                  <span className="text-[10px] font-black uppercase bg-emerald-500 text-white px-2.5 py-1 rounded-full flex items-center gap-1">
+                    <Check className="w-3 h-3" /> Seçim Tamamlandı
+                  </span>
+                )}
+              </motion.div>
+            )}
 
             {/* Note about dependency auto-population */}
             {selectedModel && (
