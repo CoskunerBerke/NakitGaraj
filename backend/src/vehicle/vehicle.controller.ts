@@ -53,4 +53,12 @@ export class VehicleController {
   async createVehicleRequest(@Body() dto: CreateVehicleRequestDto) {
     return this.vehicleService.createVehicleRequest(dto);
   }
+
+  @Post('admin/adjust-market-prices')
+  async adjustMarketPrices(
+    @Body('percentage') percentage: number,
+    @Body('brandName') brandName?: string,
+  ) {
+    return this.vehicleService.adjustMarketPrices(percentage, brandName);
+  }
 }

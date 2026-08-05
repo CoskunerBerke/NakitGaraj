@@ -646,8 +646,30 @@ export class VehicleService {
         note: data.note || null,
         phone: data.phone || null,
         email: data.email || null,
-        status: 'PENDING',
       },
     });
+  }
+
+  async adjustMarketPrices(percentage: number, brandName?: string) {
+    const multiplier = 1 + (percentage / 100);
+    const whereCondition = brandName
+      ? { manufacturer: { name: { equals: brandName } } }
+      : {};
+
+    const specs = await this.prisma.vehicleSpecification.findMany({
+      where: whereCondition,
+    });
+
+    let count = 0;
+    for (const spec of specs) {
+      if (spec.originalMSRP && spec.originalMSRP > 0) {
+        await this.prisma.vehicleSpecification.update({
+          where: { id: spec.id },
+          data: { originalMSRP: Math.round(spec.originalMSRP * multiplier) },
+        });
+        count++;
+      }
+    }
+    return { success: true, count, percentage, brand: brandName || 'ALL' };
   }
 }
