@@ -1,10 +1,14 @@
 import { Controller, Get, Post, Body, Query } from '@nestjs/common';
 import { VehicleService } from './vehicle.service';
+import { MarketSyncCronService, MarketSyncSettings } from './market-sync-cron.service';
 import { CreateVehicleRequestDto } from './dto/create-vehicle-request.dto';
 
 @Controller()
 export class VehicleController {
-  constructor(private vehicleService: VehicleService) {}
+  constructor(
+    private vehicleService: VehicleService,
+    private marketSyncCronService: MarketSyncCronService,
+  ) {}
 
   @Get('brands')
   async getBrands() {
@@ -60,5 +64,24 @@ export class VehicleController {
     @Body('brandName') brandName?: string,
   ) {
     return this.vehicleService.adjustMarketPrices(percentage, brandName);
+  }
+
+  @Get('admin/market-sync-settings')
+  async getMarketSyncSettings() {
+    return this.marketSyncCronService.getSettings();
+  }
+
+  @Post('admin/market-sync-settings')
+  async updateMarketSyncSettings(@Body() body: Partial<MarketSyncSettings>) {
+    const current = this.marketSyncCronService.getSettings();
+    const updated = { ...current, ...body };
+    this.marketSyncCronService.saveSettings(updated);
+    return updated;
+  }
+
+  @Post('admin/trigger-market-sync')
+  async triggerMarketSync() {
+    await this.marketSyncCronService.handleMonthlyAutoMarketSync();
+    return { success: true, message: 'Automated market sync executed successfully.' };
   }
 }
