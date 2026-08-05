@@ -520,7 +520,12 @@ export default function ValuationWizard() {
       setValuationResult(result);
       setStep(3);
     } catch (error: any) {
-      alert(error.message || 'Bir hata oluştu, lütfen daha sonra tekrar deneyiniz.');
+      console.error('Valuation submission error:', error);
+      const isNetworkError = error.message?.includes('NetworkError') || error.message?.includes('fetch');
+      const friendlyMsg = isNetworkError
+        ? 'Sunucu ile bağlantı kurulamadı (Backend servisi kapalı veya yanıt vermiyor). Lütfen backend sunucusunu başlatıp tekrar deneyiniz.'
+        : (error.message || 'Değerleme sırasında bir hata oluştu, lütfen tekrar deneyiniz.');
+      alert(friendlyMsg);
     } finally {
       setIsLoading(false);
     }
