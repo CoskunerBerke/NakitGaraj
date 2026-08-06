@@ -217,7 +217,8 @@ export class VehicleService {
       isExotic = true;
     } else if (
       lowerModel.includes('s-class') || lowerModel.includes('s serisi') ||
-      lowerModel.includes('7 series') || lowerModel.includes('7 serisi') ||
+      lowerModel.includes('7 series') || lowerModel.includes('7 serisi') || lowerModel.includes('i7') ||
+      lowerModel.includes('eqs') || lowerModel.includes('ix') ||
       lowerModel.includes('a8') ||
       lowerModel.includes('panamera') ||
       lowerModel.includes('cayenne') ||
