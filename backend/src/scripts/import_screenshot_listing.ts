@@ -22,77 +22,102 @@ export interface ScreenshotListingInput {
 export async function saveScreenshotListing(data: ScreenshotListingInput) {
   const externalListingId = data.listingId || `ss-import-${Date.now()}`;
 
-  // Find matching Manufacturer and Model
-  const manufacturer = await prisma.manufacturer.findFirst({
+  // Find or create Manufacturer
+  let manufacturer = await prisma.manufacturer.findFirst({
     where: { name: data.make },
   });
+  if (!manufacturer) {
+    manufacturer = await prisma.manufacturer.create({
+      data: { name: data.make, country: 'Almanya' },
+    });
+  }
 
-  let modelRecord = null;
-  if (manufacturer) {
-    modelRecord = await prisma.model.findFirst({
-      where: {
+  // Find or create Model
+  let modelRecord = await prisma.model.findFirst({
+    where: {
+      manufacturerId: manufacturer.id,
+      name: data.model,
+    },
+  });
+  if (!modelRecord) {
+    modelRecord = await prisma.model.create({
+      data: {
         manufacturerId: manufacturer.id,
         name: data.model,
+        vehicleType: 'CAR',
       },
     });
   }
 
-  let variantRecord = null;
-  if (modelRecord && data.variant) {
-    variantRecord = await prisma.variant.findFirst({
-      where: {
+  // Find or create Variant
+  let variantRecord = await prisma.variant.findFirst({
+    where: {
+      modelId: modelRecord.id,
+      name: data.variant || 'Standart',
+    },
+  });
+  if (!variantRecord) {
+    variantRecord = await prisma.variant.create({
+      data: {
         modelId: modelRecord.id,
-        name: data.variant,
+        name: data.variant || 'Standart',
       },
     });
   }
 
-  let packageRecord = null;
-  if (variantRecord && data.trim) {
-    packageRecord = await prisma.package.findFirst({
-      where: {
+  // Find or create Package/Trim
+  let packageRecord = await prisma.package.findFirst({
+    where: {
+      variantId: variantRecord.id,
+      name: data.trim || 'Standart',
+    },
+  });
+  if (!packageRecord) {
+    packageRecord = await prisma.package.create({
+      data: {
+        name: data.trim || 'Standart',
         variantId: variantRecord.id,
-        name: data.trim,
       },
     });
   }
 
-  // Create specification entry if needed
-  if (manufacturer && modelRecord && variantRecord) {
-    const fuelType = await prisma.fuelType.upsert({
-      where: { name: data.fuelType || 'Benzin' },
-      update: {},
-      create: { name: data.fuelType || 'Benzin' },
-    });
+  const fuelType = await prisma.fuelType.upsert({
+    where: { name: data.fuelType || 'Benzin' },
+    update: {},
+    create: { name: data.fuelType || 'Benzin' },
+  });
 
-    const transType = await prisma.transmissionType.upsert({
-      where: { name: data.transmissionType || 'Otomatik' },
-      update: {},
-      create: { name: data.transmissionType || 'Otomatik' },
-    });
+  const transType = await prisma.transmissionType.upsert({
+    where: { name: data.transmissionType || 'Otomatik' },
+    update: {},
+    create: { name: data.transmissionType || 'Otomatik' },
+  });
 
-    const bodyType = await prisma.bodyType.upsert({
-      where: { name: 'Sedan' },
-      update: {},
-      create: { name: 'Sedan' },
-    });
+  const bodyType = await prisma.bodyType.upsert({
+    where: { name: 'Sedan' },
+    update: {},
+    create: { name: 'Sedan' },
+  });
 
-    const driveType = await prisma.driveType.upsert({
-      where: { name: 'Önden Çekiş' },
-      update: {},
-      create: { name: 'Önden Çekiş' },
-    });
+  const driveType = await prisma.driveType.upsert({
+    where: { name: 'Önden Çekiş' },
+    update: {},
+    create: { name: 'Önden Çekiş' },
+  });
 
-    if (!packageRecord) {
-      packageRecord = await prisma.package.create({
-        data: {
-          name: data.trim || 'Standart',
-          variantId: variantRecord.id,
-        },
-      });
-    }
+  // Find existing Specification or Create one
+  let spec = await prisma.vehicleSpecification.findFirst({
+    where: {
+      manufacturerId: manufacturer.id,
+      modelId: modelRecord.id,
+      variantId: variantRecord.id,
+      packageId: packageRecord.id,
+      year: Number(data.year),
+    },
+  });
 
-    const spec = await prisma.vehicleSpecification.create({
+  if (!spec) {
+    spec = await prisma.vehicleSpecification.create({
       data: {
         year: Number(data.year),
         manufacturerId: manufacturer.id,
@@ -108,7 +133,17 @@ export async function saveScreenshotListing(data: ScreenshotListingInput) {
         reliabilityScore: 8.5,
       },
     });
+  }
 
+  // Find existing Market Price entry or Create one
+  const existingPrice = await prisma.vehicleMarketPrice.findFirst({
+    where: {
+      vehicleSpecificationId: spec.id,
+      currentMarketAverage: data.price,
+    },
+  });
+
+  if (!existingPrice) {
     await prisma.vehicleMarketPrice.create({
       data: {
         vehicleSpecificationId: spec.id,
@@ -137,44 +172,29 @@ export async function saveScreenshotListing(data: ScreenshotListingInput) {
 }
 
 async function main() {
-  const inputArg = process.argv[2];
-  if (!inputArg) {
-    console.log('Usage: npx ts-node src/scripts/import_screenshot_listing.ts \'<JSON_DATA_OR_FILE_PATH>\'');
-    return;
+  const filePath = process.argv[2];
+  if (!filePath) {
+    console.error('Lütfen bir JSON dosya yolu belirtin.');
+    process.exit(1);
   }
 
-  try {
-    let data: ScreenshotListingInput | ScreenshotListingInput[];
-    if (require('fs').existsSync(inputArg)) {
-      data = JSON.parse(require('fs').readFileSync(inputArg, 'utf-8'));
-    } else {
-      data = JSON.parse(inputArg);
-    }
+  const rawData = fs.readFileSync(filePath, 'utf-8');
+  const parsedData = JSON.parse(rawData);
+  const items: ScreenshotListingInput[] = Array.isArray(parsedData) ? parsedData : [parsedData];
 
-    if (Array.isArray(data)) {
-      const results = [];
-      for (const item of data) {
-        const res = await saveScreenshotListing(item);
-        results.push(res);
-      }
-      console.log('\n====================================================================');
-      console.log(`  ${results.length} SCREENSHOT LISTINGS SAVED SUCCESSFULLY TO DATABASE`);
-      console.log('====================================================================');
-      console.log(JSON.stringify({ totalImported: results.length, samples: results.slice(0, 3) }, null, 2));
-    } else {
-      const result = await saveScreenshotListing(data);
-      console.log('\n====================================================================');
-      console.log('  SCREENSHOT LISTING SAVED SUCCESSFULLY TO DATABASE');
-      console.log('====================================================================');
-      console.log(JSON.stringify(result, null, 2));
-    }
-  } catch (err) {
-    console.error('Error saving screenshot listing:', err);
-  } finally {
-    await prisma.$disconnect();
+  console.log(`\n====================================================================`);
+  console.log(`  ${items.length} SCREENSHOT LISTINGS SAVED SUCCESSFULLY TO DATABASE`);
+  console.log(`====================================================================`);
+
+  const results = [];
+  for (const item of items) {
+    const res = await saveScreenshotListing(item);
+    results.push(res);
   }
+
+  console.log(JSON.stringify({ totalImported: results.length, samples: results.slice(0, 3) }, null, 2));
 }
 
 if (require.main === module) {
-  main();
+  main().catch(console.error);
 }
