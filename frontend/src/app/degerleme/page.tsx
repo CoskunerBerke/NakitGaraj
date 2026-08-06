@@ -1651,7 +1651,7 @@ export default function ValuationWizard() {
                     <div className="text-base font-black text-zinc-900 dark:text-white mt-1">
                       {(valuationResult.results.fairMarketValue || Math.round(valuationResult.results.estimatedValue * 1.2)).toLocaleString('tr-TR')} ₺
                     </div>
-                    <span className="text-[10px] text-zinc-500">Sahibinden.com benzer araç ilan ortalaması</span>
+                    <span className="text-[10px] text-zinc-500">Sahibinden.com en yoğun emsal araç satış değeri (Mod)</span>
                   </div>
 
                   <div className="p-3.5 rounded-2xl bg-zinc-100/80 dark:bg-white/5 border border-zinc-200 dark:border-white/10">
