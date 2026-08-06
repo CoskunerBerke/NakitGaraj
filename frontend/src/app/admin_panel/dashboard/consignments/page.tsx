@@ -1,12 +1,25 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { UserCheck, MessageSquare, MapPin, PhoneCall, Mail, Clock, ShieldAlert, AlertCircle } from 'lucide-react';
+import { UserCheck, MessageSquare, MapPin, PhoneCall, Mail, Clock, ShieldAlert, AlertCircle, ExternalLink } from 'lucide-react';
 import RealisticCarDamageSchematic from '../../../../components/RealisticCarDamageSchematic';
 
 const API_BASE = typeof window !== 'undefined'
   ? `http://${window.location.hostname}:3001/api`
   : 'http://127.0.0.1:3001/api';
+
+const getSahibindenSearchUrl = (cons: any) => {
+  const spec = cons?.vehicleSpecification;
+  const brand = spec?.manufacturer?.name || cons?.brandName || '';
+  const model = spec?.model?.name || cons?.modelName || '';
+  const variant = spec?.variant?.name || cons?.variantName || '';
+  const year = spec?.year || cons?.year || '';
+
+  const cleanVariant = (variant && !variant.includes('Standard') && !variant.includes('Base')) ? variant : '';
+
+  const queryText = `${brand} ${model} ${cleanVariant} ${year}`.replace(/\s+/g, ' ').trim();
+  return `https://www.sahibinden.com/vasita?query_text=${encodeURIComponent(queryText)}`;
+};
 
 const getBrandLogoUrl = (brandName: string) => {
   const b = (brandName || '').toLowerCase().trim();
@@ -334,6 +347,15 @@ export default function ConsignmentsCRM() {
                       Plaka: <span className="text-zinc-800 dark:text-zinc-300 font-mono font-bold uppercase">{selectedCons.vehicleEvaluation.licensePlate}</span> |{' '}
                       KM: {selectedCons.vehicleEvaluation.mileage.toLocaleString()} | Hasar: {selectedCons.vehicleEvaluation.damageStatus}
                     </span>
+                    <a
+                      href={getSahibindenSearchUrl(selectedCons)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 text-black font-extrabold text-xs shadow-md transition-all mt-1 w-fit cursor-pointer"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5 text-black" />
+                      <span>Sahibinden'de Canlı İlanları Aç ↗</span>
+                    </a>
                     
                     {/* Render Detailed Appraisal Summary if available */}
                     {(() => {

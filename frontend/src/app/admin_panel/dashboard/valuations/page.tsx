@@ -1,11 +1,26 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { Sparkles, Calendar, FileText, CheckCircle2, AlertCircle, Eye, X, Phone, User, Car, DollarSign, ShieldAlert, ChevronRight } from 'lucide-react';
+import { Sparkles, Calendar, FileText, CheckCircle2, AlertCircle, Eye, X, Phone, User, Car, DollarSign, ShieldAlert, ChevronRight, ExternalLink } from 'lucide-react';
 
 const API_BASE = typeof window !== 'undefined'
   ? `http://${window.location.hostname}:3001/api`
   : 'http://127.0.0.1:3001/api';
+
+const getSahibindenSearchUrl = (item: any) => {
+  const spec = item?.vehicleSpecification;
+  const brand = spec?.manufacturer?.name || '';
+  const model = spec?.model?.name || '';
+  const variant = spec?.variant?.name || '';
+  const pkg = spec?.package?.name || '';
+  const year = spec?.year || '';
+
+  const cleanVariant = (variant && !variant.includes('Standard') && !variant.includes('Base')) ? variant : '';
+  const cleanPkg = (pkg && !pkg.includes('Standart') && !pkg.includes('Bilmiyorum')) ? pkg : '';
+
+  const queryText = `${brand} ${model} ${cleanVariant} ${cleanPkg} ${year}`.replace(/\s+/g, ' ').trim();
+  return `https://www.sahibinden.com/vasita?query_text=${encodeURIComponent(queryText)}`;
+};
 
 const getBrandLogoUrl = (brandName: string) => {
   const b = (brandName || '').toLowerCase().trim();
@@ -253,16 +268,30 @@ export default function ValuationsList() {
 
                       {/* İşlem */}
                       <td className="py-4 px-6 text-right">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setSelectedEval(item);
-                          }}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-brand-orange/10 hover:bg-brand-orange text-brand-orange hover:text-white border border-brand-orange/20 font-bold text-xs transition-all cursor-pointer"
-                        >
-                          <Eye className="w-3.5 h-3.5" />
-                          İncele
-                        </button>
+                        <div className="flex items-center justify-end gap-2">
+                          <a
+                            href={getSahibindenSearchUrl(item)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={(e) => e.stopPropagation()}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-amber-500/10 hover:bg-amber-500 text-amber-600 dark:text-amber-400 hover:text-black border border-amber-500/30 font-extrabold text-xs transition-all cursor-pointer shadow-sm"
+                            title="Sahibinden.com'da Bu Aracın Canlı Emsal İlanlarını Aç"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5 text-amber-500" />
+                            <span>Sahibinden İlanları ↗</span>
+                          </a>
+
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setSelectedEval(item);
+                            }}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-brand-orange/10 hover:bg-brand-orange text-brand-orange hover:text-white border border-brand-orange/20 font-bold text-xs transition-all cursor-pointer"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                            İncele
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -359,17 +388,32 @@ export default function ValuationsList() {
               </div>
             </div>
 
-            {/* Specs & Damage */}
-            <div className="bg-zinc-50 dark:bg-white/3 p-4 rounded-2xl border border-zinc-200 dark:border-white/5 flex flex-col gap-2 text-xs">
-              <span className="font-bold text-zinc-400 uppercase tracking-wider text-[10px]">Araç Özellikleri & Hasar Durumu</span>
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-zinc-700 dark:text-zinc-300">
-                <div>Kilometre: <strong>{selectedEval.mileage.toLocaleString('tr-TR')} km</strong></div>
-                <div>Renk: <strong>{selectedEval.color}</strong></div>
-                <div>Hasar: <strong>{selectedEval.damageStatus === 'NO' ? 'Hatasız' : 'Hasarlı'}</strong></div>
-                <div>Motor: <strong>{selectedEval.vehicleSpecification?.variant?.name}</strong></div>
-                <div>Şanzıman: <strong>{selectedEval.vehicleSpecification?.transmissionType?.name}</strong></div>
-                <div>Yakıt: <strong>{selectedEval.vehicleSpecification?.fuelType?.name}</strong></div>
+            {/* Sahibinden Live Verification Banner */}
+            <div className="bg-amber-500/10 border border-amber-500/30 p-4 rounded-2xl flex flex-col md:flex-row items-center justify-between gap-3 shadow-sm">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-amber-500/20 flex items-center justify-center text-amber-600 dark:text-amber-400 shrink-0 font-bold text-lg">
+                  🔍
+                </div>
+                <div className="flex flex-col">
+                  <h4 className="font-extrabold text-xs md:text-sm text-zinc-900 dark:text-white flex items-center gap-2">
+                    <span>Sahibinden.com Canlı İlan Doğrulama</span>
+                    <span className="bg-amber-500 text-black text-[9px] font-black px-2 py-0.5 rounded-full uppercase">AI & Galeri Kontrolü</span>
+                  </h4>
+                  <p className="text-[11px] text-zinc-600 dark:text-zinc-400 mt-0.5">
+                    Müşterinin girdiği <strong>{selectedEval.vehicleSpecification?.manufacturer?.name} {selectedEval.vehicleSpecification?.model?.name} {selectedEval.vehicleSpecification?.variant?.name} ({selectedEval.vehicleSpecification?.year})</strong> aracının Sahibinden'deki aktif ilanlarını doğrudan canlı filtreleyip inceleyin.
+                  </p>
+                </div>
               </div>
+
+              <a
+                href={getSahibindenSearchUrl(selectedEval)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-600 text-black font-extrabold text-xs shadow-md transition-all shrink-0 cursor-pointer"
+              >
+                <ExternalLink className="w-4 h-4 text-black" />
+                <span>Sahibinden'de Canlı İlanları Aç ↗</span>
+              </a>
             </div>
 
             {/* AI Analysis */}

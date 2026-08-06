@@ -407,7 +407,7 @@ export default function ApiSettingsPage() {
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
               <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-semibold text-zinc-600 dark:text-zinc-400">Lüks Araç (>= 2M ₺) Min Konsinye Kârı (₺)</label>
+                <label className="text-xs font-semibold text-zinc-600 dark:text-zinc-400">Lüks Araç (&ge; 2M ₺) Min Konsinye Kârı (₺)</label>
                 <input
                   type="number"
                   value={luxuryMinProfitFixed}
@@ -417,7 +417,7 @@ export default function ApiSettingsPage() {
               </div>
 
               <div className="flex flex-col gap-1.5">
-                <label className="text-xs font-semibold text-zinc-600 dark:text-zinc-400">Lüks Araç (>= 2M ₺) Max Nakit Kârı (₺)</label>
+                <label className="text-xs font-semibold text-zinc-600 dark:text-zinc-400">Lüks Araç (&ge; 2M ₺) Max Nakit Kârı (₺)</label>
                 <input
                   type="number"
                   value={luxuryMaxProfitFixed}
