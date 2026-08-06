@@ -63,24 +63,24 @@ const VARIANT_MAP: Record<string, Record<string, string[]>> = {
     'Vantage': ['Vantage Coupe', 'Vantage Roadster'],
   },
   'Audi': {
-    'A1': ['A1 Sportback'],
-    'A3': ['A3 Sedan', 'A3 Sportback'],
-    'A4': ['A4 Sedan', 'A4 Avant', 'A4 Allroad'],
-    'A5': ['A5 Sportback', 'A5 Coupe', 'A5 Cabrio'],
-    'A6': ['A6 Sedan', 'A6 Avant', 'A6 Allroad Quattro'],
-    'A7': ['A7 Sportback'],
-    'A8': ['A8', 'A8 L'],
-    'e-tron': ['e-tron', 'e-tron Sportback', 'e-tron GT'],
-    'Q2': ['Q2'],
-    'Q3': ['Q3', 'Q3 Sportback'],
-    'Q5': ['Q5', 'Q5 Sportback'],
-    'Q7': ['Q7'],
-    'Q8': ['Q8', 'Q8 e-tron'],
-    'R8': ['R8 Coupe', 'R8 Spyder'],
-    'RS3': ['RS3 Sedan', 'RS3 Sportback'],
-    'RS6': ['RS6 Avant'],
-    'S3': ['S3 Sedan', 'S3 Sportback'],
-    'TT': ['TT Coupe', 'TT Roadster', 'TTS'],
+    'A1': ['A1 Sportback', '30 TFSI', '35 TFSI', '25 TFSI'],
+    'A3': ['A3 Sedan', 'A3 Sportback', '30 TFSI', '35 TFSI', '40 TFSI', '30 TDI', '35 TDI', '1.6 TDI', '1.4 TFSI', '1.2 TFSI'],
+    'A4': ['A4 Sedan', 'A4 Avant', 'A4 Allroad', '40 TDI', '40 TFSI', '45 TFSI', '30 TDI', '35 TFSI', '2.0 TDI', '1.4 TFSI', '2.0 TFSI', '3.0 TDI'],
+    'A5': ['A5 Sportback', 'A5 Coupe', 'A5 Cabrio', '40 TDI', '40 TFSI', '45 TFSI', '2.0 TDI', '1.4 TFSI', '2.0 TFSI', '3.0 TDI'],
+    'A6': ['A6 Sedan', 'A6 Avant', 'A6 Allroad Quattro', '45 TFSI', '40 TDI', '50 TDI', '55 TFSI', '2.0 TDI', '3.0 TDI', '2.0 TFSI', '3.0 TFSI'],
+    'A7': ['A7 Sportback', '40 TDI', '45 TFSI', '50 TDI', '55 TFSI', '3.0 TDI', '3.0 TFSI'],
+    'A8': ['A8', 'A8 L', '50 TDI', '55 TFSI', '60 TFSI', '3.0 TDI', '4.2 TDI', '4.0 TFSI'],
+    'e-tron': ['e-tron', 'e-tron Sportback', 'e-tron GT', '50 Quattro', '55 Quattro'],
+    'Q2': ['Q2', '30 TFSI', '35 TFSI', '30 TDI', '1.6 TDI', '1.4 TFSI'],
+    'Q3': ['Q3', 'Q3 Sportback', '35 TFSI', '40 TDI', '1.4 TFSI', '2.0 TDI'],
+    'Q5': ['Q5', 'Q5 Sportback', '40 TDI', '45 TFSI', '50 TDI', '2.0 TDI', '2.0 TFSI', '3.0 TDI'],
+    'Q7': ['Q7', '45 TDI', '50 TDI', '55 TFSI', '3.0 TDI', '4.2 TDI'],
+    'Q8': ['Q8', 'Q8 e-tron', '50 TDI', '55 TFSI', '60 TFSI'],
+    'R8': ['R8 Coupe', 'R8 Spyder', '5.2 FSI'],
+    'RS3': ['RS3 Sedan', 'RS3 Sportback', '2.5 TFSI'],
+    'RS6': ['RS6 Avant', '4.0 TFSI'],
+    'S3': ['S3 Sedan', 'S3 Sportback', '2.0 TFSI'],
+    'TT': ['TT Coupe', 'TT Roadster', 'TTS', '1.8 TFSI', '2.0 TFSI'],
   },
 
   // ---- B ----
@@ -951,9 +951,23 @@ function getPackagesForVariant(brandName: string, modelName: string, variantName
 
   if (brand.includes('audi')) {
     if (variant.includes('rs') || variant.includes('r8') || variant.includes('s')) {
-      return ['RS Performance', 'S Line', 'Black Edition', 'Dynamic', 'Standart'];
+      return ['RS Performance', 'S Line', 'Black Edition', 'Dynamic', 'Standart / Bilmiyorum'];
     }
-    return ['S Line', 'Advanced', 'Design', 'Sport', 'Dynamic', 'Standart'];
+    return [
+      'Quattro Advanced',
+      'Quattro Design',
+      'Quattro S Line',
+      'Quattro Sport',
+      'Advanced',
+      'Design',
+      'S Line',
+      'Sport',
+      'Dynamic',
+      'Ambition',
+      'Ambiente',
+      'Attraction',
+      'Standart / Bilmiyorum',
+    ];
   }
 
   if (brand.includes('volkswagen') || brand.includes('vw')) {

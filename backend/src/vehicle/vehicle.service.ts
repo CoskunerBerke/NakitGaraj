@@ -573,6 +573,44 @@ export class VehicleService {
           { name: '1.6 Benzin', engineSize: 1598, horsepower: 117, torque: 158, fuel: 'Benzin', trans: 'Otomatik', body: 'SUV', packages: ['Visia', 'Tekna'] },
         ];
       }
+    } else if (lowerBrand.includes('audi')) {
+      if (lowerModel.includes('a6')) {
+        variantSpecs = [
+          { name: '45 TFSI', engineSize: 1984, horsepower: 245, torque: 370, fuel: 'Benzin', trans: 'Otomatik', body: 'Sedan', packages: ['Quattro Advanced', 'Quattro Design', 'Quattro S Line', 'Quattro Sport', 'Advanced', 'Design', 'S Line', 'Sport', 'Standart / Bilmiyorum'] },
+          { name: '40 TDI', engineSize: 1968, horsepower: 204, torque: 400, fuel: 'Dizel', trans: 'Otomatik', body: 'Sedan', packages: ['Quattro Advanced', 'Quattro Design', 'Quattro S Line', 'Quattro Sport', 'Advanced', 'Design', 'S Line', 'Sport', 'Standart / Bilmiyorum'] },
+          { name: '50 TDI', engineSize: 2967, horsepower: 286, torque: 620, fuel: 'Dizel', trans: 'Otomatik', body: 'Sedan', packages: ['Quattro Design', 'Quattro S Line', 'Quattro Sport', 'Design', 'S Line', 'Standart / Bilmiyorum'] },
+          { name: '55 TFSI', engineSize: 2995, horsepower: 340, torque: 500, fuel: 'Benzin', trans: 'Otomatik', body: 'Sedan', packages: ['Quattro Design', 'Quattro S Line', 'Quattro Sport', 'Design', 'S Line', 'Standart / Bilmiyorum'] },
+          { name: '2.0 TDI', engineSize: 1968, horsepower: 190, torque: 400, fuel: 'Dizel', trans: 'Otomatik', body: 'Sedan', packages: ['Limousine', 'Avant', 'Ultra', 'Standart / Bilmiyorum'] },
+          { name: '2.0 TFSI', engineSize: 1984, horsepower: 252, torque: 370, fuel: 'Benzin', trans: 'Otomatik', body: 'Sedan', packages: ['Limousine', 'Avant', 'Design', 'Sport', 'Standart / Bilmiyorum'] },
+          { name: '3.0 TDI', engineSize: 2967, horsepower: 245, torque: 500, fuel: 'Dizel', trans: 'Otomatik', body: 'Sedan', packages: ['Quattro', 'Limousine', 'Avant', 'Standart / Bilmiyorum'] },
+        ];
+      } else if (lowerModel.includes('a4')) {
+        variantSpecs = [
+          { name: '40 TDI', engineSize: 1968, horsepower: 204, torque: 400, fuel: 'Dizel', trans: 'Otomatik', body: 'Sedan', packages: ['Quattro Advanced', 'Quattro Design', 'Quattro S Line', 'Quattro Sport', 'Advanced', 'Design', 'S Line', 'Sport', 'Standart / Bilmiyorum'] },
+          { name: '40 TFSI', engineSize: 1984, horsepower: 204, torque: 320, fuel: 'Benzin', trans: 'Otomatik', body: 'Sedan', packages: ['Advanced', 'Design', 'S Line', 'Sport', 'Standart / Bilmiyorum'] },
+          { name: '45 TFSI', engineSize: 1984, horsepower: 265, torque: 370, fuel: 'Benzin', trans: 'Otomatik', body: 'Sedan', packages: ['Quattro Advanced', 'Quattro S Line', 'Quattro Sport', 'Standart / Bilmiyorum'] },
+          { name: '2.0 TDI', engineSize: 1968, horsepower: 190, torque: 400, fuel: 'Dizel', trans: 'Otomatik', body: 'Sedan', packages: ['Design', 'Sport', 'Dynamic', 'Standart / Bilmiyorum'] },
+          { name: '1.4 TFSI', engineSize: 1395, horsepower: 150, torque: 250, fuel: 'Benzin', trans: 'Otomatik', body: 'Sedan', packages: ['Dynamic', 'Design', 'Sport', 'Standart / Bilmiyorum'] },
+        ];
+      } else if (lowerModel.includes('a5')) {
+        variantSpecs = [
+          { name: '40 TDI', engineSize: 1968, horsepower: 204, torque: 400, fuel: 'Dizel', trans: 'Otomatik', body: 'Hatchback', packages: ['Quattro Advanced', 'Quattro Design', 'Quattro S Line', 'Quattro Sport', 'Design', 'S Line', 'Standart / Bilmiyorum'] },
+          { name: '40 TFSI', engineSize: 1984, horsepower: 204, torque: 320, fuel: 'Benzin', trans: 'Otomatik', body: 'Hatchback', packages: ['Design', 'S Line', 'Sport', 'Standart / Bilmiyorum'] },
+          { name: '45 TFSI', engineSize: 1984, horsepower: 265, torque: 370, fuel: 'Benzin', trans: 'Otomatik', body: 'Hatchback', packages: ['Quattro Advanced', 'Quattro S Line', 'Quattro Sport', 'Standart / Bilmiyorum'] },
+        ];
+      } else if (lowerModel.includes('a3')) {
+        variantSpecs = [
+          { name: '35 TFSI', engineSize: 1498, horsepower: 150, torque: 250, fuel: 'Benzin', trans: 'Otomatik', body: 'Sedan', packages: ['Advanced', 'S Line', 'Design', 'Sport', 'Standart / Bilmiyorum'] },
+          { name: '30 TFSI', engineSize: 999, horsepower: 110, torque: 200, fuel: 'Benzin', trans: 'Otomatik', body: 'Hatchback', packages: ['Advanced', 'Dynamic', 'Design', 'Standart / Bilmiyorum'] },
+          { name: '1.6 TDI', engineSize: 1598, horsepower: 116, torque: 250, fuel: 'Dizel', trans: 'Otomatik', body: 'Sedan', packages: ['Dynamic', 'Design', 'Sport', 'Ambition', 'Standart / Bilmiyorum'] },
+          { name: '1.4 TFSI', engineSize: 1395, horsepower: 150, torque: 250, fuel: 'Benzin', trans: 'Otomatik', body: 'Sedan', packages: ['Ambition', 'Ambiente', 'Attraction', 'Standart / Bilmiyorum'] },
+        ];
+      } else {
+        variantSpecs = [
+          { name: `${modelName} 45 TFSI`, engineSize: 1984, horsepower: 245, torque: 370, fuel: 'Benzin', trans: 'Otomatik', body: 'Sedan', packages: ['Quattro Advanced', 'Quattro Design', 'Quattro S Line', 'Advanced', 'S Line', 'Standart / Bilmiyorum'] },
+          { name: `${modelName} 40 TDI`, engineSize: 1968, horsepower: 204, torque: 400, fuel: 'Dizel', trans: 'Otomatik', body: 'Sedan', packages: ['Quattro Advanced', 'Quattro Design', 'Quattro S Line', 'Advanced', 'S Line', 'Standart / Bilmiyorum'] },
+        ];
+      }
     } else if (lowerBrand.includes('togg')) {
       variantSpecs = [
         { name: 'V1 RWD Standart Menzil', engineSize: 0, horsepower: 218, torque: 350, fuel: 'Elektrik', trans: 'Otomatik', body: 'SUV', packages: ['V1'] },
