@@ -10,10 +10,6 @@ export class VehicleService {
   ) {}
 
   async getBrands() {
-    const cacheKey = 'brands_list';
-    const cached = await this.cache.get<any[]>(cacheKey);
-    if (cached) return cached;
-
     let brands = await this.prisma.manufacturer.findMany({
       orderBy: { name: 'asc' },
     });
@@ -25,20 +21,14 @@ export class VehicleService {
       });
     }
 
-    await this.cache.set(cacheKey, brands, 3600); // 1 hour caching
     return brands;
   }
 
   async getModels(brandId: string) {
-    const cacheKey = `models_${brandId}`;
-    const cached = await this.cache.get<any[]>(cacheKey);
-    if (cached) return cached;
-
     const models = await this.prisma.model.findMany({
       where: { manufacturerId: brandId },
       orderBy: { name: 'asc' },
     });
-    await this.cache.set(cacheKey, models, 3600);
     return models;
   }
 

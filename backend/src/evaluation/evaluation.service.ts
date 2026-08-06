@@ -676,6 +676,10 @@ export class EvaluationService {
     // STRICT SAFETY: Konsinye Fiyatı asla (Piyasa - minProfit) tavanını geçemez!
     finalConsignmentPrice = this.roundToCleanGalleryPrice(Math.min(finalConsignmentPrice, standardConsignmentOffer));
 
+    const estimatedValue = finalOfferedPrice;
+    const minExpectedValue = this.roundToCleanGalleryPrice(standardCashOffer * 0.96);
+    const quickSaleValue = this.roundToCleanGalleryPrice(standardCashOffer * 0.94);
+
     // Real Sahibinden listing bounds for EVERY vehicle brand & model:
     // Floor (Min İlan): High km / older / damage record listings start at ~50% of market average for economy, ~60% for premium
     // Ceiling (Max İlan): Zero-damage / clean low km top listings reach ~106% of market average for economy, ~110% for premium
