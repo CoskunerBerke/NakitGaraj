@@ -336,13 +336,13 @@ export class EvaluationService {
       isEconomy = true;
     }
 
-    // Authoritative pricing: spec.originalMSRP is calibrated from real Sahibinden market data
+    // Authoritative pricing: dbMarket (real Sahibinden market data) takes top priority, falling back to originalMSRP or segment defaults
     const dbMarket = spec.marketPrices && spec.marketPrices.length > 0 ? spec.marketPrices[0] : null;
-    let baseValuation = (spec.originalMSRP && spec.originalMSRP > 0)
-      ? spec.originalMSRP
-      : (dbMarket && dbMarket.currentMarketAverage > 0 ? dbMarket.currentMarketAverage : basePrice2026);
+    let baseValuation = (dbMarket && dbMarket.currentMarketAverage > 0)
+      ? dbMarket.currentMarketAverage
+      : ((spec.originalMSRP && spec.originalMSRP > 0) ? spec.originalMSRP : basePrice2026);
 
-    if (!spec.originalMSRP && (!dbMarket || !dbMarket.currentMarketAverage) && dto.year < 2026) {
+    if ((!dbMarket || !dbMarket.currentMarketAverage) && !spec.originalMSRP && dto.year < 2026) {
       // Floor-based decay: value never drops below floorPrice
       const carAge = 2026 - dto.year;
       const decayRate = (isPremium || isExotic) ? 0.94 : 0.88;
