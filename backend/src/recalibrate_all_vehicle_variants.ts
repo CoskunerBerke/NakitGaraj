@@ -92,6 +92,11 @@ export async function recalibrateAllSpecs(prisma: PrismaClient) {
       priceTier = 'luxury';
       decayRate = 0.91; floorPrice = 400000;
       if (targetStr.includes('g 63') || targetStr.includes('g 500') || targetStr.includes('g ser') || targetStr.includes('g-class') || targetStr.includes('g serisi')) { base2026 = 27000000; floorPrice = 5000000; decayRate = 0.96; priceTier = 'exotic'; }
+      else if (targetStr.includes('c 63') || targetStr.includes('c63')) { base2026 = 22000000; floorPrice = 5000000; decayRate = 0.95; priceTier = 'exotic'; }
+      else if (targetStr.includes('c 43') || targetStr.includes('c43')) { base2026 = 14000000; floorPrice = 3500000; decayRate = 0.94; priceTier = 'exotic'; }
+      else if (targetStr.includes('e 63') || targetStr.includes('e63')) { base2026 = 25000000; floorPrice = 5000000; decayRate = 0.95; priceTier = 'exotic'; }
+      else if (targetStr.includes('e 53') || targetStr.includes('e53')) { base2026 = 16000000; floorPrice = 3500000; decayRate = 0.94; priceTier = 'exotic'; }
+      else if (targetStr.includes('s 63') || targetStr.includes('s63')) { base2026 = 28000000; floorPrice = 6000000; decayRate = 0.95; priceTier = 'exotic'; }
       else if (targetStr.includes('amg gt') || targetStr.includes('gt 63') || targetStr.includes('gt 53')) { base2026 = 25000000; floorPrice = 5000000; decayRate = 0.95; priceTier = 'exotic'; }
       else if (targetStr.includes('s ser') || targetStr.includes('s 400') || targetStr.includes('s 500') || targetStr.includes('s 350') || targetStr.includes('eqs')) { base2026 = 19500000; floorPrice = 1200000; decayRate = 0.93; }
       else if (targetStr.includes('gle')) { base2026 = 14000000; floorPrice = 1200000; }

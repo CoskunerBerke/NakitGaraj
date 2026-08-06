@@ -186,7 +186,7 @@ export class VehicleService {
     const brandName = manufacturer.name;
     const modelName = model.name;
     const lowerBrand = brandName.toLowerCase();
-    const lowerModel = modelName.toLowerCase();
+    const lowerModel = modelName.toLowerCase().replace(/-/g, ' ');
 
     let basePrice2026 = 1550000; // default C-segment
     let floorPrice = 450000;
@@ -494,12 +494,16 @@ export class VehicleService {
         ];
       }
     } else if (lowerBrand.includes('mercedes')) {
-      if (lowerModel.includes('c serisi') || lowerModel.includes('c-class') || lowerModel === 'c') {
+      if (lowerModel.includes('c serisi') || lowerModel.includes('c class') || lowerModel === 'c') {
         variantSpecs = [
           { name: 'C 180', engineSize: 1496, horsepower: 170, torque: 250, fuel: 'Benzin', trans: 'Otomatik', body: 'Sedan', packages: ['AMG Line', 'Avantgarde', 'Selection', 'Fascination', 'Style', 'Night Package', 'Standart / Bilmiyorum'] },
           { name: 'C 200 4MATIC', engineSize: 1496, horsepower: 204, torque: 300, fuel: 'Benzin', trans: 'Otomatik', body: 'Sedan', packages: ['AMG Line', 'Avantgarde', 'Standart / Bilmiyorum'] },
+          { name: 'C 300', engineSize: 1999, horsepower: 258, torque: 400, fuel: 'Benzin', trans: 'Otomatik', body: 'Sedan', packages: ['AMG Line', 'Avantgarde', 'Standart / Bilmiyorum'] },
           { name: 'C 200 d', engineSize: 1598, horsepower: 160, torque: 360, fuel: 'Dizel', trans: 'Otomatik', body: 'Sedan', packages: ['AMG Line', 'Avantgarde', 'Style', 'Fascination', 'Standart / Bilmiyorum'] },
           { name: 'C 220 d', engineSize: 1993, horsepower: 200, torque: 440, fuel: 'Dizel', trans: 'Otomatik', body: 'Sedan', packages: ['AMG Line', 'Avantgarde', 'Standart / Bilmiyorum'] },
+          { name: 'C 43 AMG', engineSize: 1991, horsepower: 408, torque: 500, fuel: 'Benzin', trans: 'Otomatik', body: 'Sedan', packages: ['AMG', 'Performance', 'Standart / Bilmiyorum'] },
+          { name: 'C 63 AMG', engineSize: 3982, horsepower: 510, torque: 700, fuel: 'Benzin', trans: 'Otomatik', body: 'Sedan', packages: ['AMG S', 'Performance', 'Standart / Bilmiyorum'] },
+          { name: 'C 63 S AMG', engineSize: 3982, horsepower: 680, torque: 1020, fuel: 'Benzin', trans: 'Otomatik', body: 'Sedan', packages: ['E Performance', 'F1 Edition', 'Standart / Bilmiyorum'] },
         ];
       } else if (lowerModel.includes('e serisi') || lowerModel.includes('e-class') || lowerModel === 'e') {
         variantSpecs = [

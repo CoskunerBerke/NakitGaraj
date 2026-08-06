@@ -916,8 +916,8 @@ function getYearsForModel(brandName: string, modelName: string): number[] {
   if (brand.includes('cupra')) return [2020, 2022, 2024, 2025, 2026];
   if (brand.includes('byd')) return [2022, 2023, 2024, 2025, 2026];
 
-  // Include older year coverage (2010, 2013) for performance and classic models like BMW M3
-  return [2010, 2013, 2016, 2018, 2020, 2022, 2024, 2025, 2026];
+  // Include full year coverage (2000 to 2026) for complete market availability
+  return [2000, 2002, 2004, 2006, 2008, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026];
 }
 
 // ============================================================================

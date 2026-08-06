@@ -192,7 +192,16 @@ function ConsignmentContent() {
       fetch(`${API_BASE}/models?brandId=${selectedBrand}`)
         .then((res) => res.json())
         .then((data) => {
-          setModels(data);
+          const uniqueModels: any[] = [];
+          const seenNames = new Set<string>();
+          (data || []).forEach((m: any) => {
+            const cleanName = m.name.replace(/-/g, ' ').toLowerCase();
+            if (!seenNames.has(cleanName)) {
+              seenNames.add(cleanName);
+              uniqueModels.push(m);
+            }
+          });
+          setModels(uniqueModels);
           setSelectedModel('');
           resetSubordinateFields();
         })
