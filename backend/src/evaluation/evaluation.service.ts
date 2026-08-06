@@ -680,16 +680,17 @@ export class EvaluationService {
     const minExpectedValue = this.roundToCleanGalleryPrice(standardCashOffer * 0.96);
     const quickSaleValue = this.roundToCleanGalleryPrice(standardCashOffer * 0.94);
 
-    // Real Sahibinden listing bounds for EVERY vehicle brand & model:
-    // Floor (Min İlan): High km / older / damage record listings start at ~50% of market average for economy, ~60% for premium
-    // Ceiling (Max İlan): Zero-damage / clean low km top listings reach ~106% of market average for economy, ~110% for premium
+    // Mode / Density Peak (En Çok Tekrar Eden Küme) Adaptif Piyasa Kıyaslama Aralığı:
+    // Araç hatasız ve makul km ise yıkık/taksi çıkması ilanlar (275k) yerine en yoğun emsal kümesini (0.85x - 1.15x) gösterir!
+    const isCleanCondition = (dto.damageStatus === 'NO' || damagePenalty <= 0.03) && dto.mileage <= 180000;
+
     const floorMarketPrice = (dbMarket && dbMarket.minPrice > 0)
       ? dbMarket.minPrice
-      : this.roundToCleanGalleryPrice(fairMarketValue * (isPremium || isExotic ? 0.60 : 0.45));
+      : this.roundToCleanGalleryPrice(fairMarketValue * (isCleanCondition ? 0.85 : 0.45));
 
     const ceilingMarketPrice = (dbMarket && dbMarket.maxPrice > 0)
       ? dbMarket.maxPrice
-      : this.roundToCleanGalleryPrice(fairMarketValue * (isPremium || isExotic ? 1.35 : 1.60));
+      : this.roundToCleanGalleryPrice(fairMarketValue * (isCleanCondition ? 1.15 : 1.55));
 
     let confidenceScore = 95;
     if (dto.damageStatus === 'UNKNOWN') confidenceScore -= 5;
