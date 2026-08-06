@@ -51,82 +51,79 @@ export async function recalibrateAllSpecs(prisma: PrismaClient) {
       else if (targetStr.includes('a6')) { base2026 = 7200000; floorPrice = 600000; if (targetStr.includes('45 tfsi') || targetStr.includes('3.0')) { base2026 = 9200000; floorPrice = 800000; } }
       else if (targetStr.includes('q5')) { base2026 = 6500000; floorPrice = 600000; }
       else if (targetStr.includes('e-tron')) { base2026 = 6000000; floorPrice = 1500000; }
-      else if (targetStr.includes('a5')) { base2026 = 5200000; floorPrice = 600000; if (targetStr.includes('sportback')) { base2026 = 5500000; floorPrice = 650000; } }
-      else if (targetStr.includes('a4')) { base2026 = 4800000; floorPrice = 550000; }
-      else if (targetStr.includes('q3')) { base2026 = 4400000; floorPrice = 500000; }
-      else if (targetStr.includes('a3')) { base2026 = 3850000; floorPrice = 450000; if (targetStr.includes('sedan')) { base2026 = 3950000; floorPrice = 480000; } }
-      else if (targetStr.includes('q2')) { base2026 = 3500000; floorPrice = 400000; }
+      else if (targetStr.includes('a5')) { base2026 = 5500000; floorPrice = 600000; }
+      else if (targetStr.includes('a4')) { base2026 = 5200000; floorPrice = 550000; }
+      else if (targetStr.includes('q3')) { base2026 = 4800000; floorPrice = 500000; }
+      else if (targetStr.includes('a3')) { base2026 = 4300000; floorPrice = 450000; }
+      else if (targetStr.includes('q2')) { base2026 = 3800000; floorPrice = 400000; }
       else if (targetStr.includes('a1')) { base2026 = 3200000; floorPrice = 350000; }
     }
 
     // ================= 2. BMW =================
     else if (brand === 'bmw') {
       decayRate = 0.92; floorPrice = 400000;
-      if (targetStr.includes('m5') || targetStr.includes('m 5')) { base2026 = 24500000; floorPrice = 8000000; decayRate = 0.95; }
-      else if (targetStr.includes('m8') || targetStr.includes('m 8')) { base2026 = 26500000; floorPrice = 9000000; decayRate = 0.95; }
-      else if (targetStr.includes('m4') || targetStr.includes('m 4')) { base2026 = 16000000; floorPrice = 4500000; decayRate = 0.95; }
-      else if (targetStr.includes('m3') || targetStr.includes('m 3')) { base2026 = 15500000; floorPrice = 4500000; decayRate = 0.95; }
-      else if (targetStr.includes('m2') || targetStr.includes('m 2')) { base2026 = 10500000; floorPrice = 3000000; decayRate = 0.94; }
-      else if (targetStr.includes('xm')) { base2026 = 23000000; floorPrice = 8000000; decayRate = 0.95; }
-      else if (targetStr.includes('x5 m') || targetStr.includes('x6 m')) { base2026 = 22000000; floorPrice = 7000000; decayRate = 0.95; }
+      if (targetStr.includes('m5') || targetStr.includes('m 5')) { base2026 = 26500000; floorPrice = 8000000; decayRate = 0.95; }
+      else if (targetStr.includes('m8') || targetStr.includes('m 8')) { base2026 = 28500000; floorPrice = 9000000; decayRate = 0.95; }
+      else if (targetStr.includes('m4') || targetStr.includes('m 4')) { base2026 = 18000000; floorPrice = 4500000; decayRate = 0.95; }
+      else if (targetStr.includes('m3') || targetStr.includes('m 3')) { base2026 = 17500000; floorPrice = 4500000; decayRate = 0.95; }
+      else if (targetStr.includes('m2') || targetStr.includes('m 2')) { base2026 = 12500000; floorPrice = 3000000; decayRate = 0.94; }
+      else if (targetStr.includes('xm')) { base2026 = 25000000; floorPrice = 8000000; decayRate = 0.95; }
+      else if (targetStr.includes('x5 m') || targetStr.includes('x6 m')) { base2026 = 24000000; floorPrice = 7000000; decayRate = 0.95; }
       else if (targetStr.includes('7 ser') || targetStr.includes('730') || targetStr.includes('740') || targetStr.includes('i7')) { base2026 = 18500000; floorPrice = 1200000; decayRate = 0.93; }
       else if (targetStr.includes('8 ser') || targetStr.includes('840')) { base2026 = 14500000; floorPrice = 1500000; decayRate = 0.93; }
       else if (targetStr.includes('x6')) { base2026 = 14000000; floorPrice = 1200000; }
       else if (targetStr.includes('x5')) { base2026 = 12500000; floorPrice = 1000000; }
-      else if (targetStr.includes('5 ser') || targetStr.includes('520') || targetStr.includes('530') || targetStr.includes('540') || targetStr.includes('i5')) { base2026 = 7800000; floorPrice = 600000; if (targetStr.includes('530') || targetStr.includes('540')) { base2026 = 10000000; floorPrice = 800000; } }
-      else if (targetStr.includes('x3') || targetStr.includes('ix3')) { base2026 = 6800000; floorPrice = 600000; }
-      else if (targetStr.includes('z4')) { base2026 = 6500000; floorPrice = 600000; }
-      else if (targetStr.includes('4 ser') || targetStr.includes('420') || targetStr.includes('430') || targetStr.includes('i4')) { base2026 = 5200000; floorPrice = 500000; }
-      else if (targetStr.includes('3 ser') || targetStr.includes('320') || targetStr.includes('330') || targetStr.includes('318') || targetStr.includes('316')) { base2026 = 4500000; floorPrice = 400000; if (targetStr.includes('330')) { base2026 = 5500000; floorPrice = 500000; } }
-      else if (targetStr.includes('x1') || targetStr.includes('ix1')) { base2026 = 4200000; floorPrice = 450000; }
-      else if (targetStr.includes('2 ser')) { base2026 = 3800000; floorPrice = 350000; }
-      else if (targetStr.includes('1 ser')) { base2026 = 3500000; floorPrice = 300000; }
+      else if (targetStr.includes('5 ser') || targetStr.includes('520') || targetStr.includes('530') || targetStr.includes('540') || targetStr.includes('i5')) { base2026 = 8500000; floorPrice = 600000; }
+      else if (targetStr.includes('x3') || targetStr.includes('ix3')) { base2026 = 7200000; floorPrice = 600000; }
+      else if (targetStr.includes('z4')) { base2026 = 6800000; floorPrice = 600000; }
+      else if (targetStr.includes('4 ser') || targetStr.includes('420') || targetStr.includes('430') || targetStr.includes('i4')) { base2026 = 6000000; floorPrice = 500000; }
+      else if (targetStr.includes('3 ser') || targetStr.includes('320') || targetStr.includes('330') || targetStr.includes('318') || targetStr.includes('316')) { base2026 = 5400000; floorPrice = 400000; }
+      else if (targetStr.includes('x1') || targetStr.includes('ix1')) { base2026 = 4500000; floorPrice = 450000; }
+      else if (targetStr.includes('2 ser')) { base2026 = 4000000; floorPrice = 350000; }
+      else if (targetStr.includes('1 ser')) { base2026 = 3600000; floorPrice = 300000; }
     }
 
     // ================= 3. MERCEDES-BENZ =================
     else if (brand.includes('mercedes')) {
       decayRate = 0.91; floorPrice = 400000;
-      if (targetStr.includes('g 63') || targetStr.includes('g 500') || targetStr.includes('g ser') || targetStr.includes('g-class')) { base2026 = 26000000; floorPrice = 5000000; decayRate = 0.96; }
-      else if (targetStr.includes('amg gt') || targetStr.includes('gt 63') || targetStr.includes('gt 53')) { base2026 = 24000000; floorPrice = 5000000; decayRate = 0.95; }
-      else if (targetStr.includes('s ser') || targetStr.includes('s 400') || targetStr.includes('s 500') || targetStr.includes('s 350') || targetStr.includes('eqs')) { base2026 = 19000000; floorPrice = 1200000; decayRate = 0.93; }
-      else if (targetStr.includes('gle')) { base2026 = 13000000; floorPrice = 1200000; if (targetStr.includes('amg') || targetStr.includes('63')) { base2026 = 22000000; floorPrice = 4000000; } }
-      else if (targetStr.includes('e ser') || targetStr.includes('e 180') || targetStr.includes('e 200') || targetStr.includes('e 220') || targetStr.includes('e 250') || targetStr.includes('e 300') || targetStr.includes('eqe')) { base2026 = 8000000; floorPrice = 600000; if (targetStr.includes('amg') || targetStr.includes('63') || targetStr.includes('53')) { base2026 = 16000000; floorPrice = 2500000; } }
-      else if (targetStr.includes('glc')) { base2026 = 7200000; floorPrice = 700000; }
-      else if (targetStr.includes('c ser') || targetStr.includes('c 180') || targetStr.includes('c 200') || targetStr.includes('c 220') || targetStr.includes('c 250') || targetStr.includes('c 300')) { base2026 = 4900000; floorPrice = 400000; if (targetStr.includes('amg') || targetStr.includes('63') || targetStr.includes('43')) { base2026 = 12000000; floorPrice = 2000000; } }
-      else if (targetStr.includes('cla')) { base2026 = 4000000; floorPrice = 400000; }
-      else if (targetStr.includes('gla')) { base2026 = 3900000; floorPrice = 450000; }
-      else if (targetStr.includes('a ser') || targetStr.includes('a 180') || targetStr.includes('a 200')) { base2026 = 3500000; floorPrice = 350000; }
+      if (targetStr.includes('g 63') || targetStr.includes('g 500') || targetStr.includes('g ser') || targetStr.includes('g-class') || targetStr.includes('g serisi')) { base2026 = 27000000; floorPrice = 5000000; decayRate = 0.96; }
+      else if (targetStr.includes('amg gt') || targetStr.includes('gt 63') || targetStr.includes('gt 53')) { base2026 = 25000000; floorPrice = 5000000; decayRate = 0.95; }
+      else if (targetStr.includes('s ser') || targetStr.includes('s 400') || targetStr.includes('s 500') || targetStr.includes('s 350') || targetStr.includes('eqs')) { base2026 = 19500000; floorPrice = 1200000; decayRate = 0.93; }
+      else if (targetStr.includes('gle')) { base2026 = 14000000; floorPrice = 1200000; }
+      else if (targetStr.includes('e ser') || targetStr.includes('e 180') || targetStr.includes('e 200') || targetStr.includes('e 220') || targetStr.includes('e 250') || targetStr.includes('e 300') || targetStr.includes('eqe')) { base2026 = 8500000; floorPrice = 600000; }
+      else if (targetStr.includes('glc')) { base2026 = 7500000; floorPrice = 700000; }
+      else if (targetStr.includes('c ser') || targetStr.includes('c 180') || targetStr.includes('c 200') || targetStr.includes('c 220') || targetStr.includes('c 250') || targetStr.includes('c 300')) { base2026 = 5800000; floorPrice = 400000; }
+      else if (targetStr.includes('cla')) { base2026 = 4500000; floorPrice = 400000; }
+      else if (targetStr.includes('gla')) { base2026 = 4200000; floorPrice = 450000; }
+      else if (targetStr.includes('a ser') || targetStr.includes('a 180') || targetStr.includes('a 200')) { base2026 = 3800000; floorPrice = 350000; }
     }
 
     // ================= 4. VOLKSWAGEN =================
     else if (brand.includes('volkswagen') || brand.includes('vw')) {
       decayRate = 0.89; floorPrice = 220000;
-      if (targetStr.includes('touareg')) { base2026 = 11000000; floorPrice = 800000; decayRate = 0.92; }
-      else if (targetStr.includes('arteon')) { base2026 = 4400000; floorPrice = 550000; }
-      else if (targetStr.includes('transporter') || targetStr.includes('caravelle') || targetStr.includes('multivan')) { base2026 = 4000000; floorPrice = 400000; }
-      else if (targetStr.includes('tiguan')) { base2026 = 3500000; floorPrice = 450000; }
-      else if (targetStr.includes('passat')) { base2026 = 3300000; floorPrice = 300000; }
-      else if (targetStr.includes('t-roc')) { base2026 = 2800000; floorPrice = 500000; }
-      else if (targetStr.includes('golf')) { base2026 = 2400000; floorPrice = 250000; if (targetStr.includes('gti') || targetStr.includes(' r ')) { base2026 = 3500000; floorPrice = 450000; } }
-      else if (targetStr.includes('caddy')) { base2026 = 2000000; floorPrice = 220000; }
-      else if (targetStr.includes('polo')) { base2026 = 1800000; floorPrice = 200000; if (targetStr.includes('gti')) { base2026 = 2500000; floorPrice = 350000; } }
-      else if (targetStr.includes('jetta')) { base2026 = 1800000; floorPrice = 200000; }
+      if (targetStr.includes('touareg')) { base2026 = 11500000; floorPrice = 800000; decayRate = 0.92; }
+      else if (targetStr.includes('arteon')) { base2026 = 4800000; floorPrice = 550000; }
+      else if (targetStr.includes('passat')) { base2026 = 4200000; floorPrice = 300000; }
+      else if (targetStr.includes('tiguan')) { base2026 = 4000000; floorPrice = 450000; }
+      else if (targetStr.includes('t-roc')) { base2026 = 3300000; floorPrice = 500000; }
+      else if (targetStr.includes('golf')) { base2026 = 3100000; floorPrice = 250000; }
+      else if (targetStr.includes('polo')) { base2026 = 2200000; floorPrice = 200000; }
     }
 
     // ================= 5. FIAT =================
     else if (brand === 'fiat') {
-      if (targetStr.includes('egea')) { base2026 = 2000000; if (targetStr.includes('cross')) { base2026 = 2200000; } }
-      else if (targetStr.includes('linea')) { base2026 = 3000000; }
-      else if (targetStr.includes('punto')) { base2026 = 2800000; }
+      if (targetStr.includes('egea')) { base2026 = 1450000; if (targetStr.includes('cross')) { base2026 = 1650000; } }
+      else if (targetStr.includes('linea')) { base2026 = 2700000; }
+      else if (targetStr.includes('punto')) { base2026 = 2600000; }
       else if (targetStr.includes('palio') || targetStr.includes('albea')) { base2026 = 2200000; }
-      else if (targetStr.includes('doblo') || targetStr.includes('fiorino')) { base2026 = 2500000; }
+      else if (targetStr.includes('doblo') || targetStr.includes('fiorino')) { base2026 = 2300000; }
     }
 
     // ================= 6. RENAULT =================
     else if (brand === 'renault') {
       if (targetStr.includes('austral') || targetStr.includes('kadjar')) { base2026 = 3500000; }
       else if (targetStr.includes('megane')) { base2026 = 2900000; }
-      else if (targetStr.includes('clio') || targetStr.includes('captur') || targetStr.includes('symbol')) { base2026 = 2700000; }
+      else if (targetStr.includes('clio') || targetStr.includes('captur') || targetStr.includes('symbol')) { base2026 = 1900000; }
     }
 
     // ================= 7. PEUGEOT =================
@@ -141,8 +138,8 @@ export async function recalibrateAllSpecs(prisma: PrismaClient) {
     else if (brand === 'toyota') {
       if (targetStr.includes('land cruiser')) { base2026 = 22000000; }
       else if (targetStr.includes('rav4') || targetStr.includes('c-hr')) { base2026 = 3800000; }
-      else if (targetStr.includes('corolla')) { base2026 = 3000000; }
-      else if (targetStr.includes('yaris')) { base2026 = 2700000; }
+      else if (targetStr.includes('corolla')) { base2026 = 2400000; }
+      else if (targetStr.includes('yaris')) { base2026 = 2100000; }
     }
 
     // ================= 9. HYUNDAI =================
@@ -151,11 +148,11 @@ export async function recalibrateAllSpecs(prisma: PrismaClient) {
       else if (targetStr.includes('tucson')) { base2026 = 4000000; }
       else if (targetStr.includes('elantra')) { base2026 = 3200000; }
       else if (targetStr.includes('i30') || targetStr.includes('kona')) { base2026 = 3000000; }
-      else if (targetStr.includes('i20') || targetStr.includes('bayon')) { base2026 = 2800000; }
+      else if (targetStr.includes('i20') || targetStr.includes('bayon')) { base2026 = 2400000; }
       else if (targetStr.includes('accent blue')) { base2026 = 3200000; }
       else if (targetStr.includes('accent era')) { base2026 = 3000000; }
       else if (targetStr.includes('accent')) { base2026 = 3000000; }
-      else if (targetStr.includes('i10')) { base2026 = 2500000; }
+      else if (targetStr.includes('i10')) { base2026 = 2000000; }
     }
 
     // ================= 10. FORD =================
@@ -163,21 +160,30 @@ export async function recalibrateAllSpecs(prisma: PrismaClient) {
       decayRate = 0.88; floorPrice = 200000;
       if (targetStr.includes('mustang')) { base2026 = 9500000; floorPrice = 1200000; decayRate = 0.93; }
       else if (targetStr.includes('ranger')) { base2026 = 4200000; floorPrice = 450000; }
-      else if (targetStr.includes('kuga')) { base2026 = 3000000; floorPrice = 400000; }
-      else if (targetStr.includes('puma')) { base2026 = 2500000; floorPrice = 480000; }
-      else if (targetStr.includes('focus')) { base2026 = 2000000; floorPrice = 200000; }
-      else if (targetStr.includes('fiesta')) { base2026 = 1200000; floorPrice = 160000; }
+      else if (targetStr.includes('kuga')) { base2026 = 3800000; floorPrice = 400000; }
+      else if (targetStr.includes('puma')) { base2026 = 3000000; floorPrice = 480000; }
+      else if (targetStr.includes('focus')) { base2026 = 2650000; floorPrice = 200000; }
+      else if (targetStr.includes('fiesta')) { base2026 = 2000000; floorPrice = 160000; }
     }
 
-    // ================= 11. VOLVO =================
+    // ================= 11. HONDA =================
+    else if (brand === 'honda') {
+      if (targetStr.includes('cr-v')) { base2026 = 4500000; }
+      else if (targetStr.includes('hr-v')) { base2026 = 3200000; }
+      else if (targetStr.includes('civic')) { base2026 = 2950000; }
+      else if (targetStr.includes('city') || targetStr.includes('jazz')) { base2026 = 2200000; }
+    }
+
+    // ================= 12. VOLVO =================
     else if (brand === 'volvo') {
       decayRate = 0.91; floorPrice = 400000;
       if (targetStr.includes('xc90')) { base2026 = 11500000; floorPrice = 1500000; decayRate = 0.92; }
-      else if (targetStr.includes('xc60')) { base2026 = 7200000; floorPrice = 1000000; }
-      else if (targetStr.includes('v90')) { base2026 = 7000000; floorPrice = 1000000; }
-      else if (targetStr.includes('s90')) { base2026 = 6800000; floorPrice = 1000000; }
-      else if (targetStr.includes('v60')) { base2026 = 4200000; floorPrice = 600000; }
-      else if (targetStr.includes('xc40')) { base2026 = 3900000; floorPrice = 600000; }
+      else if (targetStr.includes('xc60')) { base2026 = 8500000; floorPrice = 1000000; }
+      else if (targetStr.includes('v90')) { base2026 = 8300000; floorPrice = 1000000; }
+      else if (targetStr.includes('s90')) { base2026 = 8100000; floorPrice = 1000000; }
+      else if (targetStr.includes('v60')) { base2026 = 5800000; floorPrice = 600000; }
+      else if (targetStr.includes('s60')) { base2026 = 5500000; floorPrice = 600000; }
+      else if (targetStr.includes('xc40')) { base2026 = 4500000; floorPrice = 600000; }
       else if (targetStr.includes('s60')) { base2026 = 3600000; floorPrice = 600000; }
       else if (targetStr.includes('s80')) { base2026 = 2200000; floorPrice = 400000; decayRate = 0.88; }
       else if (targetStr.includes('v40')) { base2026 = 1900000; floorPrice = 350000; decayRate = 0.88; }

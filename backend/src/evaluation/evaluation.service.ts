@@ -565,13 +565,41 @@ export class EvaluationService {
     }
 
     // D. Compute the condition factor from mileage and damage adjustments
-    // gamma_donanim (Optional package multiplier)
+    // gamma_donanim (Optional package multiplier for sub-model trims)
     let gammaDonanim = 1.0;
-    const packageName = spec.package?.name?.toLowerCase() || '';
-    if (packageName.includes('highline') || packageName.includes('elite') || packageName.includes('premium')) {
-      gammaDonanim = 1.04;
-    } else if (packageName.includes('easy') || packageName.includes('trendline') || packageName.includes('touch')) {
-      gammaDonanim = 0.98;
+    const packageName = (spec.package?.name || '').toLowerCase();
+    const variantName = (spec.variant?.name || '').toLowerCase();
+    const combinedTrimStr = `${packageName} ${variantName}`;
+
+    if (
+      combinedTrimStr.includes('m sport') ||
+      combinedTrimStr.includes('amg') ||
+      combinedTrimStr.includes('r-line') ||
+      combinedTrimStr.includes('highline') ||
+      combinedTrimStr.includes('inscription') ||
+      combinedTrimStr.includes('plus bright') ||
+      combinedTrimStr.includes('ultimate dark') ||
+      combinedTrimStr.includes('elite') ||
+      combinedTrimStr.includes('n-line') ||
+      combinedTrimStr.includes('fr') ||
+      combinedTrimStr.includes('icon') ||
+      combinedTrimStr.includes('shine') ||
+      combinedTrimStr.includes('titanium') ||
+      combinedTrimStr.includes('prestige') ||
+      combinedTrimStr.includes('excellence') ||
+      combinedTrimStr.includes('design') ||
+      combinedTrimStr.includes('recharge')
+    ) {
+      gammaDonanim = 1.05; // %5 donanım/paket primi
+    } else if (
+      combinedTrimStr.includes('easy') ||
+      combinedTrimStr.includes('trendline') ||
+      combinedTrimStr.includes('joy') ||
+      combinedTrimStr.includes('life') ||
+      combinedTrimStr.includes('touch') ||
+      combinedTrimStr.includes('active')
+    ) {
+      gammaDonanim = 0.97; // %3 baz paket ayarı
     }
 
     // Condition factor: mileage adjustment, damage penalty, and package multiplier
