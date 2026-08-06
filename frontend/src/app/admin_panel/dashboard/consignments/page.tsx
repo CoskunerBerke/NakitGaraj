@@ -9,16 +9,41 @@ const API_BASE = typeof window !== 'undefined'
   : 'http://127.0.0.1:3001/api';
 
 const getSahibindenSearchUrl = (cons: any) => {
-  const spec = cons?.vehicleSpecification;
+  const spec = cons?.vehicleSpecification || cons?.vehicleEvaluation?.vehicleSpecification || {};
   const brand = spec?.manufacturer?.name || cons?.brandName || '';
   const model = spec?.model?.name || cons?.modelName || '';
   const variant = spec?.variant?.name || cons?.variantName || '';
-  const year = spec?.year || cons?.year || '';
+  const pkg = spec?.package?.name || '';
+  const year = spec?.year || cons?.year;
+  const mileage = cons?.mileage || cons?.vehicleEvaluation?.mileage || 0;
+  const damageStatus = cons?.damageStatus || cons?.vehicleEvaluation?.damageStatus;
+  const fuel = spec?.fuelType?.name || cons?.fuel || '';
+  const trans = spec?.transmissionType?.name || cons?.transmission || '';
 
   const cleanVariant = (variant && !variant.includes('Standard') && !variant.includes('Base')) ? variant : '';
+  const cleanPkg = (pkg && !pkg.includes('Standart') && !pkg.includes('Bilmiyorum')) ? pkg : '';
+  const cleanFuel = (fuel && !fuel.includes('Belirtilmedi')) ? fuel : '';
+  const cleanTrans = (trans && !trans.includes('Belirtilmedi')) ? trans : '';
+  const damageTag = (damageStatus === 'NO') ? 'Hatasız' : '';
 
-  const queryText = `${brand} ${model} ${cleanVariant} ${year}`.replace(/\s+/g, ' ').trim();
-  return `https://www.sahibinden.com/vasita?query_text=${encodeURIComponent(queryText)}`;
+  const queryText = `${brand} ${model} ${cleanVariant} ${cleanPkg} ${cleanFuel} ${cleanTrans} ${damageTag}`.replace(/\s+/g, ' ').trim();
+
+  const queryParams = new URLSearchParams();
+  queryParams.set('query_text', queryText);
+
+  if (year) {
+    queryParams.set('a5_min', year.toString());
+    queryParams.set('a5_max', year.toString());
+  }
+
+  if (mileage && mileage > 0) {
+    const minKm = Math.max(0, Math.floor((mileage - 25000) / 10000) * 10000);
+    const maxKm = Math.ceil((mileage + 35000) / 10000) * 10000;
+    queryParams.set('a4_min', minKm.toString());
+    queryParams.set('a4_max', maxKm.toString());
+  }
+
+  return `https://www.sahibinden.com/vasita?${queryParams.toString()}`;
 };
 
 const getBrandLogoUrl = (brandName: string) => {
