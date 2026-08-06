@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "NakitGaraj - Otomatik İlan Aktarıcı",
+  "version": "1.0.0",
+  "description": "Sahibinden ve araç ilan sitelerindeki araç verilerini tek tıkla NakitGaraj veritabanına aktarır.",
+  "permissions": ["activeTab", "scripting"],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "NakitGaraj İlan Aktar"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://*.sahibinden.com/*"],
+      "js": ["content.js"]
+    }
+  ]
+}
