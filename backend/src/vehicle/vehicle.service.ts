@@ -329,8 +329,8 @@ export class VehicleService {
         ];
       } else if (lowerModel.includes('c4 x') || lowerModel.includes('c4x')) {
         variantSpecs = [
-          { name: '1.2 PureTech', engineSize: 1199, horsepower: 130, torque: 230, fuel: 'Benzin', trans: 'Otomatik', body: 'Sedan', packages: ['Feel', 'Feel Bold', 'Shine', 'Shine Bold'] },
-          { name: '1.5 BlueHDi', engineSize: 1499, horsepower: 130, torque: 300, fuel: 'Dizel', trans: 'Otomatik', packages: ['Feel Bold', 'Shine', 'Shine Bold'] },
+          { name: '1.2 PureTech', engineSize: 1199, horsepower: 130, torque: 230, fuel: 'Benzin', trans: 'Otomatik', body: 'Sedan', packages: ['Feel', 'Feel Bold', 'Shine', 'Shine Bold', 'Max', 'Standart / Bilmiyorum'] },
+          { name: '1.5 BlueHDi', engineSize: 1499, horsepower: 130, torque: 300, fuel: 'Dizel', trans: 'Otomatik', packages: ['Feel Bold', 'Shine', 'Shine Bold', 'Max', 'Standart / Bilmiyorum'] },
         ];
       } else if (lowerModel.includes('e-c4') || lowerModel.includes('ec4')) {
         variantSpecs = [

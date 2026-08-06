@@ -452,16 +452,12 @@ export default function ValuationWizard() {
     selectedTransmission,
   ]);
 
-  // Is Step 1 completed?
+  // Is Step 1 completed? (Year, Brand, Model and Variant are sufficient!)
   const isStep1Complete =
     selectedYear !== '' &&
     selectedBrand !== '' &&
     selectedModel !== '' &&
-    (availableVariants.length === 0 || selectedVariant !== '') &&
-    (availablePackages.length === 0 || selectedPackage !== '') &&
-    (availableBodies.length === 0 || selectedBodyType !== '') &&
-    (availableFuels.length === 0 || selectedFuelType !== '') &&
-    (availableTransmissions.length === 0 || selectedTransmission !== '');
+    (availableVariants.length === 0 || selectedVariant !== '');
 
   const handleStep1Next = () => {
     if (isStep1Complete) {
@@ -844,13 +840,14 @@ export default function ValuationWizard() {
                   }}
                   className="glass-input rounded-xl p-3.5 text-sm w-full font-semibold disabled:cursor-not-allowed"
                 >
-                  <option value="">{selectedVariant ? '-- Donanım Paketini Seçiniz --' : 'Önce Motor Seçiniz'}</option>
+                  <option value="">{selectedVariant ? '-- Standart Paket / İlanda Yazmıyor --' : 'Önce Motor Seçiniz'}</option>
                   {availablePackages.map((p) => (
                     <option key={p.id} value={p.id}>
                       {p.name}
                     </option>
                   ))}
                 </select>
+                <span className="text-[10px] text-zinc-400">💡 Sahibinden ilanında paket yazmıyorsa 'Standart Paket' seçerek devam edebilirsiniz.</span>
               </div>
             </div>
 
