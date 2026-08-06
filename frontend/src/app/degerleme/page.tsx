@@ -679,19 +679,18 @@ export default function ValuationWizard() {
                     }`}>2</span>
                     Model Yılı
                   </label>
-                  {!selectedBrand && (
+                  {!selectedBrand ? (
                     <span className="text-[10px] font-semibold text-amber-500">🔒 Önce Marka Seçiniz</span>
-                  )}
-                  {selectedYear && (
+                  ) : selectedYear ? (
                     <span className="text-[10px] font-bold text-emerald-500 flex items-center gap-1">
                       <CheckCircle className="w-3.5 h-3.5" /> Seçildi
                     </span>
-                  )}
+                  ) : null}
                 </div>
                 <select
                   suppressHydrationWarning
                   disabled={!selectedBrand}
-                  value={selectedYear}
+                  value={selectedBrand ? selectedYear : ''}
                   onChange={(e) => {
                     setSelectedYear(e.target.value ? Number(e.target.value) : '');
                     setSelectedModel('');
@@ -721,14 +720,13 @@ export default function ValuationWizard() {
                     }`}>3</span>
                     Model Seçimi
                   </label>
-                  {(!selectedBrand || !selectedYear) && (
+                  {(!selectedBrand || !selectedYear) ? (
                     <span className="text-[10px] font-semibold text-amber-500">🔒 Önce Yıl Seçiniz</span>
-                  )}
-                  {selectedModel && (
+                  ) : selectedModel ? (
                     <span className="text-[10px] font-bold text-emerald-500 flex items-center gap-1">
                       <CheckCircle className="w-3.5 h-3.5" /> Seçildi
                     </span>
-                  )}
+                  ) : null}
                 </div>
 
                 {selectedBrand && selectedYear && models.length > 8 && (
@@ -747,7 +745,7 @@ export default function ValuationWizard() {
                 <select
                   suppressHydrationWarning
                   disabled={!selectedBrand || !selectedYear}
-                  value={selectedModel}
+                  value={selectedBrand && selectedYear ? selectedModel : ''}
                   onChange={(e) => {
                     setSelectedModel(e.target.value);
                     resetSubordinateOptions();
@@ -781,19 +779,18 @@ export default function ValuationWizard() {
                     }`}>4</span>
                     Versiyon / Motor
                   </label>
-                  {!selectedModel && (
+                  {!selectedModel ? (
                     <span className="text-[10px] font-semibold text-amber-500">🔒 Önce Model Seçiniz</span>
-                  )}
-                  {selectedVariant && (
+                  ) : selectedVariant ? (
                     <span className="text-[10px] font-bold text-emerald-500 flex items-center gap-1">
                       <CheckCircle className="w-3.5 h-3.5" /> Seçildi
                     </span>
-                  )}
+                  ) : null}
                 </div>
                 <select
                   suppressHydrationWarning
                   disabled={!selectedModel}
-                  value={selectedVariant}
+                  value={selectedModel ? selectedVariant : ''}
                   onChange={(e) => {
                     setSelectedVariant(e.target.value);
                     setSelectedPackage('');
@@ -825,19 +822,18 @@ export default function ValuationWizard() {
                     }`}>5</span>
                     Donanım Paketi
                   </label>
-                  {!selectedVariant && (
+                  {!selectedVariant ? (
                     <span className="text-[10px] font-semibold text-amber-500">🔒 Önce Motor Seçiniz</span>
-                  )}
-                  {selectedPackage && (
+                  ) : selectedPackage ? (
                     <span className="text-[10px] font-bold text-emerald-500 flex items-center gap-1">
                       <CheckCircle className="w-3.5 h-3.5" /> Seçildi
                     </span>
-                  )}
+                  ) : null}
                 </div>
                 <select
                   suppressHydrationWarning
                   disabled={!selectedVariant}
-                  value={selectedPackage}
+                  value={selectedVariant ? selectedPackage : ''}
                   onChange={(e) => {
                     setSelectedPackage(e.target.value);
                   }}
