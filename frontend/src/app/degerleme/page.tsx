@@ -854,67 +854,67 @@ export default function ValuationWizard() {
               </div>
             </div>
 
-              {/* Body Type Select */}
-              {availableBodies.length > 0 && (
-                <div className="flex flex-col gap-2">
-                  <label className="text-xs font-semibold text-zinc-500 dark:text-zinc-400">{t('wiz.body')}</label>
-                  <select
-                    value={selectedBodyType}
-                    onChange={(e) => {
-                      setSelectedBodyType(e.target.value);
-                      setSelectedFuelType('');
-                      setSelectedTransmission('');
-                    }}
-                    className="glass-input rounded-xl p-3.5 text-sm w-full font-semibold"
-                  >
-                    <option value="">{t('wiz.select')}</option>
-                    {availableBodies.map((b) => (
-                      <option key={b.id} value={b.id}>
-                        {b.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
+            {/* Optional Additional Vehicle Specs (Body, Fuel, Transmission) */}
+            {(availableBodies.length > 0 || availableFuels.length > 0 || availableTransmissions.length > 0) && (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-1">
+                {/* Body Type Select */}
+                {availableBodies.length > 0 && (
+                  <div className="flex flex-col gap-2 p-4 rounded-2xl bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-200 dark:border-zinc-800">
+                    <label className="text-xs font-semibold text-zinc-500 dark:text-zinc-400">{t('wiz.body')}</label>
+                    <select
+                      value={selectedBodyType}
+                      onChange={(e) => setSelectedBodyType(e.target.value)}
+                      className="glass-input rounded-xl p-3.5 text-sm w-full font-semibold"
+                    >
+                      <option value="">{t('wiz.select')}</option>
+                      {availableBodies.map((b) => (
+                        <option key={b.id} value={b.id}>
+                          {b.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
 
-              {/* Fuel Type Select */}
-              {availableFuels.length > 0 && (
-                <div className="flex flex-col gap-2">
-                  <label className="text-xs font-semibold text-zinc-500 dark:text-zinc-400">{t('wiz.fuel')}</label>
-                  <select
-                    value={selectedFuelType}
-                    onChange={(e) => setSelectedFuelType(e.target.value)}
-                    className="glass-input rounded-xl p-3.5 text-sm w-full font-semibold"
-                  >
-                    <option value="">{t('wiz.select')}</option>
-                    {availableFuels.map((f) => (
-                      <option key={f.id} value={f.id}>
-                        {f.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
+                {/* Fuel Type Select */}
+                {availableFuels.length > 0 && (
+                  <div className="flex flex-col gap-2 p-4 rounded-2xl bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-200 dark:border-zinc-800">
+                    <label className="text-xs font-semibold text-zinc-500 dark:text-zinc-400">{t('wiz.fuel')}</label>
+                    <select
+                      value={selectedFuelType}
+                      onChange={(e) => setSelectedFuelType(e.target.value)}
+                      className="glass-input rounded-xl p-3.5 text-sm w-full font-semibold"
+                    >
+                      <option value="">{t('wiz.select')}</option>
+                      {availableFuels.map((f) => (
+                        <option key={f.id} value={f.id}>
+                          {f.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
 
-              {/* Transmission Select */}
-              {availableTransmissions.length > 0 && (
-                <div className="flex flex-col gap-2">
-                  <label className="text-xs font-semibold text-zinc-500 dark:text-zinc-400">{t('wiz.transmission')}</label>
-                  <select
-                    value={selectedTransmission}
-                    onChange={(e) => setSelectedTransmission(e.target.value)}
-                    className="glass-input rounded-xl p-3.5 text-sm w-full font-semibold"
-                  >
-                    <option value="">{t('wiz.select')}</option>
-                    {availableTransmissions.map((tr) => (
-                      <option key={tr.id} value={tr.id}>
-                        {tr.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
-            </div>
+                {/* Transmission Select */}
+                {availableTransmissions.length > 0 && (
+                  <div className="flex flex-col gap-2 p-4 rounded-2xl bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-200 dark:border-zinc-800">
+                    <label className="text-xs font-semibold text-zinc-500 dark:text-zinc-400">{t('wiz.transmission')}</label>
+                    <select
+                      value={selectedTransmission}
+                      onChange={(e) => setSelectedTransmission(e.target.value)}
+                      className="glass-input rounded-xl p-3.5 text-sm w-full font-semibold"
+                    >
+                      <option value="">{t('wiz.select')}</option>
+                      {availableTransmissions.map((tr) => (
+                        <option key={tr.id} value={tr.id}>
+                          {tr.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Live Vehicle Selection Summary Badge */}
             {(selectedBrand || selectedModel) && (
