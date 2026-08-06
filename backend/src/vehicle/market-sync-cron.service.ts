@@ -81,17 +81,24 @@ export class MarketSyncCronService {
     const multiplier = 1 + (percentage / 100);
     const specs = await this.prisma.vehicleSpecification.findMany();
 
-    let updatedCount = 0;
+    const updates: any[] = [];
     for (const spec of specs) {
       if (spec.originalMSRP && spec.originalMSRP > 0) {
-        await this.prisma.vehicleSpecification.update({
-          where: { id: spec.id },
-          data: { originalMSRP: Math.round(spec.originalMSRP * multiplier) },
-        });
-        updatedCount++;
+        updates.push(
+          this.prisma.vehicleSpecification.update({
+            where: { id: spec.id },
+            data: { originalMSRP: Math.round(spec.originalMSRP * multiplier) },
+          })
+        );
       }
     }
 
-    return { updatedCount, percentage };
+    const CHUNK_SIZE = 500;
+    for (let i = 0; i < updates.length; i += CHUNK_SIZE) {
+      const chunk = updates.slice(i, i + CHUNK_SIZE);
+      await this.prisma.$transaction(chunk);
+    }
+
+    return { updatedCount: updates.length, percentage };
   }
 }
