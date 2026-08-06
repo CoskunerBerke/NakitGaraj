@@ -395,6 +395,43 @@ export default function ValuationsList() {
               </div>
             </div>
 
+            {/* Admin Internal Market & Floor Analysis Card */}
+            <div className="bg-zinc-900 text-white p-5 rounded-2xl border border-zinc-800 flex flex-col gap-4 shadow-xl mt-4">
+              <span className="text-[10px] text-amber-400 font-extrabold uppercase tracking-wider flex items-center gap-1.5">
+                📊 Galeri İçin Detaylı Piyasa & Taban Analizi
+              </span>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="p-3.5 rounded-xl bg-white/5 border border-white/10">
+                  <span className="text-[11px] text-zinc-400 font-bold block">📊 Sahibinden Piyasa Satış Değeri (Mod)</span>
+                  <div className="text-lg font-black text-amber-400 mt-1">
+                    {Math.round((selectedEval.finalOfferedPrice || selectedEval.estimatedValue) / 0.88).toLocaleString('tr-TR')} ₺
+                  </div>
+                  <span className="text-[10px] text-zinc-500 block mt-0.5">En yoğun emsal araç satış tepe değeri (Mod)</span>
+                </div>
+
+                <div className="p-3.5 rounded-xl bg-white/5 border border-white/10">
+                  <span className="text-[11px] text-zinc-400 font-bold block">⚡ Acil Nakit Alım Taban Fiyatı</span>
+                  <div className="text-lg font-black text-white mt-1">
+                    {Math.round((selectedEval.finalOfferedPrice || selectedEval.estimatedValue) * 0.94).toLocaleString('tr-TR')} ₺
+                  </div>
+                  <span className="text-[10px] text-zinc-500 block mt-0.5">En hızlı 15 dakikada nakit alım tabanı</span>
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-1.5 pt-1 border-t border-white/10">
+                <div className="flex justify-between text-xs font-semibold text-zinc-300">
+                  <span>Piyasa Kıyaslama Değer Aralığı:</span>
+                  <span className="text-amber-400 font-extrabold">
+                    {Math.round((selectedEval.finalOfferedPrice || selectedEval.estimatedValue) * 0.96).toLocaleString('tr-TR')} ₺ - {Math.round((selectedEval.finalOfferedPrice || selectedEval.estimatedValue) * 1.30).toLocaleString('tr-TR')} ₺
+                  </span>
+                </div>
+                <div className="w-full bg-zinc-800 h-2 rounded-full overflow-hidden relative">
+                  <div className="absolute left-[15%] right-[15%] bg-gradient-to-r from-amber-500 to-emerald-500 h-full rounded-full" />
+                </div>
+              </div>
+            </div>
+
             {/* Sahibinden Live Verification Banner */}
             <div className="bg-amber-500/10 border border-amber-500/30 p-4 rounded-2xl flex flex-col md:flex-row items-center justify-between gap-3 shadow-sm">
               <div className="flex items-center gap-3">

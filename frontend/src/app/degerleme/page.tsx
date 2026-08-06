@@ -1642,40 +1642,7 @@ export default function ValuationWizard() {
                   </div>
                 </div>
 
-                {/* Sahibinden Piyasa Kıyaslama Kutuları */}
-                <div className="border-t border-zinc-200 dark:border-white/10 pt-5 grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div className="p-3.5 rounded-2xl bg-zinc-100/80 dark:bg-white/5 border border-zinc-200 dark:border-white/10">
-                    <span className="text-[11px] text-zinc-500 dark:text-zinc-400 font-bold flex items-center gap-1">
-                      📊 Sahibinden Piyasa Satış Değeri
-                    </span>
-                    <div className="text-base font-black text-zinc-900 dark:text-white mt-1">
-                      {(valuationResult.results.fairMarketValue || Math.round(valuationResult.results.estimatedValue * 1.2)).toLocaleString('tr-TR')} ₺
-                    </div>
-                    <span className="text-[10px] text-zinc-500">Sahibinden.com en yoğun emsal araç satış değeri (Mod)</span>
-                  </div>
 
-                  <div className="p-3.5 rounded-2xl bg-zinc-100/80 dark:bg-white/5 border border-zinc-200 dark:border-white/10">
-                    <span className="text-[11px] text-zinc-500 dark:text-zinc-400 font-bold flex items-center gap-1">
-                      ⚡ Acil Nakit Alım Taban Fiyatı
-                    </span>
-                    <div className="text-base font-black text-zinc-800 dark:text-zinc-200 mt-1">
-                      {valuationResult.results.quickSaleValue.toLocaleString('tr-TR')} ₺
-                    </div>
-                    <span className="text-[10px] text-zinc-500">En hızlı 15 dakikada nakit alım tabanı</span>
-                  </div>
-                </div>
-
-                <div className="mt-5 flex flex-col gap-1.5">
-                  <div className="flex justify-between text-xs font-semibold text-zinc-600 dark:text-zinc-400">
-                    <span>{t('wiz.step3.range')}</span>
-                    <span className="text-brand-orange font-bold">
-                      {valuationResult.results.fairMarketRange}
-                    </span>
-                  </div>
-                  <div className="w-full bg-zinc-200 dark:bg-zinc-800 h-2 rounded-full overflow-hidden relative">
-                    <div className="absolute left-[10%] right-[10%] bg-gradient-to-r from-brand-orange to-emerald-500 h-full rounded-full" />
-                  </div>
-                </div>
               </div>
 
               {/* Confidence circular indicator card */}
