@@ -21,7 +21,6 @@ interface ExtractedListing {
 function detectMakeAndModel(filename: string, modelTagText: string, titleText: string, folderName: string): { make: string; model: string } {
   const combined = `${folderName} ${filename} ${modelTagText} ${titleText}`.toUpperCase();
 
-  // Known Manufacturers Map
   let make = 'Audi';
 
   if (combined.includes('ALFA ROMEO') || combined.includes('ALFAROMEO') || folderName.toUpperCase().includes('ALFA')) {
@@ -66,7 +65,6 @@ function detectMakeAndModel(filename: string, modelTagText: string, titleText: s
     make = 'Nissan';
   }
 
-  // Model detection from modelTagText or filename
   let model = modelTagText || 'Model';
 
   if (make === 'Alfa Romeo') {
@@ -155,7 +153,6 @@ function parseSingleHtmlFile(filePath: string): ExtractedListing[] {
         return;
       }
 
-      // Location split
       let city = 'İstanbul';
       let district = '';
 
@@ -167,13 +164,10 @@ function parseSingleHtmlFile(filePath: string): ExtractedListing[] {
         city = locationText;
       }
 
-      // Dynamic Brand & Model detection
       const { make, model } = detectMakeAndModel(filename, modelTagText, titleText, folderName);
 
-      // Variant
       let variant = modelTagText || 'Standart';
 
-      // Trim
       let trim = 'Paket';
       const combinedText = `${titleText} ${modelTagText}`.toUpperCase();
       if (combinedText.includes('DISTINCTIVE')) trim = 'Distinctive';
@@ -205,6 +199,9 @@ function parseSingleHtmlFile(filePath: string): ExtractedListing[] {
       // Ignore
     }
   });
+
+  // Explicitly close DOM window to release memory immediately
+  dom.window.close();
 
   return listings;
 }
@@ -251,7 +248,8 @@ async function main() {
   let allListings: ExtractedListing[] = [];
   const seenKeys = new Set<string>();
 
-  for (const file of htmlFiles) {
+  for (let i = 0; i < htmlFiles.length; i++) {
+    const file = htmlFiles[i];
     const fileListings = parseSingleHtmlFile(file);
     let addedCount = 0;
     for (const item of fileListings) {
@@ -262,7 +260,7 @@ async function main() {
         addedCount++;
       }
     }
-    console.log(`✓ [${path.basename(file)}]: ${fileListings.length} ilan okundu (${addedCount} yeni).`);
+    console.log(`✓ [${i + 1}/${htmlFiles.length}] [${path.basename(file)}]: ${fileListings.length} ilan okundu (${addedCount} yeni).`);
   }
 
   console.log(`\n--------------------------------------------------------------------`);
@@ -270,24 +268,27 @@ async function main() {
   console.log(`--------------------------------------------------------------------\n`);
 
   if (allListings.length === 0) {
-    console.log('Hiç ilan bulunamadı.');
+    console.log('Hiç yeni ilan bulunamadı.');
     return;
   }
 
-  // Save to JSON and call importer
-  const jsonPath = path.join(__dirname, 'extracted_html_batch.json');
-  fs.writeFileSync(jsonPath, JSON.stringify(allListings, null, 2), 'utf-8');
-
-  // Execute import_screenshot_listing
+  // Save in chunks to JSON to prevent large IPC payload
+  const chunkSize = 2000;
   const { execSync } = require('child_process');
-  const command = `npx ts-node src/scripts/import_screenshot_listing.ts "${jsonPath}"`;
-  console.log(`Veritabanına aktarım başlatılıyor...`);
-  const output = execSync(command, { cwd: path.join(__dirname, '../..'), encoding: 'utf-8' });
-  console.log(output);
 
-  // Clean temp json
-  if (fs.existsSync(jsonPath)) {
-    fs.unlinkSync(jsonPath);
+  for (let i = 0; i < allListings.length; i += chunkSize) {
+    const chunk = allListings.slice(i, i + chunkSize);
+    const jsonPath = path.join(__dirname, `extracted_html_batch_${i}.json`);
+    fs.writeFileSync(jsonPath, JSON.stringify(chunk, null, 2), 'utf-8');
+
+    console.log(`Veritabanına aktarım başlatılıyor (Paket ${Math.floor(i / chunkSize) + 1}/${Math.ceil(allListings.length / chunkSize)})...`);
+    const command = `npx ts-node src/scripts/import_screenshot_listing.ts "${jsonPath}"`;
+    const output = execSync(command, { cwd: path.join(__dirname, '../..'), encoding: 'utf-8' });
+    console.log(output);
+
+    if (fs.existsSync(jsonPath)) {
+      fs.unlinkSync(jsonPath);
+    }
   }
 }
 
