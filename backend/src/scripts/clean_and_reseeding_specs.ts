@@ -1,4 +1,5 @@
 import { PrismaClient } from '@prisma/client';
+import { randomUUID } from 'crypto';
 
 const prisma = new PrismaClient();
 
@@ -920,6 +921,112 @@ function getYearsForModel(brandName: string, modelName: string): number[] {
   return [2000, 2002, 2004, 2006, 2008, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026];
 }
 
+function getPackagesForVariant(brandName: string, modelName: string, variantName: string): string[] {
+  const brand = brandName.toLowerCase();
+  const model = modelName.toLowerCase();
+  const variant = variantName.toLowerCase();
+
+  if (brand.includes('mercedes')) {
+    if (variant.includes('amg') || model.includes('amg')) {
+      return ['AMG Performance', 'AMG Dynamic', 'AMG Line', 'Night Package', 'Edition 1', 'Standart'];
+    }
+    if (model.includes('s serisi') || model.includes('maybach')) {
+      return ['Maybach', 'Exclusive', 'AMG Line', 'Standart'];
+    }
+    if (model.includes('e serisi')) {
+      return ['AMG Line', 'Exclusive', 'Avantgarde', 'Edition 1', 'Night Package', 'Standart'];
+    }
+    return ['AMG Line', 'Avantgarde', 'Selection', 'Fascination', 'Style', 'Night Package', 'Standart'];
+  }
+
+  if (brand.includes('bmw')) {
+    if (variant.includes('m') || model.includes('m')) {
+      return ['M Competition', 'M Sport', 'M Performance', 'First Edition M Sport', 'Standart'];
+    }
+    if (model.includes('7 serisi') || model.includes('8 serisi')) {
+      return ['M Sport', 'Pure Excellence', 'Excellence', 'Standart'];
+    }
+    return ['M Sport', 'Luxury Line', 'Sport Line', 'Modern Line', 'Executive', 'Standart'];
+  }
+
+  if (brand.includes('audi')) {
+    if (variant.includes('rs') || variant.includes('r8') || variant.includes('s')) {
+      return ['RS Performance', 'S Line', 'Black Edition', 'Dynamic', 'Standart'];
+    }
+    return ['S Line', 'Advanced', 'Design', 'Sport', 'Dynamic', 'Standart'];
+  }
+
+  if (brand.includes('volkswagen') || brand.includes('vw')) {
+    if (variant.includes('gti') || variant.includes('gtd') || variant.includes('gte') || variant.includes('r')) {
+      return ['R', 'R-Line', 'GTI', 'Performance', 'Standart'];
+    }
+    if (model.includes('passat') || model.includes('arteon') || model.includes('touareg')) {
+      return ['R-Line', 'Elegance', 'Business', 'Comfortline', 'Highline', 'Trendline', 'Standart'];
+    }
+    return ['R-Line', 'Style', 'Life', 'Impression', 'Highline', 'Comfortline', 'Standart'];
+  }
+
+  if (brand.includes('renault')) {
+    return ['Esprit Alpine', 'Icon', 'Touch', 'Joy', 'Equilibre', 'Techno', 'Standart'];
+  }
+
+  if (brand.includes('fiat')) {
+    if (model.includes('egea')) {
+      return ['Lounge', 'Urban', 'Easy', 'Cross', 'Mirror', 'Street', 'Limited', 'Standart'];
+    }
+    return ['Lounge', 'Urban', 'Pop', 'Easy', 'Standart'];
+  }
+
+  if (brand.includes('ford')) {
+    if (variant.includes('st') || variant.includes('raptor') || variant.includes('wildtrak')) {
+      return ['ST-Line', 'Wildtrak', 'Raptor', 'Vignale', 'Standart'];
+    }
+    return ['Titanium X', 'Titanium', 'ST-Line', 'Vignale', 'Style', 'Trend X', 'Trend', 'Standart'];
+  }
+
+  if (brand.includes('opel')) {
+    return ['Ultimate', 'GS', 'GS Line', 'Excellence', 'Dynamic', 'Enjoy', 'Edition', 'Essentia', 'Cosmo', 'Standart'];
+  }
+
+  if (brand.includes('peugeot')) {
+    return ['GT', 'GT Line', 'Allure', 'Active Prime', 'Active', 'Access', 'Standart'];
+  }
+
+  if (brand.includes('dacia')) {
+    return ['Journey', 'Prestige', 'Comfort', 'Expression', 'Essential', 'Stepway', 'Laureate', 'Ambiance', 'Standart'];
+  }
+
+  if (brand.includes('toyota')) {
+    return ['Flame X-Pack', 'Flame', 'Passion X-Pack', 'Passion', 'Vision', 'Dream', 'Style', 'Standart'];
+  }
+
+  if (brand.includes('honda')) {
+    return ['Executive+', 'Executive', 'Elegance', 'Dream', 'Type R', 'Standart'];
+  }
+
+  if (brand.includes('skoda') || brand.includes('škoda')) {
+    return ['RS', 'Monte Carlo', 'L&K (Laurin & Klement)', 'Prestige', 'Style', 'Ambition', 'Active', 'Standart'];
+  }
+
+  if (brand.includes('seat') || brand.includes('cupra')) {
+    return ['VZ', 'FR', 'Style', 'Xcellence', 'Reference', 'Standart'];
+  }
+
+  if (brand.includes('volvo')) {
+    return ['Ultimate', 'Plus', 'Core', 'R-Design', 'Inscription', 'Momentum', 'Standart'];
+  }
+
+  if (brand.includes('nissan')) {
+    return ['Platinum Premium', 'Platinum', 'Sky Pack', 'N-Design', 'Tekna', 'Visia', 'Standart'];
+  }
+
+  if (brand.includes('chery')) {
+    return ['Luxury', 'Excellence', 'Pro Max', 'Comfort', 'Standart'];
+  }
+
+  return ['AMG / M / Sport Line', 'Prestige / Luxury', 'Comfort / Style', 'Standart'];
+}
+
 // ============================================================================
 // MAIN SEED FUNCTION
 // ============================================================================
@@ -969,6 +1076,8 @@ async function run() {
 
   let processedCount = 0;
   let variantCount = 0;
+  const specBatch: any[] = [];
+  const marketPriceBatch: any[] = [];
 
   for (const model of models) {
     const brandName = model.manufacturer.name;
@@ -1297,35 +1406,44 @@ async function run() {
       if (isEconomy) popularity = 8.5;
       if (isExotic) popularity = 6.0;
 
-      // Create a single package per variant (simplified)
-      const pkgName = variantElectric ? 'Standart' : (isExotic ? 'Standart' : 'Standart');
-      const pkg = await prisma.package.create({
-        data: { name: pkgName, variantId: variant.id },
-      });
+      const packageList = getPackagesForVariant(brandName, model.name, variant.name);
 
-      for (const year of targetYears) {
-        const age = 2026 - year;
-        // Use category-specific depreciation rate (depRate is set above per category)
-        const depMultiplier = Math.pow(depRate, age);
+      for (const pkgName of packageList) {
+        const pkg = await prisma.package.create({
+          data: { name: pkgName, variantId: variant.id },
+        });
 
-        // Variant-level price adjustment
-        let variantPriceMult = 1.0;
-        if (lv.includes('performance') || lv.includes('plaid') || lv.includes('amg') || lv.includes('m5') || lv.includes('rs') || lv.includes('trofeo') || lv.includes('svr') || lv.includes('quadrifoglio')) {
-          variantPriceMult = 1.25;
-        } else if (lv.includes('competition')) {
-          variantPriceMult = 1.12;
-        } else if (lv.includes('sport') || lv.includes('gti') || lv.includes('st ') || lv.includes('type r') || lv.includes('opc') || lv.includes('nismo') || lv.includes('cupra') || lv.includes('r-line') || lv.includes('fr') || lv.includes('long range')) {
-          variantPriceMult = 1.10;
-        } else if (lv.includes('cabrio') || lv.includes('convertible') || lv.includes('roadster') || lv.includes('volante') || lv.includes('spider') || lv.includes('spyder')) {
-          variantPriceMult = 1.15;
+        let pkgPriceMult = 1.0;
+        if (pkgName.includes('AMG') || pkgName.includes('M Sport') || pkgName.includes('RS') || pkgName.includes('R-Line') || pkgName.includes('S Line') || pkgName.includes('Titanium X') || pkgName.includes('Exclusive') || pkgName.includes('Icon') || pkgName.includes('GT') || pkgName.includes('Flame X-Pack') || pkgName.includes('Lounge') || pkgName.includes('Ultimate')) {
+          pkgPriceMult = 1.10;
+        } else if (pkgName.includes('Avantgarde') || pkgName.includes('Luxury') || pkgName.includes('Elegance') || pkgName.includes('Style') || pkgName.includes('Titanium') || pkgName.includes('Allure') || pkgName.includes('Touch') || pkgName.includes('Comfortline') || pkgName.includes('Prestige')) {
+          pkgPriceMult = 1.05;
         }
 
-        const specPrice = Math.round(
-          (floorPrice + (basePrice2026 - floorPrice) * depMultiplier) * variantPriceMult
-        );
+        for (const year of targetYears) {
+          const age = 2026 - year;
+          // Use category-specific depreciation rate (depRate is set above per category)
+          const depMultiplier = Math.pow(depRate, age);
 
-        const spec = await prisma.vehicleSpecification.create({
-          data: {
+          // Variant-level price adjustment
+          let variantPriceMult = 1.0;
+          if (lv.includes('performance') || lv.includes('plaid') || lv.includes('amg') || lv.includes('m5') || lv.includes('rs') || lv.includes('trofeo') || lv.includes('svr') || lv.includes('quadrifoglio')) {
+            variantPriceMult = 1.25;
+          } else if (lv.includes('competition')) {
+            variantPriceMult = 1.12;
+          } else if (lv.includes('sport') || lv.includes('gti') || lv.includes('st ') || lv.includes('type r') || lv.includes('opc') || lv.includes('nismo') || lv.includes('cupra') || lv.includes('r-line') || lv.includes('fr') || lv.includes('long range')) {
+            variantPriceMult = 1.10;
+          } else if (lv.includes('cabrio') || lv.includes('convertible') || lv.includes('roadster') || lv.includes('volante') || lv.includes('spider') || lv.includes('spyder')) {
+            variantPriceMult = 1.15;
+          }
+
+          const specPrice = Math.round(
+            (floorPrice + (basePrice2026 - floorPrice) * depMultiplier) * variantPriceMult * pkgPriceMult
+          );
+
+          const specId = randomUUID();
+          specBatch.push({
+            id: specId,
             year,
             manufacturerId: model.manufacturerId,
             modelId: model.id,
@@ -1340,12 +1458,10 @@ async function run() {
             originalMSRP: specPrice * 1.2,
             popularityScore: popularity,
             reliabilityScore: 8.0,
-          },
-        });
+          });
 
-        await prisma.vehicleMarketPrice.create({
-          data: {
-            vehicleSpecificationId: spec.id,
+          marketPriceBatch.push({
+            vehicleSpecificationId: specId,
             currentMarketAverage: specPrice,
             cleanMarketAverage: Math.round(specPrice * 1.05),
             averageListingPrice: Math.round(specPrice * 1.03),
@@ -1353,15 +1469,25 @@ async function run() {
             maxPrice: Math.round(specPrice * 1.08),
             regionalPriceDifferences: JSON.stringify({ Istanbul: 1.0, Ankara: 0.98, Izmir: 0.99 }),
             averageSellingTime: isEconomy ? 12 : 20,
-          },
-        });
+          });
+        }
       }
     }
 
     processedCount++;
     if (processedCount % 50 === 0) {
-      console.log(`Processed ${processedCount}/${models.length} models (${variantCount} variants so far)...`);
+      console.log(`Generated models ${processedCount}/${models.length} in memory...`);
     }
+  }
+
+  console.log(`\nInserting ${specBatch.length} specs and market prices in fast bulk transactions...`);
+  const BATCH_SIZE = 2000;
+  for (let i = 0; i < specBatch.length; i += BATCH_SIZE) {
+    const chunkSpecs = specBatch.slice(i, i + BATCH_SIZE);
+    const chunkPrices = marketPriceBatch.slice(i, i + BATCH_SIZE);
+    await prisma.vehicleSpecification.createMany({ data: chunkSpecs });
+    await prisma.vehicleMarketPrice.createMany({ data: chunkPrices });
+    console.log(`Seeded ${Math.min(i + BATCH_SIZE, specBatch.length)} / ${specBatch.length} specs...`);
   }
 
   console.log(`\n=== RESEEDING COMPLETE ===`);
