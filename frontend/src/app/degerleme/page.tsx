@@ -670,7 +670,7 @@ export default function ValuationWizard() {
               <div className={`flex flex-col gap-2 p-4 rounded-2xl border transition-all ${
                 selectedBrand 
                   ? 'bg-zinc-50 dark:bg-zinc-900/50 border-zinc-200 dark:border-zinc-800' 
-                  : 'bg-zinc-100/40 dark:bg-zinc-900/20 border-zinc-200/50 dark:border-zinc-800/40 opacity-50'
+                  : 'bg-zinc-100/40 dark:bg-zinc-900/20 border-zinc-200/50 dark:border-zinc-800/40 opacity-50 pointer-events-none select-none'
               }`}>
                 <div className="flex items-center justify-between">
                   <label className="text-xs font-bold text-zinc-800 dark:text-zinc-200 flex items-center gap-2">
@@ -692,6 +692,7 @@ export default function ValuationWizard() {
                   disabled={!selectedBrand}
                   value={selectedBrand ? selectedYear : ''}
                   onChange={(e) => {
+                    if (!selectedBrand) return;
                     setSelectedYear(e.target.value ? Number(e.target.value) : '');
                     setSelectedModel('');
                     resetSubordinateOptions();
@@ -711,7 +712,7 @@ export default function ValuationWizard() {
               <div className={`flex flex-col gap-2 p-4 rounded-2xl border transition-all ${
                 selectedBrand && selectedYear 
                   ? 'bg-zinc-50 dark:bg-zinc-900/50 border-zinc-200 dark:border-zinc-800' 
-                  : 'bg-zinc-100/40 dark:bg-zinc-900/20 border-zinc-200/50 dark:border-zinc-800/40 opacity-50'
+                  : 'bg-zinc-100/40 dark:bg-zinc-900/20 border-zinc-200/50 dark:border-zinc-800/40 opacity-50 pointer-events-none select-none'
               }`}>
                 <div className="flex items-center justify-between">
                   <label className="text-xs font-bold text-zinc-800 dark:text-zinc-200 flex items-center gap-2">
@@ -747,6 +748,7 @@ export default function ValuationWizard() {
                   disabled={!selectedBrand || !selectedYear}
                   value={selectedBrand && selectedYear ? selectedModel : ''}
                   onChange={(e) => {
+                    if (!selectedBrand || !selectedYear) return;
                     setSelectedModel(e.target.value);
                     resetSubordinateOptions();
                   }}
@@ -770,7 +772,7 @@ export default function ValuationWizard() {
               <div className={`flex flex-col gap-2 p-4 rounded-2xl border transition-all ${
                 selectedModel 
                   ? 'bg-zinc-50 dark:bg-zinc-900/50 border-zinc-200 dark:border-zinc-800' 
-                  : 'bg-zinc-100/40 dark:bg-zinc-900/20 border-zinc-200/50 dark:border-zinc-800/40 opacity-50'
+                  : 'bg-zinc-100/40 dark:bg-zinc-900/20 border-zinc-200/50 dark:border-zinc-800/40 opacity-50 pointer-events-none select-none'
               }`}>
                 <div className="flex items-center justify-between">
                   <label className="text-xs font-bold text-zinc-800 dark:text-zinc-200 flex items-center gap-2">
@@ -792,6 +794,7 @@ export default function ValuationWizard() {
                   disabled={!selectedModel}
                   value={selectedModel ? selectedVariant : ''}
                   onChange={(e) => {
+                    if (!selectedModel) return;
                     setSelectedVariant(e.target.value);
                     setSelectedPackage('');
                     setSelectedBodyType('');
@@ -813,7 +816,7 @@ export default function ValuationWizard() {
               <div className={`flex flex-col gap-2 p-4 rounded-2xl border transition-all ${
                 selectedVariant 
                   ? 'bg-zinc-50 dark:bg-zinc-900/50 border-zinc-200 dark:border-zinc-800' 
-                  : 'bg-zinc-100/40 dark:bg-zinc-900/20 border-zinc-200/50 dark:border-zinc-800/40 opacity-50'
+                  : 'bg-zinc-100/40 dark:bg-zinc-900/20 border-zinc-200/50 dark:border-zinc-800/40 opacity-50 pointer-events-none select-none'
               }`}>
                 <div className="flex items-center justify-between">
                   <label className="text-xs font-bold text-zinc-800 dark:text-zinc-200 flex items-center gap-2">
@@ -835,6 +838,7 @@ export default function ValuationWizard() {
                   disabled={!selectedVariant}
                   value={selectedVariant ? selectedPackage : ''}
                   onChange={(e) => {
+                    if (!selectedVariant) return;
                     setSelectedPackage(e.target.value);
                   }}
                   className="glass-input rounded-xl p-3.5 text-sm w-full font-semibold disabled:cursor-not-allowed"
