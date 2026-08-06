@@ -106,7 +106,7 @@ export class EvaluationService {
       lowerModel.includes('xm') ||
       lowerModel.includes('g 63') || lowerModel.includes('g63') ||
       lowerModel.includes('amg gt') || lowerModel.includes('gt 63') ||
-      lowerModel.includes('rs6') || lowerModel.includes('rs7') || lowerModel.includes('rsq8') ||
+      lowerModel.includes('rs6') || lowerModel.includes('rs 6') || lowerModel.includes('rs7') || lowerModel.includes('rs 7') || lowerModel.includes('rsq8') || lowerModel.includes('rs q8') ||
       lowerModel.includes('r8')
     ) {
       basePrice2026 = 24500000;
@@ -609,32 +609,69 @@ export class EvaluationService {
     let fairMarketValue = Math.min(Math.round(baseValuationFinal * conditionFactor), sahibindenMaxCap);
     fairMarketValue = this.roundToCleanGalleryPrice(fairMarketValue);
 
-    // DYNAMIC GALERİ PROFIT MARGIN MODEL (Configurable via Admin Panel):
-    let consignmentProfitPct = 0.06;
-    let cashOfferProfitPct = 0.12;
-    let luxuryMinProfit = 200000;
-    let luxuryMaxProfit = 300000;
+    // DYNAMIC TIERED PROFIT MARGIN MODEL
+    // Araç değeri arttıkça kâr yüzdesi de artar (lüks segmentte daha yüksek marj)
+    // Araç değeri düştükçe kâr yüzdesi düşer ama müşteriye cazip fiyat verilir
+    let cashProfitPct: number;
+    let consProfitPct: number;
 
+    if (fairMarketValue >= 20000000) {
+      // Süper Lüks (20M+): RS6, M5, Porsche 911, G63
+      cashProfitPct = 0.16;
+      consProfitPct = 0.09;
+    } else if (fairMarketValue >= 15000000) {
+      // Ultra-Lüks (15M-20M): A8, S-Class, X7, Cayenne
+      cashProfitPct = 0.15;
+      consProfitPct = 0.08;
+    } else if (fairMarketValue >= 10000000) {
+      // Lüks (10M-15M): Q7, X5, GLE, XC90
+      cashProfitPct = 0.14;
+      consProfitPct = 0.075;
+    } else if (fairMarketValue >= 6000000) {
+      // Üst-Premium (6M-10M): E-Class, 5 Series, A6
+      cashProfitPct = 0.13;
+      consProfitPct = 0.07;
+    } else if (fairMarketValue >= 4000000) {
+      // Premium (4M-6M): C-Class, 3 Series, A4
+      cashProfitPct = 0.12;
+      consProfitPct = 0.065;
+    } else if (fairMarketValue >= 2500000) {
+      // Orta-Premium (2.5M-4M): Golf, Megane, Corolla
+      cashProfitPct = 0.10;
+      consProfitPct = 0.055;
+    } else if (fairMarketValue >= 1500000) {
+      // Orta (1.5M-2.5M): Egea, Sandero, Clio
+      cashProfitPct = 0.09;
+      consProfitPct = 0.05;
+    } else if (fairMarketValue >= 800000) {
+      // Ekonomi (800K-1.5M): Eski modeller
+      cashProfitPct = 0.08;
+      consProfitPct = 0.04;
+    } else {
+      // Alt Segment (<800K): Çok eski/düşük değerli
+      cashProfitPct = 0.07;
+      consProfitPct = 0.035;
+    }
+
+    // Admin panel ayarlarından override (varsa)
     try {
       const fs = require('fs');
       const path = require('path');
       const settingsPath = path.join(process.cwd(), 'market-sync-settings.json');
       if (fs.existsSync(settingsPath)) {
         const parsed = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-        if (parsed.consignmentProfitPercentage) consignmentProfitPct = parsed.consignmentProfitPercentage / 100;
-        if (parsed.cashOfferProfitPercentage) cashOfferProfitPct = parsed.cashOfferProfitPercentage / 100;
-        if (parsed.luxuryMinProfitFixed) luxuryMinProfit = parsed.luxuryMinProfitFixed;
-        if (parsed.luxuryMaxProfitFixed) luxuryMaxProfit = parsed.luxuryMaxProfitFixed;
+        // Sadece admin override varsa ve > 0 ise uygula
+        if (parsed.cashOfferProfitPercentage && parsed.cashOfferProfitPercentage > 0) {
+          cashProfitPct = parsed.cashOfferProfitPercentage / 100;
+        }
+        if (parsed.consignmentProfitPercentage && parsed.consignmentProfitPercentage > 0) {
+          consProfitPct = parsed.consignmentProfitPercentage / 100;
+        }
       }
     } catch (e) {}
 
-    const minProfit = fairMarketValue >= 2000000 
-      ? luxuryMinProfit 
-      : Math.min(luxuryMinProfit, Math.max(30000, Math.round(fairMarketValue * consignmentProfitPct)));
-
-    const maxProfit = fairMarketValue >= 2000000 
-      ? luxuryMaxProfit 
-      : Math.min(luxuryMaxProfit, Math.max(50000, Math.round(fairMarketValue * cashOfferProfitPct)));
+    const maxProfit = Math.max(40000, Math.round(fairMarketValue * cashProfitPct));
+    const minProfit = Math.max(20000, Math.round(fairMarketValue * consProfitPct));
 
     const standardCashOffer = this.roundToCleanGalleryPrice(fairMarketValue - maxProfit);
     const standardConsignmentOffer = this.roundToCleanGalleryPrice(fairMarketValue - minProfit);

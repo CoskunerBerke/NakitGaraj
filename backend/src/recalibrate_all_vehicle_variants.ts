@@ -4,7 +4,7 @@ export async function recalibrateAllSpecs(prisma: PrismaClient) {
   console.log('=== STARTING AUTOMATIC V4 MARKET RECALIBRATION ===');
 
   const specs = await prisma.vehicleSpecification.findMany({
-    include: { manufacturer: true, model: true, variant: true },
+    include: { manufacturer: true, model: true, variant: true, marketPrices: true },
   });
 
   console.log(`Calibrating ${specs.length} vehicle specifications...`);
@@ -20,6 +20,7 @@ export async function recalibrateAllSpecs(prisma: PrismaClient) {
     let base2026 = 2100000;
     let floorPrice = 220000;
     let decayRate = 0.88;
+    let priceTier: 'exotic' | 'luxury' | 'standard' | 'economy' = 'standard';
 
     // ================= 0. SUPERCAR & EXOTICS =================
     if (brand.includes('porsche')) {
@@ -30,20 +31,22 @@ export async function recalibrateAllSpecs(prisma: PrismaClient) {
       else if (targetStr.includes('panamera')) { base2026 = 18000000; floorPrice = 3500000; }
       else if (targetStr.includes('cayenne')) { base2026 = 16000000; floorPrice = 3500000; }
       else if (targetStr.includes('macan')) { base2026 = 9500000; floorPrice = 2800000; }
-    } else if (brand.includes('ferrari')) { base2026 = 45000000; floorPrice = 15000000; decayRate = 0.96; }
-    else if (brand.includes('lamborghini')) { base2026 = 45000000; floorPrice = 15000000; decayRate = 0.96; }
-    else if (brand.includes('bentley')) { base2026 = 35000000; floorPrice = 8000000; decayRate = 0.95; }
-    else if (brand.includes('rolls')) { base2026 = 55000000; floorPrice = 18000000; decayRate = 0.96; }
-    else if (brand.includes('maserati')) { base2026 = 18000000; floorPrice = 3500000; decayRate = 0.92; }
-    else if (brand.includes('aston')) { base2026 = 32000000; floorPrice = 8000000; decayRate = 0.95; }
-    else if (brand.includes('mclaren')) { base2026 = 35000000; floorPrice = 9000000; decayRate = 0.95; }
+      priceTier = 'exotic';
+    } else if (brand.includes('ferrari')) { base2026 = 45000000; floorPrice = 15000000; decayRate = 0.96; priceTier = 'exotic'; }
+    else if (brand.includes('lamborghini')) { base2026 = 45000000; floorPrice = 15000000; decayRate = 0.96; priceTier = 'exotic'; }
+    else if (brand.includes('bentley')) { base2026 = 35000000; floorPrice = 8000000; decayRate = 0.95; priceTier = 'exotic'; }
+    else if (brand.includes('rolls')) { base2026 = 55000000; floorPrice = 18000000; decayRate = 0.96; priceTier = 'exotic'; }
+    else if (brand.includes('maserati')) { base2026 = 18000000; floorPrice = 3500000; decayRate = 0.92; priceTier = 'exotic'; }
+    else if (brand.includes('aston')) { base2026 = 32000000; floorPrice = 8000000; decayRate = 0.95; priceTier = 'exotic'; }
+    else if (brand.includes('mclaren')) { base2026 = 35000000; floorPrice = 9000000; decayRate = 0.95; priceTier = 'exotic'; }
 
     // ================= 1. AUDI =================
     else if (brand === 'audi') {
+      priceTier = 'luxury';
       decayRate = 0.92; floorPrice = 450000;
-      if (targetStr.includes('r8')) { base2026 = 22000000; floorPrice = 5000000; decayRate = 0.95; }
-      else if (targetStr.includes('rs6') || targetStr.includes('rs7') || targetStr.includes('rsq8')) { base2026 = 24000000; floorPrice = 5000000; decayRate = 0.95; }
-      else if (targetStr.includes('rs3') || targetStr.includes('rs4') || targetStr.includes('rs5') || targetStr.includes('rs')) { base2026 = 15000000; floorPrice = 3500000; decayRate = 0.94; }
+      if (targetStr.includes('r8')) { base2026 = 22000000; floorPrice = 5000000; decayRate = 0.95; priceTier = 'exotic'; }
+      else if (targetStr.includes('rs6') || targetStr.includes('rs7') || targetStr.includes('rsq8')) { base2026 = 28000000; floorPrice = 5000000; decayRate = 0.95; priceTier = 'exotic'; }
+      else if (targetStr.includes('rs3') || targetStr.includes('rs4') || targetStr.includes('rs5') || targetStr.includes('rs')) { base2026 = 17000000; floorPrice = 3500000; decayRate = 0.94; priceTier = 'exotic'; }
       else if (targetStr.includes('a8') || targetStr.includes('s8')) { base2026 = 18500000; floorPrice = 1200000; decayRate = 0.93; }
       else if (targetStr.includes('q8')) { base2026 = 14000000; floorPrice = 1800000; }
       else if (targetStr.includes('q7')) { base2026 = 11000000; floorPrice = 1000000; }
@@ -61,11 +64,12 @@ export async function recalibrateAllSpecs(prisma: PrismaClient) {
 
     // ================= 2. BMW =================
     else if (brand === 'bmw') {
+      priceTier = 'luxury';
       decayRate = 0.92; floorPrice = 400000;
-      if (targetStr.includes('m5') || targetStr.includes('m 5')) { base2026 = 26500000; floorPrice = 8000000; decayRate = 0.95; }
-      else if (targetStr.includes('m8') || targetStr.includes('m 8')) { base2026 = 28500000; floorPrice = 9000000; decayRate = 0.95; }
-      else if (targetStr.includes('m4') || targetStr.includes('m 4')) { base2026 = 18000000; floorPrice = 4500000; decayRate = 0.95; }
-      else if (targetStr.includes('m3') || targetStr.includes('m 3')) { base2026 = 17500000; floorPrice = 4500000; decayRate = 0.95; }
+      if (targetStr.includes('m5') || targetStr.includes('m 5')) { base2026 = 26500000; floorPrice = 8000000; decayRate = 0.95; priceTier = 'exotic'; }
+      else if (targetStr.includes('m8') || targetStr.includes('m 8')) { base2026 = 28500000; floorPrice = 9000000; decayRate = 0.95; priceTier = 'exotic'; }
+      else if (targetStr.includes('m4') || targetStr.includes('m 4')) { base2026 = 18000000; floorPrice = 4500000; decayRate = 0.95; priceTier = 'exotic'; }
+      else if (targetStr.includes('m3') || targetStr.includes('m 3')) { base2026 = 17500000; floorPrice = 4500000; decayRate = 0.95; priceTier = 'exotic'; }
       else if (targetStr.includes('m2') || targetStr.includes('m 2')) { base2026 = 12500000; floorPrice = 3000000; decayRate = 0.94; }
       else if (targetStr.includes('xm')) { base2026 = 25000000; floorPrice = 8000000; decayRate = 0.95; }
       else if (targetStr.includes('x5 m') || targetStr.includes('x6 m')) { base2026 = 24000000; floorPrice = 7000000; decayRate = 0.95; }
@@ -85,9 +89,10 @@ export async function recalibrateAllSpecs(prisma: PrismaClient) {
 
     // ================= 3. MERCEDES-BENZ =================
     else if (brand.includes('mercedes')) {
+      priceTier = 'luxury';
       decayRate = 0.91; floorPrice = 400000;
-      if (targetStr.includes('g 63') || targetStr.includes('g 500') || targetStr.includes('g ser') || targetStr.includes('g-class') || targetStr.includes('g serisi')) { base2026 = 27000000; floorPrice = 5000000; decayRate = 0.96; }
-      else if (targetStr.includes('amg gt') || targetStr.includes('gt 63') || targetStr.includes('gt 53')) { base2026 = 25000000; floorPrice = 5000000; decayRate = 0.95; }
+      if (targetStr.includes('g 63') || targetStr.includes('g 500') || targetStr.includes('g ser') || targetStr.includes('g-class') || targetStr.includes('g serisi')) { base2026 = 27000000; floorPrice = 5000000; decayRate = 0.96; priceTier = 'exotic'; }
+      else if (targetStr.includes('amg gt') || targetStr.includes('gt 63') || targetStr.includes('gt 53')) { base2026 = 25000000; floorPrice = 5000000; decayRate = 0.95; priceTier = 'exotic'; }
       else if (targetStr.includes('s ser') || targetStr.includes('s 400') || targetStr.includes('s 500') || targetStr.includes('s 350') || targetStr.includes('eqs')) { base2026 = 19500000; floorPrice = 1200000; decayRate = 0.93; }
       else if (targetStr.includes('gle')) { base2026 = 14000000; floorPrice = 1200000; }
       else if (targetStr.includes('e ser') || targetStr.includes('e 180') || targetStr.includes('e 200') || targetStr.includes('e 220') || targetStr.includes('e 250') || targetStr.includes('e 300') || targetStr.includes('eqe')) { base2026 = 8500000; floorPrice = 600000; }
@@ -112,6 +117,7 @@ export async function recalibrateAllSpecs(prisma: PrismaClient) {
 
     // ================= 5. FIAT =================
     else if (brand === 'fiat') {
+      priceTier = 'economy';
       if (targetStr.includes('egea')) { base2026 = 1450000; if (targetStr.includes('cross')) { base2026 = 1650000; } }
       else if (targetStr.includes('linea')) { base2026 = 2700000; }
       else if (targetStr.includes('punto')) { base2026 = 2600000; }
@@ -176,6 +182,7 @@ export async function recalibrateAllSpecs(prisma: PrismaClient) {
 
     // ================= 12. VOLVO =================
     else if (brand === 'volvo') {
+      priceTier = 'luxury';
       decayRate = 0.91; floorPrice = 400000;
       if (targetStr.includes('xc90')) { base2026 = 11500000; floorPrice = 1500000; decayRate = 0.92; }
       else if (targetStr.includes('xc60')) { base2026 = 8500000; floorPrice = 1000000; }
@@ -192,6 +199,7 @@ export async function recalibrateAllSpecs(prisma: PrismaClient) {
 
     // ================= 12. LAND ROVER & RANGE ROVER =================
     else if (brand.includes('land rover') || brand.includes('range rover')) {
+      priceTier = 'luxury';
       decayRate = 0.92; floorPrice = 800000;
       if (targetStr.includes('range rover sport')) { base2026 = 18500000; floorPrice = 3500000; decayRate = 0.94; }
       else if (targetStr.includes('range rover velar')) { base2026 = 11500000; floorPrice = 2500000; }
@@ -229,6 +237,7 @@ export async function recalibrateAllSpecs(prisma: PrismaClient) {
 
     // ================= 14. OPEL & NISSAN & SKODA & CITROEN & KIA & SEAT & DACIA =================
     else if (brand === 'opel') {
+      priceTier = 'economy';
       decayRate = 0.87; floorPrice = 180000;
       if (targetStr.includes('grandland')) { base2026 = 2800000; floorPrice = 600000; }
       else if (targetStr.includes('mokka') || targetStr.includes('crossland')) { base2026 = 2300000; floorPrice = 450000; }
@@ -253,6 +262,7 @@ export async function recalibrateAllSpecs(prisma: PrismaClient) {
       else if (targetStr.includes('fabia')) { base2026 = 1500000; floorPrice = 250000; }
     }
     else if (brand.includes('citroen') || brand.includes('citroën')) {
+      priceTier = 'economy';
       decayRate = 0.87; floorPrice = 160000;
       if (targetStr.includes('c5 aircross') || targetStr.includes('c5 x')) { base2026 = 2800000; floorPrice = 550000; }
       else if (targetStr.includes('c4') || targetStr.includes('c4 x')) { base2026 = 1800000; floorPrice = 350000; }
@@ -277,6 +287,7 @@ export async function recalibrateAllSpecs(prisma: PrismaClient) {
       else if (targetStr.includes('ibiza') || targetStr.includes('arona')) { base2026 = 1400000; floorPrice = 250000; }
     }
     else if (brand === 'dacia') {
+      priceTier = 'economy';
       decayRate = 0.88; floorPrice = 250000;
       if (targetStr.includes('duster')) { base2026 = 1850000; floorPrice = 450000; }
       else if (targetStr.includes('jogger')) { base2026 = 1750000; floorPrice = 430000; }
@@ -286,43 +297,97 @@ export async function recalibrateAllSpecs(prisma: PrismaClient) {
     }
 
     // =====================================================
-    // REAL SAHIBINDEN TURKISH USED CAR MARKET YEAR CURVE
+    // TIER-SPECIFIC SAHIBINDEN TURKISH USED CAR MARKET YEAR CURVES
     // Multipliers derived directly from Sahibinden used car listing distributions
     // =====================================================
-    const getYearMultiplier = (y: number): number => {
+    const getYearMultiplier = (y: number, tier: 'exotic' | 'luxury' | 'standard' | 'economy'): number => {
+      // Exotic/Supercar: Very slow depreciation (Ferrari, Porsche, RS6, M5, G63)
+      const exoticCurve: Record<number, number> = {
+        2026: 1.00, 2025: 0.96, 2024: 0.91, 2023: 0.86, 2022: 0.81,
+        2021: 0.76, 2020: 0.71, 2019: 0.67, 2018: 0.63, 2017: 0.59,
+        2016: 0.55, 2015: 0.52, 2014: 0.49, 2013: 0.46, 2012: 0.43,
+        2011: 0.41, 2010: 0.39, 2009: 0.37, 2008: 0.35, 2007: 0.33,
+        2006: 0.32, 2005: 0.31
+      };
+      // Luxury/Premium: Moderate depreciation (BMW, Mercedes, Audi, Volvo)
+      const luxuryCurve: Record<number, number> = {
+        2026: 1.00, 2025: 0.93, 2024: 0.87, 2023: 0.81, 2022: 0.75,
+        2021: 0.69, 2020: 0.64, 2019: 0.59, 2018: 0.54, 2017: 0.50,
+        2016: 0.46, 2015: 0.43, 2014: 0.40, 2013: 0.37, 2012: 0.35,
+        2011: 0.33, 2010: 0.31, 2009: 0.29, 2008: 0.27, 2007: 0.25,
+        2006: 0.24, 2005: 0.23
+      };
+      // Standard: Normal depreciation (VW, Toyota, Honda, Hyundai)
+      const standardCurve: Record<number, number> = {
+        2026: 1.00, 2025: 0.91, 2024: 0.83, 2023: 0.76, 2022: 0.69,
+        2021: 0.63, 2020: 0.58, 2019: 0.53, 2018: 0.49, 2017: 0.45,
+        2016: 0.42, 2015: 0.39, 2014: 0.36, 2013: 0.34, 2012: 0.32,
+        2011: 0.30, 2010: 0.28, 2009: 0.26, 2008: 0.24, 2007: 0.22,
+        2006: 0.21, 2005: 0.20
+      };
+      // Economy: Faster depreciation (Fiat, Dacia, Opel, Citroën)
+      const economyCurve: Record<number, number> = {
+        2026: 1.00, 2025: 0.88, 2024: 0.78, 2023: 0.70, 2022: 0.63,
+        2021: 0.57, 2020: 0.52, 2019: 0.47, 2018: 0.43, 2017: 0.40,
+        2016: 0.37, 2015: 0.34, 2014: 0.32, 2013: 0.30, 2012: 0.28,
+        2011: 0.26, 2010: 0.24, 2009: 0.22, 2008: 0.21, 2007: 0.20,
+        2006: 0.19, 2005: 0.18
+      };
+
+      const curves = { exotic: exoticCurve, luxury: luxuryCurve, standard: standardCurve, economy: economyCurve };
+      const curve = curves[tier];
       if (y >= 2026) return 1.00;
-      if (y === 2025) return 0.92;
-      if (y === 2024) return 0.85;
-      if (y === 2023) return 0.78;
-      if (y === 2022) return 0.72;
-      if (y === 2021) return 0.66;
-      if (y === 2020) return 0.60;
-      if (y === 2019) return 0.55;
-      if (y === 2018) return 0.51;
-      if (y === 2017) return 0.48; // For 2017 Sandero Stepway: 1.500.000 * 0.48 = 720.000 TL market average!
-      if (y === 2016) return 0.44;
-      if (y === 2015) return 0.41;
-      if (y === 2014) return 0.38;
-      if (y === 2013) return 0.35;
-      if (y === 2012) return 0.33;
-      if (y === 2011) return 0.31;
-      if (y === 2010) return 0.29;
-      if (y === 2009) return 0.27;
-      if (y === 2008) return 0.25;
-      if (y === 2007) return 0.23;
-      if (y === 2006) return 0.22;
-      if (y === 2005) return 0.21;
-      return 0.20;
+      if (y <= 2004) return curve[2005] * 0.9;
+      return curve[y] || curve[2005];
     };
 
-    const multiplier = getYearMultiplier(year);
+    const multiplier = getYearMultiplier(year, priceTier);
     const finalMSRP = Math.round(base2026 * multiplier);
+
+    const targetMarketAverage = Math.round(finalMSRP / 1.2);
 
     if (spec.originalMSRP !== finalMSRP) {
       updates.push(
         prisma.vehicleSpecification.update({
           where: { id: spec.id },
           data: { originalMSRP: finalMSRP },
+        })
+      );
+    }
+
+    const dbMarket = (spec as any).marketPrices && (spec as any).marketPrices.length > 0 ? (spec as any).marketPrices[0] : null;
+    if (dbMarket) {
+      if (
+        dbMarket.currentMarketAverage !== targetMarketAverage ||
+        dbMarket.minPrice !== Math.round(targetMarketAverage * 0.92) ||
+        dbMarket.maxPrice !== Math.round(targetMarketAverage * 1.08)
+      ) {
+        updates.push(
+          prisma.vehicleMarketPrice.update({
+            where: { id: dbMarket.id },
+            data: {
+              currentMarketAverage: targetMarketAverage,
+              cleanMarketAverage: Math.round(targetMarketAverage * 1.05),
+              averageListingPrice: Math.round(targetMarketAverage * 1.03),
+              minPrice: Math.round(targetMarketAverage * 0.92),
+              maxPrice: Math.round(targetMarketAverage * 1.08),
+            }
+          })
+         );
+      }
+    } else {
+      updates.push(
+        prisma.vehicleMarketPrice.create({
+          data: {
+            vehicleSpecificationId: spec.id,
+            currentMarketAverage: targetMarketAverage,
+            cleanMarketAverage: Math.round(targetMarketAverage * 1.05),
+            averageListingPrice: Math.round(targetMarketAverage * 1.03),
+            minPrice: Math.round(targetMarketAverage * 0.92),
+            maxPrice: Math.round(targetMarketAverage * 1.08),
+            regionalPriceDifferences: JSON.stringify({ Istanbul: 1.0, Ankara: 0.98, Izmir: 0.99 }),
+            averageSellingTime: priceTier === 'economy' ? 12 : 20,
+          }
         })
       );
     }
