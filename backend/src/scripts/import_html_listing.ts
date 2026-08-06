@@ -18,12 +18,114 @@ interface ExtractedListing {
   externalListingId?: string;
 }
 
+function detectMakeAndModel(filename: string, modelTagText: string, titleText: string): { make: string; model: string } {
+  const combined = `${filename} ${modelTagText} ${titleText}`.toUpperCase();
+
+  // Known Manufacturers Map
+  let make = 'Audi';
+
+  if (combined.includes('ALFA ROMEO') || combined.includes('ALFAROMEO')) {
+    make = 'Alfa Romeo';
+  } else if (combined.includes('BMW')) {
+    make = 'BMW';
+  } else if (combined.includes('AUDI')) {
+    make = 'Audi';
+  } else if (combined.includes('MERCEDES')) {
+    make = 'Mercedes-Benz';
+  } else if (combined.includes('VOLKSWAGEN') || combined.includes('VW')) {
+    make = 'Volkswagen';
+  } else if (combined.includes('RENAULT')) {
+    make = 'Renault';
+  } else if (combined.includes('FIAT')) {
+    make = 'Fiat';
+  } else if (combined.includes('FORD')) {
+    make = 'Ford';
+  } else if (combined.includes('TOYOTA')) {
+    make = 'Toyota';
+  } else if (combined.includes('HONDA')) {
+    make = 'Honda';
+  } else if (combined.includes('HYUNDAI')) {
+    make = 'Hyundai';
+  } else if (combined.includes('KIA')) {
+    make = 'Kia';
+  } else if (combined.includes('PEUGEOT')) {
+    make = 'Peugeot';
+  } else if (combined.includes('CITROEN') || combined.includes('CITROËN')) {
+    make = 'Citroën';
+  } else if (combined.includes('OPEL')) {
+    make = 'Opel';
+  } else if (combined.includes('VOLVO')) {
+    make = 'Volvo';
+  } else if (combined.includes('PORSCHE')) {
+    make = 'Porsche';
+  } else if (combined.includes('SEAT')) {
+    make = 'Seat';
+  } else if (combined.includes('SKODA') || combined.includes('ŠKODA')) {
+    make = 'Skoda';
+  } else if (combined.includes('NISSAN')) {
+    make = 'Nissan';
+  }
+
+  // Model detection from modelTagText or filename
+  let model = modelTagText || 'Model';
+
+  if (make === 'Alfa Romeo') {
+    if (combined.includes('GIULIETTA')) model = 'Giulietta';
+    else if (combined.includes('GIULIA')) model = 'Giulia';
+    else if (combined.includes('TONALE')) model = 'Tonale';
+    else if (combined.includes('STELVIO')) model = 'Stelvio';
+    else if (combined.includes('159')) model = '159';
+    else if (combined.includes('147')) model = '147';
+    else if (combined.includes('156')) model = '156';
+    else if (combined.includes('MITO')) model = 'MiTo';
+    else if (combined.includes('GT')) model = 'GT';
+    else if (combined.includes('4C')) model = '4C';
+  } else if (make === 'BMW') {
+    if (combined.includes('1 SERİSİ') || combined.includes('1 SERISI')) model = '1 Serisi';
+    else if (combined.includes('2 SERİSİ') || combined.includes('2 SERISI')) model = '2 Serisi';
+    else if (combined.includes('3 SERİSİ') || combined.includes('3 SERISI')) model = '3 Serisi';
+    else if (combined.includes('4 SERİSİ') || combined.includes('4 SERISI')) model = '4 Serisi';
+    else if (combined.includes('5 SERİSİ') || combined.includes('5 SERISI')) model = '5 Serisi';
+    else if (combined.includes('6 SERİSİ') || combined.includes('6 SERISI')) model = '6 Serisi';
+    else if (combined.includes('7 SERİSİ') || combined.includes('7 SERISI')) model = '7 Serisi';
+    else if (combined.includes('8 SERİSİ') || combined.includes('8 SERISI')) model = '8 Serisi';
+    else if (combined.includes('X1')) model = 'X1';
+    else if (combined.includes('X2')) model = 'X2';
+    else if (combined.includes('X3')) model = 'X3';
+    else if (combined.includes('X4')) model = 'X4';
+    else if (combined.includes('X5')) model = 'X5';
+    else if (combined.includes('X6')) model = 'X6';
+    else if (combined.includes('X7')) model = 'X7';
+    else if (combined.includes('Z SERİSİ') || combined.includes('Z SERISI') || combined.includes('Z4')) model = 'Z Serisi';
+    else if (combined.includes('M SERİSİ') || combined.includes('M SERISI')) model = 'M Serisi';
+    else if (combined.includes('I SERİSİ') || combined.includes('I SERISI') || combined.includes('IX')) model = 'i Serisi';
+  } else if (make === 'Audi') {
+    if (combined.includes('A1')) model = 'A1';
+    else if (combined.includes('A3')) model = 'A3';
+    else if (combined.includes('A4')) model = 'A4';
+    else if (combined.includes('A5')) model = 'A5';
+    else if (combined.includes('A6')) model = 'A6';
+    else if (combined.includes('A7')) model = 'A7';
+    else if (combined.includes('A8')) model = 'A8';
+    else if (combined.includes('Q2')) model = 'Q2';
+    else if (combined.includes('Q3')) model = 'Q3';
+    else if (combined.includes('Q5')) model = 'Q5';
+    else if (combined.includes('Q7')) model = 'Q7';
+    else if (combined.includes('Q8')) model = 'Q8';
+    else if (combined.includes('TT')) model = 'TT';
+    else if (combined.includes('R8')) model = 'R8';
+  }
+
+  return { make, model };
+}
+
 function parseSingleHtmlFile(filePath: string): ExtractedListing[] {
   const htmlContent = fs.readFileSync(filePath, 'utf-8');
   const dom = new JSDOM(htmlContent);
   const document = dom.window.document;
   const rows = document.querySelectorAll('tr');
   const listings: ExtractedListing[] = [];
+  const filename = path.basename(filePath);
 
   rows.forEach((rowElement: Element) => {
     try {
@@ -34,7 +136,6 @@ function parseSingleHtmlFile(filePath: string): ExtractedListing[] {
       const tds = row.querySelectorAll('td');
       if (tds.length < 7) return;
 
-      // Find price cell and title cell
       const modelTagText = tds[1]?.textContent?.trim() || '';
       const titleText = tds[2]?.textContent?.trim() || '';
       const yearText = tds[3]?.textContent?.trim().replace(/\D/g, '') || '';
@@ -49,7 +150,7 @@ function parseSingleHtmlFile(filePath: string): ExtractedListing[] {
       const mileageKm = parseInt(kmText, 10);
       const price = parseInt(priceText, 10);
 
-      if (isNaN(year) || isNaN(mileageKm) || isNaN(price) || price < 100000 || year < 1980 || year > 2030) {
+      if (isNaN(year) || isNaN(mileageKm) || isNaN(price) || price < 50000 || year < 1970 || year > 2030) {
         return;
       }
 
@@ -65,40 +166,25 @@ function parseSingleHtmlFile(filePath: string): ExtractedListing[] {
         city = locationText;
       }
 
-      // Brand & Model
-      const filename = path.basename(filePath);
-      let make = 'Audi';
-      let model = 'A5';
-
-      const combinedText = `${filename} ${modelTagText} ${titleText}`.toUpperCase();
-
-      if (combinedText.includes('A6')) model = 'A6';
-      else if (combinedText.includes('A5')) model = 'A5';
-      else if (combinedText.includes('A4')) model = 'A4';
-      else if (combinedText.includes('A3')) model = 'A3';
-      else if (combinedText.includes('A1')) model = 'A1';
+      // Dynamic Brand & Model detection
+      const { make, model } = detectMakeAndModel(filename, modelTagText, titleText);
 
       // Variant
-      let variant = '2.0 TDI';
-      if (combinedText.includes('45 TFSI')) variant = '45 TFSI';
-      else if (combinedText.includes('40 TDI')) variant = '40 TDI';
-      else if (combinedText.includes('50 TDI')) variant = '50 TDI';
-      else if (combinedText.includes('55 TFSI')) variant = '55 TFSI';
-      else if (combinedText.includes('35 TFSI')) variant = '35 TFSI';
-      else if (combinedText.includes('2.0 TDI')) variant = '2.0 TDI';
-      else if (combinedText.includes('2.0 TFSI')) variant = '2.0 TFSI';
-      else if (combinedText.includes('1.8 TFSI') || combinedText.includes('1.8 T')) variant = '1.8 TFSI';
-      else if (combinedText.includes('1.6 TDI')) variant = '1.6 TDI';
-      else if (combinedText.includes('1.4 TFSI')) variant = '1.4 TFSI';
-      else if (combinedText.includes('1.6')) variant = '1.6';
+      let variant = modelTagText || 'Standart';
 
       // Trim
-      let trim = 'Quattro S Line';
-      if (combinedText.includes('DESIGN') || combinedText.includes('DESİNG')) trim = 'Quattro Design';
-      else if (combinedText.includes('SPORT')) trim = 'Quattro Sport';
-      else if (combinedText.includes('ADVANCED')) trim = 'Quattro Advanced';
-      else if (combinedText.includes('S LINE') || combinedText.includes('S-LINE') || combinedText.includes('SLINE')) trim = 'Quattro S Line';
-      else if (combinedText.includes('DYNAMIC')) trim = 'Dynamic';
+      let trim = 'Paket';
+      const combinedText = `${titleText} ${modelTagText}`.toUpperCase();
+      if (combinedText.includes('DISTINCTIVE')) trim = 'Distinctive';
+      else if (combinedText.includes('VELOCE')) trim = 'Veloce';
+      else if (combinedText.includes('PROGRESSION')) trim = 'Progression';
+      else if (combinedText.includes('SUPER')) trim = 'Super';
+      else if (combinedText.includes('TI')) trim = 'TI';
+      else if (combinedText.includes('SPRINT')) trim = 'Sprint';
+      else if (combinedText.includes('M SPORT') || combinedText.includes('MSPORT')) trim = 'M Sport';
+      else if (combinedText.includes('SPORT LINE')) trim = 'Sport Line';
+      else if (combinedText.includes('LUXURY LINE')) trim = 'Luxury Line';
+      else if (combinedText.includes('S LINE') || combinedText.includes('SLINE')) trim = 'S Line';
 
       listings.push({
         make,
