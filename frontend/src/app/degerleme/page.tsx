@@ -602,12 +602,22 @@ export default function ValuationWizard() {
               )}
             </div>
 
-            {/* Quick Popular Brand Badges */}
-            <div className="flex flex-col gap-2">
-              <label className="text-[11px] font-bold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">
-                <Sparkles className="w-3.5 h-3.5 text-brand-orange" /> Popüler Markalar (Hızlı Seçim)
-              </label>
-              <div className="flex flex-wrap gap-2">
+            {/* STEP 1: MARKA SEÇİMİ (POPÜLER MARKALAR & A-Z LİSTE) */}
+            <div className="flex flex-col gap-3 p-4 rounded-2xl bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-200 dark:border-zinc-800">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-bold text-zinc-800 dark:text-zinc-200 flex items-center gap-2">
+                  <span className="w-5 h-5 rounded-full bg-brand-orange text-white text-[11px] font-extrabold flex items-center justify-center">1</span>
+                  Marka Seçimi
+                </label>
+                {selectedBrand && (
+                  <span className="text-[10px] font-bold text-emerald-500 flex items-center gap-1">
+                    <CheckCircle className="w-3.5 h-3.5" /> Seçildi
+                  </span>
+                )}
+              </div>
+
+              {/* Popüler Markalar Hızlı Seçim */}
+              <div className="flex flex-wrap gap-2 pt-1">
                 {[
                   'Audi', 'BMW', 'Mercedes-Benz', 'Volkswagen', 'Fiat', 'Renault', 'Ford', 'Peugeot', 'Toyota', 'Hyundai', 'TOGG', 'Tesla', 'Opel', 'Citroen', 'Skoda'
                 ].map((bName) => {
@@ -619,14 +629,16 @@ export default function ValuationWizard() {
                       type="button"
                       onClick={() => {
                         if (bObj) {
-                          if (!selectedYear) setSelectedYear(2024);
                           setSelectedBrand(bObj.id);
+                          setSelectedYear('');
+                          setSelectedModel('');
+                          resetSubordinateOptions();
                         }
                       }}
-                      className={`px-3 py-1.5 rounded-xl border text-xs font-bold transition-all flex items-center gap-1.5 ${
+                      className={`px-3 py-1.5 rounded-xl border text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
                         isSelected
                           ? 'bg-brand-orange text-white border-brand-orange shadow-md shadow-brand-orange/20 scale-105'
-                          : 'bg-zinc-100/80 dark:bg-zinc-900/80 border-zinc-200 dark:border-zinc-800 text-zinc-700 dark:text-zinc-300 hover:border-brand-orange/40 hover:text-brand-orange'
+                          : 'bg-white dark:bg-zinc-800 border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 hover:border-brand-orange/40 hover:text-brand-orange'
                       }`}
                     >
                       {bName}
@@ -634,24 +646,63 @@ export default function ValuationWizard() {
                   );
                 })}
               </div>
+
+              {/* Brand Select Dropdown */}
+              <select
+                suppressHydrationWarning
+                value={selectedBrand}
+                onChange={(e) => {
+                  setSelectedBrand(e.target.value);
+                  setSelectedYear('');
+                  setSelectedModel('');
+                  resetSubordinateOptions();
+                }}
+                className="glass-input rounded-xl p-3.5 text-sm w-full font-semibold mt-1"
+              >
+                <option value="">-- Tüm Markalar ({brands.length} Marka Listelendi) --</option>
+                {brands.map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {b.name}
+                  </option>
+                ))}
+              </select>
             </div>
 
-            {/* Main Selection Form Controls */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-2">
-              {/* Year Select */}
-              <div className="flex flex-col gap-2">
-                <label className="text-xs font-semibold text-zinc-500 dark:text-zinc-400">{t('wiz.year')}</label>
+            {/* STEP 2 & STEP 3 GRID */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-1">
+              {/* STEP 2: MODEL YILI SEÇİMİ */}
+              <div className={`flex flex-col gap-2 p-4 rounded-2xl border transition-all ${
+                selectedBrand 
+                  ? 'bg-zinc-50 dark:bg-zinc-900/50 border-zinc-200 dark:border-zinc-800' 
+                  : 'bg-zinc-100/40 dark:bg-zinc-900/20 border-zinc-200/50 dark:border-zinc-800/40 opacity-50'
+              }`}>
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-zinc-800 dark:text-zinc-200 flex items-center gap-2">
+                    <span className={`w-5 h-5 rounded-full text-[11px] font-extrabold flex items-center justify-center ${
+                      selectedBrand ? 'bg-brand-orange text-white' : 'bg-zinc-300 dark:bg-zinc-700 text-zinc-500'
+                    }`}>2</span>
+                    Model Yılı
+                  </label>
+                  {!selectedBrand && (
+                    <span className="text-[10px] font-semibold text-amber-500">🔒 Önce Marka Seçiniz</span>
+                  )}
+                  {selectedYear && (
+                    <span className="text-[10px] font-bold text-emerald-500 flex items-center gap-1">
+                      <CheckCircle className="w-3.5 h-3.5" /> Seçildi
+                    </span>
+                  )}
+                </div>
                 <select
+                  disabled={!selectedBrand}
                   value={selectedYear}
                   onChange={(e) => {
                     setSelectedYear(e.target.value ? Number(e.target.value) : '');
-                    setSelectedBrand('');
-                    setModels([]);
+                    setSelectedModel('');
                     resetSubordinateOptions();
                   }}
-                  className="glass-input rounded-xl p-3.5 text-sm w-full font-semibold"
+                  className="glass-input rounded-xl p-3.5 text-sm w-full font-semibold disabled:cursor-not-allowed"
                 >
-                  <option value="">{t('wiz.select')}</option>
+                  <option value="">{selectedBrand ? '-- Model Yılını Seçiniz --' : 'Önce Marka Seçiniz'}</option>
                   {years.map((y) => (
                     <option key={y} value={y}>
                       {y}
@@ -660,53 +711,53 @@ export default function ValuationWizard() {
                 </select>
               </div>
 
-              {/* Brand Select */}
-              <div className="flex flex-col gap-2">
-                <label className="text-xs font-semibold text-zinc-500 dark:text-zinc-400">{t('wiz.brand')}</label>
-                <select
-                  suppressHydrationWarning
-                  disabled={!selectedYear}
-                  value={selectedBrand}
-                  onChange={(e) => setSelectedBrand(e.target.value)}
-                  className="glass-input rounded-xl p-3.5 text-sm w-full font-semibold disabled:opacity-40"
-                >
-                  <option value="">{t('wiz.select')}</option>
-                  {brands.map((b) => (
-                    <option key={b.id} value={b.id}>
-                      {b.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Model Select with Search Input */}
-              <div className="flex flex-col gap-2">
+              {/* STEP 3: MODEL SEÇİMİ */}
+              <div className={`flex flex-col gap-2 p-4 rounded-2xl border transition-all ${
+                selectedBrand && selectedYear 
+                  ? 'bg-zinc-50 dark:bg-zinc-900/50 border-zinc-200 dark:border-zinc-800' 
+                  : 'bg-zinc-100/40 dark:bg-zinc-900/20 border-zinc-200/50 dark:border-zinc-800/40 opacity-50'
+              }`}>
                 <div className="flex items-center justify-between">
-                  <label className="text-xs font-semibold text-zinc-500 dark:text-zinc-400">{t('wiz.model')}</label>
-                  {selectedBrand && models.length > 5 && (
-                    <span className="text-[10px] text-zinc-400">{models.length} model listelendi</span>
+                  <label className="text-xs font-bold text-zinc-800 dark:text-zinc-200 flex items-center gap-2">
+                    <span className={`w-5 h-5 rounded-full text-[11px] font-extrabold flex items-center justify-center ${
+                      selectedBrand && selectedYear ? 'bg-brand-orange text-white' : 'bg-zinc-300 dark:bg-zinc-700 text-zinc-500'
+                    }`}>3</span>
+                    Model Seçimi
+                  </label>
+                  {(!selectedBrand || !selectedYear) && (
+                    <span className="text-[10px] font-semibold text-amber-500">🔒 Önce Yıl Seçiniz</span>
+                  )}
+                  {selectedModel && (
+                    <span className="text-[10px] font-bold text-emerald-500 flex items-center gap-1">
+                      <CheckCircle className="w-3.5 h-3.5" /> Seçildi
+                    </span>
                   )}
                 </div>
-                {selectedBrand && models.length > 8 && (
+
+                {selectedBrand && selectedYear && models.length > 8 && (
                   <div className="relative mb-1">
                     <Search className="w-3.5 h-3.5 absolute left-3 top-3 text-zinc-400" />
                     <input
                       type="text"
-                      placeholder="Model Filtrele (Örn: A5 Sedan, Egea, Passat)..."
+                      placeholder="Model Ara (Örn: C4 X, Egea, Passat)..."
                       value={modelSearchQuery}
                       onChange={(e) => setModelSearchQuery(e.target.value)}
                       className="glass-input rounded-lg py-2 pl-9 pr-3 text-xs w-full"
                     />
                   </div>
                 )}
+
                 <select
                   suppressHydrationWarning
-                  disabled={!selectedBrand}
+                  disabled={!selectedBrand || !selectedYear}
                   value={selectedModel}
-                  onChange={(e) => setSelectedModel(e.target.value)}
-                  className="glass-input rounded-xl p-3.5 text-sm w-full font-semibold disabled:opacity-40"
+                  onChange={(e) => {
+                    setSelectedModel(e.target.value);
+                    resetSubordinateOptions();
+                  }}
+                  className="glass-input rounded-xl p-3.5 text-sm w-full font-semibold disabled:cursor-not-allowed"
                 >
-                  <option value="">{t('wiz.select')}</option>
+                  <option value="">{selectedYear ? `-- Modeli Seçiniz (${models.length} Model) --` : 'Önce Marka ve Yıl Seçiniz'}</option>
                   {models
                     .filter((m) => m.name.toLowerCase().includes(modelSearchQuery.toLowerCase()))
                     .map((m) => (
@@ -716,55 +767,92 @@ export default function ValuationWizard() {
                     ))}
                 </select>
               </div>
+            </div>
 
-              {/* Variant Select */}
-              {availableVariants.length > 0 && (
-                <div className="flex flex-col gap-2">
-                  <label className="text-xs font-semibold text-zinc-500 dark:text-zinc-400">{t('wiz.variant')}</label>
-                  <select
-                    value={selectedVariant}
-                    onChange={(e) => {
-                      setSelectedVariant(e.target.value);
-                      setSelectedPackage('');
-                      setSelectedBodyType('');
-                      setSelectedFuelType('');
-                      setSelectedTransmission('');
-                    }}
-                    className="glass-input rounded-xl p-3.5 text-sm w-full font-semibold"
-                  >
-                    <option value="">{t('wiz.select')}</option>
-                    {availableVariants.map((v) => (
-                      <option key={v.id} value={v.id}>
-                        {v.name} ({v.horsepower} HP)
-                      </option>
-                    ))}
-                  </select>
+            {/* STEP 4 & STEP 5: VERSİYON & DONANIM DYNAMIC SELECTIONS */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-1">
+              {/* STEP 4: VERSİYON / MOTOR */}
+              <div className={`flex flex-col gap-2 p-4 rounded-2xl border transition-all ${
+                selectedModel 
+                  ? 'bg-zinc-50 dark:bg-zinc-900/50 border-zinc-200 dark:border-zinc-800' 
+                  : 'bg-zinc-100/40 dark:bg-zinc-900/20 border-zinc-200/50 dark:border-zinc-800/40 opacity-50'
+              }`}>
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-zinc-800 dark:text-zinc-200 flex items-center gap-2">
+                    <span className={`w-5 h-5 rounded-full text-[11px] font-extrabold flex items-center justify-center ${
+                      selectedModel ? 'bg-brand-orange text-white' : 'bg-zinc-300 dark:bg-zinc-700 text-zinc-500'
+                    }`}>4</span>
+                    Versiyon / Motor
+                  </label>
+                  {!selectedModel && (
+                    <span className="text-[10px] font-semibold text-amber-500">🔒 Önce Model Seçiniz</span>
+                  )}
+                  {selectedVariant && (
+                    <span className="text-[10px] font-bold text-emerald-500 flex items-center gap-1">
+                      <CheckCircle className="w-3.5 h-3.5" /> Seçildi
+                    </span>
+                  )}
                 </div>
-              )}
+                <select
+                  disabled={!selectedModel}
+                  value={selectedVariant}
+                  onChange={(e) => {
+                    setSelectedVariant(e.target.value);
+                    setSelectedPackage('');
+                    setSelectedBodyType('');
+                    setSelectedFuelType('');
+                    setSelectedTransmission('');
+                  }}
+                  className="glass-input rounded-xl p-3.5 text-sm w-full font-semibold disabled:cursor-not-allowed"
+                >
+                  <option value="">{selectedModel ? '-- Versiyon / Motor Seçiniz --' : 'Önce Model Seçiniz'}</option>
+                  {availableVariants.map((v) => (
+                    <option key={v.id} value={v.id}>
+                      {v.name} ({v.horsepower} HP)
+                    </option>
+                  ))}
+                </select>
+              </div>
 
-              {/* Package Select */}
-              {availablePackages.length > 0 && (
-                <div className="flex flex-col gap-2">
-                  <label className="text-xs font-semibold text-zinc-500 dark:text-zinc-400">{t('wiz.package')}</label>
-                  <select
-                    value={selectedPackage}
-                    onChange={(e) => {
-                      setSelectedPackage(e.target.value);
-                      setSelectedBodyType('');
-                      setSelectedFuelType('');
-                      setSelectedTransmission('');
-                    }}
-                    className="glass-input rounded-xl p-3.5 text-sm w-full font-semibold"
-                  >
-                    <option value="">{t('wiz.select')}</option>
-                    {availablePackages.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name}
-                      </option>
-                    ))}
-                  </select>
+              {/* STEP 5: DONANIM PAKETİ */}
+              <div className={`flex flex-col gap-2 p-4 rounded-2xl border transition-all ${
+                selectedVariant 
+                  ? 'bg-zinc-50 dark:bg-zinc-900/50 border-zinc-200 dark:border-zinc-800' 
+                  : 'bg-zinc-100/40 dark:bg-zinc-900/20 border-zinc-200/50 dark:border-zinc-800/40 opacity-50'
+              }`}>
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-zinc-800 dark:text-zinc-200 flex items-center gap-2">
+                    <span className={`w-5 h-5 rounded-full text-[11px] font-extrabold flex items-center justify-center ${
+                      selectedVariant ? 'bg-brand-orange text-white' : 'bg-zinc-300 dark:bg-zinc-700 text-zinc-500'
+                    }`}>5</span>
+                    Donanım Paketi
+                  </label>
+                  {!selectedVariant && (
+                    <span className="text-[10px] font-semibold text-amber-500">🔒 Önce Motor Seçiniz</span>
+                  )}
+                  {selectedPackage && (
+                    <span className="text-[10px] font-bold text-emerald-500 flex items-center gap-1">
+                      <CheckCircle className="w-3.5 h-3.5" /> Seçildi
+                    </span>
+                  )}
                 </div>
-              )}
+                <select
+                  disabled={!selectedVariant}
+                  value={selectedPackage}
+                  onChange={(e) => {
+                    setSelectedPackage(e.target.value);
+                  }}
+                  className="glass-input rounded-xl p-3.5 text-sm w-full font-semibold disabled:cursor-not-allowed"
+                >
+                  <option value="">{selectedVariant ? '-- Donanım Paketini Seçiniz --' : 'Önce Motor Seçiniz'}</option>
+                  {availablePackages.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
 
               {/* Body Type Select */}
               {availableBodies.length > 0 && (
