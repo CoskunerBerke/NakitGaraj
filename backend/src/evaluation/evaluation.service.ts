@@ -679,6 +679,16 @@ export class EvaluationService {
     const estimatedValue = finalOfferedPrice;
     const minExpectedValue = this.roundToCleanGalleryPrice(standardCashOffer * 0.96);
     const quickSaleValue = this.roundToCleanGalleryPrice(standardCashOffer * 0.94);
+    
+    // Real Sahibinden listing bounds (Floor: 320.000 TL, Ceiling: 680.000 TL for 2016 Sandero 1.2 16V)
+    const floorMarketPrice = (dbMarket && dbMarket.minPrice > 0)
+      ? dbMarket.minPrice
+      : this.roundToCleanGalleryPrice(fairMarketValue * 0.50);
+
+    const ceilingMarketPrice = (dbMarket && dbMarket.maxPrice > 0)
+      ? dbMarket.maxPrice
+      : this.roundToCleanGalleryPrice(fairMarketValue * 1.06);
+
     let confidenceScore = 95;
     if (dto.damageStatus === 'UNKNOWN') confidenceScore -= 5;
     if (dto.mileage > 250000) confidenceScore -= 4;
@@ -769,7 +779,7 @@ export class EvaluationService {
         finalConsignmentPrice, // Final consignment recommendation
         userDesiredPrice: dto.userDesiredPrice,
         guaranteedProfit: fairMarketValue - finalOfferedPrice,
-        fairMarketRange: `${minExpectedValue.toLocaleString('tr-TR')} ₺ - ${fairMarketValue.toLocaleString('tr-TR')} ₺`,
+        fairMarketRange: `${floorMarketPrice.toLocaleString('tr-TR')} ₺ - ${ceilingMarketPrice.toLocaleString('tr-TR')} ₺`,
         minExpectedValue,
         maxExpectedValue: finalConsignmentPrice,
         quickSaleValue,
