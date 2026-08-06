@@ -418,6 +418,100 @@ export class VehicleService {
         { name: '1.5 Vision / Dream', engineSize: 1490, horsepower: 125, torque: 153, fuel: 'Benzin', trans: 'Otomatik', body: 'Sedan', packages: ['Vision', 'Dream', 'Flame'] },
         { name: '1.4 D-4D', engineSize: 1364, horsepower: 90, torque: 205, fuel: 'Dizel', trans: 'Manuel', body: 'Sedan', packages: ['Life', 'Touch'] },
       ];
+    } else if (lowerBrand.includes('bmw')) {
+      if (lowerModel.includes('i7')) {
+        variantSpecs = [
+          { name: 'xDrive60 M Excellence', engineSize: 0, horsepower: 544, torque: 745, fuel: 'Elektrik', trans: 'Otomatik', body: 'Sedan', packages: ['M Excellence', 'Pure Excellence', 'M Sport', 'Standart / Bilmiyorum'] },
+          { name: 'xDrive60 Pure Excellence', engineSize: 0, horsepower: 544, torque: 745, fuel: 'Elektrik', trans: 'Otomatik', body: 'Sedan', packages: ['Pure Excellence', 'M Excellence', 'Standart / Bilmiyorum'] },
+          { name: 'M70 xDrive', engineSize: 0, horsepower: 659, torque: 1100, fuel: 'Elektrik', trans: 'Otomatik', body: 'Sedan', packages: ['M Performance', 'M Sport', 'Standart / Bilmiyorum'] },
+          { name: 'eDrive50', engineSize: 0, horsepower: 455, torque: 650, fuel: 'Elektrik', trans: 'Otomatik', body: 'Sedan', packages: ['Pure Excellence', 'M Excellence', 'Standart / Bilmiyorum'] },
+        ];
+      } else if (lowerModel.includes('i5')) {
+        variantSpecs = [
+          { name: 'eDrive40 M Sport', engineSize: 0, horsepower: 340, torque: 430, fuel: 'Elektrik', trans: 'Otomatik', body: 'Sedan', packages: ['M Sport', 'Luxury Line', 'Standart / Bilmiyorum'] },
+          { name: 'eDrive40 Touring', engineSize: 0, horsepower: 340, torque: 430, fuel: 'Elektrik', trans: 'Otomatik', body: 'Station Wagon', packages: ['M Sport', 'Standart / Bilmiyorum'] },
+          { name: 'M60 xDrive', engineSize: 0, horsepower: 601, torque: 820, fuel: 'Elektrik', trans: 'Otomatik', body: 'Sedan', packages: ['M Performance', 'M Sport', 'Standart / Bilmiyorum'] },
+        ];
+      } else if (lowerModel.includes('i4')) {
+        variantSpecs = [
+          { name: 'eDrive40 M Sport', engineSize: 0, horsepower: 340, torque: 430, fuel: 'Elektrik', trans: 'Otomatik', body: 'Hatchback', packages: ['M Sport', 'Gran Coupe', 'Standart / Bilmiyorum'] },
+          { name: 'eDrive35 M Sport', engineSize: 0, horsepower: 286, torque: 400, fuel: 'Elektrik', trans: 'Otomatik', body: 'Hatchback', packages: ['M Sport', 'Standart / Bilmiyorum'] },
+          { name: 'M50', engineSize: 0, horsepower: 544, torque: 795, fuel: 'Elektrik', trans: 'Otomatik', body: 'Hatchback', packages: ['M Performance', 'M Sport', 'Standart / Bilmiyorum'] },
+        ];
+      } else if (lowerModel.includes('i8')) {
+        variantSpecs = [
+          { name: '1.5 Coupe', engineSize: 1499, horsepower: 374, torque: 570, fuel: 'Hibrit', trans: 'Otomatik', body: 'Coupe', packages: ['Coupe', 'Standart / Bilmiyorum'] },
+          { name: '1.5 Roadster', engineSize: 1499, horsepower: 374, torque: 570, fuel: 'Hibrit', trans: 'Otomatik', body: 'Cabrio', packages: ['Roadster', 'Standart / Bilmiyorum'] },
+        ];
+      } else if (lowerModel.includes('ix1')) {
+        variantSpecs = [
+          { name: 'xDrive30 M Sport', engineSize: 0, horsepower: 313, torque: 494, fuel: 'Elektrik', trans: 'Otomatik', body: 'SUV', packages: ['M Sport', 'xLine', 'Standart / Bilmiyorum'] },
+          { name: 'eDrive20 M Sport', engineSize: 0, horsepower: 204, torque: 250, fuel: 'Elektrik', trans: 'Otomatik', body: 'SUV', packages: ['M Sport', 'xLine', 'Standart / Bilmiyorum'] },
+        ];
+      } else if (lowerModel.includes('ix3')) {
+        variantSpecs = [
+          { name: 'Impressions', engineSize: 0, horsepower: 286, torque: 400, fuel: 'Elektrik', trans: 'Otomatik', body: 'SUV', packages: ['Impressions', 'M Sport', 'Standart / Bilmiyorum'] },
+          { name: 'M Sport', engineSize: 0, horsepower: 286, torque: 400, fuel: 'Elektrik', trans: 'Otomatik', body: 'SUV', packages: ['M Sport', 'Impressions', 'Standart / Bilmiyorum'] },
+        ];
+      } else if (lowerModel.includes('ix')) {
+        variantSpecs = [
+          { name: 'xDrive40 First Edition', engineSize: 0, horsepower: 326, torque: 630, fuel: 'Elektrik', trans: 'Otomatik', body: 'SUV', packages: ['First Edition Sport', 'First Edition Essence', 'Standart / Bilmiyorum'] },
+          { name: 'xDrive50', engineSize: 0, horsepower: 523, torque: 765, fuel: 'Elektrik', trans: 'Otomatik', body: 'SUV', packages: ['Sport', 'Essence', 'Standart / Bilmiyorum'] },
+          { name: 'M60', engineSize: 0, horsepower: 619, torque: 1100, fuel: 'Elektrik', trans: 'Otomatik', body: 'SUV', packages: ['M Performance', 'Sport', 'Standart / Bilmiyorum'] },
+        ];
+      } else if (lowerModel.includes('3 serisi') || lowerModel === '3') {
+        variantSpecs = [
+          { name: '320i', engineSize: 1597, horsepower: 170, torque: 250, fuel: 'Benzin', trans: 'Otomatik', body: 'Sedan', packages: ['M Sport', 'Luxury Line', 'Sport Line', 'Modern Line', 'First Edition M Sport', 'Standart / Bilmiyorum'] },
+          { name: '320d', engineSize: 1995, horsepower: 190, torque: 400, fuel: 'Dizel', trans: 'Otomatik', body: 'Sedan', packages: ['M Sport', 'Luxury Line', 'Sport Line', 'Standart / Bilmiyorum'] },
+          { name: '320d xDrive', engineSize: 1995, horsepower: 190, torque: 400, fuel: 'Dizel', trans: 'Otomatik', body: 'Sedan', packages: ['M Sport', 'Luxury Line', 'Standart / Bilmiyorum'] },
+          { name: '316i', engineSize: 1598, horsepower: 136, torque: 220, fuel: 'Benzin', trans: 'Otomatik', body: 'Sedan', packages: ['Comfort', 'Technology', 'M Sport', 'Standart / Bilmiyorum'] },
+          { name: '318i', engineSize: 1499, horsepower: 136, torque: 220, fuel: 'Benzin', trans: 'Otomatik', body: 'Sedan', packages: ['Edition M Sport', 'Prestige', 'Standart / Bilmiyorum'] },
+        ];
+      } else if (lowerModel.includes('5 serisi') || lowerModel === '5') {
+        variantSpecs = [
+          { name: '520i', engineSize: 1597, horsepower: 170, torque: 250, fuel: 'Benzin', trans: 'Otomatik', body: 'Sedan', packages: ['M Sport', 'Luxury Line', 'Special Edition M Sport', 'Executive', 'Standart / Bilmiyorum'] },
+          { name: '520d', engineSize: 1995, horsepower: 190, torque: 400, fuel: 'Dizel', trans: 'Otomatik', body: 'Sedan', packages: ['M Sport', 'Luxury Line', 'Executive', 'Standart / Bilmiyorum'] },
+          { name: '520d xDrive', engineSize: 1995, horsepower: 190, torque: 400, fuel: 'Dizel', trans: 'Otomatik', body: 'Sedan', packages: ['M Sport', 'Luxury Line', 'Executive', 'Standart / Bilmiyorum'] },
+          { name: '530i xDrive', engineSize: 1998, horsepower: 252, torque: 350, fuel: 'Benzin', trans: 'Otomatik', body: 'Sedan', packages: ['M Sport', 'Special Edition', 'Standart / Bilmiyorum'] },
+        ];
+      } else if (lowerModel.includes('7 serisi') || lowerModel === '7') {
+        variantSpecs = [
+          { name: '730ld xDrive', engineSize: 2993, horsepower: 265, torque: 620, fuel: 'Dizel', trans: 'Otomatik', body: 'Sedan', packages: ['Pure Excellence', 'M Sport', 'Excellence', 'Standart / Bilmiyorum'] },
+          { name: '740ld xDrive', engineSize: 2993, horsepower: 320, torque: 680, fuel: 'Dizel', trans: 'Otomatik', body: 'Sedan', packages: ['Pure Excellence', 'M Sport', 'Standart / Bilmiyorum'] },
+          { name: '740i', engineSize: 2998, horsepower: 381, torque: 540, fuel: 'Benzin', trans: 'Otomatik', body: 'Sedan', packages: ['Pure Excellence', 'M Sport', 'Standart / Bilmiyorum'] },
+        ];
+      } else if (lowerModel.includes('x5')) {
+        variantSpecs = [
+          { name: 'xDrive25d', engineSize: 1995, horsepower: 231, torque: 500, fuel: 'Dizel', trans: 'Otomatik', body: 'SUV', packages: ['xLine', 'M Sport', 'Standart / Bilmiyorum'] },
+          { name: 'xDrive30d', engineSize: 2993, horsepower: 265, torque: 620, fuel: 'Dizel', trans: 'Otomatik', body: 'SUV', packages: ['xLine', 'M Sport', 'Standart / Bilmiyorum'] },
+          { name: 'xDrive40i', engineSize: 2998, horsepower: 340, torque: 450, fuel: 'Benzin', trans: 'Otomatik', body: 'SUV', packages: ['M Sport', 'Standart / Bilmiyorum'] },
+        ];
+      } else {
+        variantSpecs = [
+          { name: `${modelName} M Sport`, engineSize: 1998, horsepower: 245, torque: 350, fuel: 'Benzin', trans: 'Otomatik', body: 'Sedan', packages: ['M Sport', 'Luxury Line', 'Standart / Bilmiyorum'] },
+          { name: `${modelName} xDrive`, engineSize: 1995, horsepower: 190, torque: 400, fuel: 'Dizel', trans: 'Otomatik', body: 'Sedan', packages: ['M Sport', 'xLine', 'Standart / Bilmiyorum'] },
+        ];
+      }
+    } else if (lowerBrand.includes('mercedes')) {
+      if (lowerModel.includes('c serisi') || lowerModel.includes('c-class') || lowerModel === 'c') {
+        variantSpecs = [
+          { name: 'C 180', engineSize: 1496, horsepower: 170, torque: 250, fuel: 'Benzin', trans: 'Otomatik', body: 'Sedan', packages: ['AMG Line', 'Avantgarde', 'Selection', 'Fascination', 'Style', 'Night Package', 'Standart / Bilmiyorum'] },
+          { name: 'C 200 4MATIC', engineSize: 1496, horsepower: 204, torque: 300, fuel: 'Benzin', trans: 'Otomatik', body: 'Sedan', packages: ['AMG Line', 'Avantgarde', 'Standart / Bilmiyorum'] },
+          { name: 'C 200 d', engineSize: 1598, horsepower: 160, torque: 360, fuel: 'Dizel', trans: 'Otomatik', body: 'Sedan', packages: ['AMG Line', 'Avantgarde', 'Style', 'Fascination', 'Standart / Bilmiyorum'] },
+          { name: 'C 220 d', engineSize: 1993, horsepower: 200, torque: 440, fuel: 'Dizel', trans: 'Otomatik', body: 'Sedan', packages: ['AMG Line', 'Avantgarde', 'Standart / Bilmiyorum'] },
+        ];
+      } else if (lowerModel.includes('e serisi') || lowerModel.includes('e-class') || lowerModel === 'e') {
+        variantSpecs = [
+          { name: 'E 180', engineSize: 1595, horsepower: 156, torque: 250, fuel: 'Benzin', trans: 'Otomatik', body: 'Sedan', packages: ['AMG Line', 'Exclusive', 'Avantgarde', 'Edition 1', 'Standart / Bilmiyorum'] },
+          { name: 'E 200 d', engineSize: 1598, horsepower: 160, torque: 360, fuel: 'Dizel', trans: 'Otomatik', body: 'Sedan', packages: ['AMG Line', 'Exclusive', 'Avantgarde', 'Standart / Bilmiyorum'] },
+          { name: 'E 220 d 4MATIC', engineSize: 1993, horsepower: 200, torque: 440, fuel: 'Dizel', trans: 'Otomatik', body: 'Sedan', packages: ['AMG Line', 'Exclusive', 'Standart / Bilmiyorum'] },
+        ];
+      } else if (lowerModel.includes('s serisi') || lowerModel.includes('s-class') || lowerModel === 's') {
+        variantSpecs = [
+          { name: 'S 400 d 4MATIC', engineSize: 2925, horsepower: 330, torque: 700, fuel: 'Dizel', trans: 'Otomatik', body: 'Sedan', packages: ['AMG Line', 'Exclusive', 'Maybach', 'Standart / Bilmiyorum'] },
+          { name: 'S 500 4MATIC', engineSize: 2999, horsepower: 435, torque: 520, fuel: 'Benzin', trans: 'Otomatik', body: 'Sedan', packages: ['AMG Line', 'Exclusive', 'Standart / Bilmiyorum'] },
+        ];
+      }
     } else if (lowerBrand.includes('dacia')) {
       if (lowerModel.includes('sandero')) {
         const body = lowerModel.includes('stepway') ? 'SUV' : 'Hatchback';
