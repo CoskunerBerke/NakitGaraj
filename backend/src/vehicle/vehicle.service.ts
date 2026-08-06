@@ -428,6 +428,62 @@ export class VehicleService {
         { name: '1.5 Vision / Dream', engineSize: 1490, horsepower: 125, torque: 153, fuel: 'Benzin', trans: 'Otomatik', body: 'Sedan', packages: ['Vision', 'Dream', 'Flame'] },
         { name: '1.4 D-4D', engineSize: 1364, horsepower: 90, torque: 205, fuel: 'Dizel', trans: 'Manuel', body: 'Sedan', packages: ['Life', 'Touch'] },
       ];
+    } else if (lowerBrand.includes('dacia')) {
+      if (lowerModel.includes('sandero')) {
+        const body = lowerModel.includes('stepway') ? 'SUV' : 'Hatchback';
+        variantSpecs = [
+          { name: '1.2 16V', engineSize: 1149, horsepower: 75, torque: 107, fuel: 'Benzin', trans: 'Manuel', body, packages: ['Ambiance', 'Laureate', 'Standart / Bilmiyorum'] },
+          { name: '0.9 TCe', engineSize: 898, horsepower: 90, torque: 140, fuel: 'Benzin', trans: 'Manuel', body, packages: ['Ambiance', 'Laureate', 'Stepway', 'Standart / Bilmiyorum'] },
+          { name: '1.5 dCi', engineSize: 1461, horsepower: 90, torque: 220, fuel: 'Dizel', trans: 'Manuel', body, packages: ['Ambiance', 'Laureate', 'Stepway', 'Standart / Bilmiyorum'] },
+          { name: '1.0 TCe', engineSize: 999, horsepower: 90, torque: 160, fuel: 'Benzin', trans: 'Otomatik', body, packages: ['Essential', 'Expression', 'Stepway', 'Standart / Bilmiyorum'] },
+          { name: '1.0 ECO-G', engineSize: 999, horsepower: 100, torque: 170, fuel: 'LPG', trans: 'Manuel', body, packages: ['Essential', 'Expression', 'Stepway', 'Standart / Bilmiyorum'] },
+        ];
+      } else if (lowerModel.includes('duster')) {
+        variantSpecs = [
+          { name: '1.5 dCi 4x2', engineSize: 1461, horsepower: 110, torque: 260, fuel: 'Dizel', trans: 'Manuel', body: 'SUV', packages: ['Ambiance', 'Laureate', 'Comfort', 'Prestige'] },
+          { name: '1.5 dCi 4x4', engineSize: 1461, horsepower: 110, torque: 260, fuel: 'Dizel', trans: 'Manuel', body: 'SUV', packages: ['Laureate', 'Prestige'] },
+          { name: '1.3 TCe', engineSize: 1332, horsepower: 130, torque: 240, fuel: 'Benzin', trans: 'Otomatik', body: 'SUV', packages: ['Comfort', 'Prestige', 'Journey'] },
+          { name: '1.6 16V', engineSize: 1598, horsepower: 114, torque: 156, fuel: 'Benzin', trans: 'Manuel', body: 'SUV', packages: ['Ambiance', 'Laureate'] },
+          { name: '1.0 ECO-G', engineSize: 999, horsepower: 100, torque: 170, fuel: 'LPG', trans: 'Manuel', body: 'SUV', packages: ['Comfort', 'Prestige'] },
+        ];
+      } else if (lowerModel.includes('logan')) {
+        variantSpecs = [
+          { name: '1.2 16V', engineSize: 1149, horsepower: 75, torque: 107, fuel: 'Benzin', trans: 'Manuel', body: 'Sedan', packages: ['Ambiance', 'Laureate'] },
+          { name: '1.5 dCi', engineSize: 1461, horsepower: 75, torque: 200, fuel: 'Dizel', trans: 'Manuel', body: 'Sedan', packages: ['Ambiance', 'Laureate'] },
+          { name: '0.9 TCe', engineSize: 898, horsepower: 90, torque: 140, fuel: 'Benzin', trans: 'Manuel', body: 'Sedan', packages: ['Ambiance', 'Laureate'] },
+        ];
+      }
+    } else if (lowerBrand.includes('opel')) {
+      if (lowerModel.includes('astra')) {
+        variantSpecs = [
+          { name: '1.6 CDTI', engineSize: 1598, horsepower: 136, torque: 320, fuel: 'Dizel', trans: 'Otomatik', body: 'Hatchback', packages: ['Edition', 'Enjoy', 'Dynamic', 'Excellence', 'Cosmo'] },
+          { name: '1.4 Turbo', engineSize: 1399, horsepower: 150, torque: 240, fuel: 'Benzin', trans: 'Otomatik', body: 'Hatchback', packages: ['Edition', 'Enjoy', 'Dynamic', 'Excellence'] },
+          { name: '1.6 Twinport', engineSize: 1598, horsepower: 115, torque: 155, fuel: 'Benzin', trans: 'Manuel', body: 'Sedan', packages: ['Essentia', 'Edition', 'Cosmo'] },
+          { name: '1.2 Turbo', engineSize: 1199, horsepower: 130, torque: 230, fuel: 'Benzin', trans: 'Otomatik', body: 'Hatchback', packages: ['Edition', 'GS', 'Ultimate'] },
+        ];
+      } else if (lowerModel.includes('corsa')) {
+        variantSpecs = [
+          { name: '1.2 Benzin', engineSize: 1199, horsepower: 75, torque: 118, fuel: 'Benzin', trans: 'Manuel', body: 'Hatchback', packages: ['Essentia', 'Edition'] },
+          { name: '1.2 Turbo', engineSize: 1199, horsepower: 100, torque: 205, fuel: 'Benzin', trans: 'Otomatik', body: 'Hatchback', packages: ['Edition', 'GS', 'Ultimate'] },
+          { name: '1.3 CDTI', engineSize: 1248, horsepower: 95, torque: 210, fuel: 'Dizel', trans: 'Manuel', body: 'Hatchback', packages: ['Essentia', 'Enjoy', 'Color Edition'] },
+          { name: '1.4 Benzin', engineSize: 1398, horsepower: 90, torque: 130, fuel: 'Benzin', trans: 'Otomatik', body: 'Hatchback', packages: ['Enjoy', 'Color Edition'] },
+        ];
+      }
+    } else if (lowerBrand.includes('nissan')) {
+      if (lowerModel.includes('qashqai')) {
+        variantSpecs = [
+          { name: '1.5 dCi', engineSize: 1461, horsepower: 110, torque: 260, fuel: 'Dizel', trans: 'Manuel', body: 'SUV', packages: ['Visia', 'Tekna', 'Sky Pack', 'Platinum'] },
+          { name: '1.2 DIG-T', engineSize: 1197, horsepower: 115, torque: 190, fuel: 'Benzin', trans: 'Otomatik', body: 'SUV', packages: ['Visia', 'Tekna', 'Sky Pack'] },
+          { name: '1.3 DIG-T', engineSize: 1332, horsepower: 158, torque: 270, fuel: 'Benzin', trans: 'Otomatik', body: 'SUV', packages: ['Tekna', 'Sky Pack', 'Platinum Premium'] },
+          { name: '1.6 dCi', engineSize: 1598, horsepower: 130, torque: 320, fuel: 'Dizel', trans: 'Otomatik', body: 'SUV', packages: ['Tekna', 'Sky Pack', 'Platinum'] },
+        ];
+      } else if (lowerModel.includes('juke')) {
+        variantSpecs = [
+          { name: '1.0 DIG-T', engineSize: 999, horsepower: 115, torque: 200, fuel: 'Benzin', trans: 'Otomatik', body: 'SUV', packages: ['Tekna', 'N-Connecta', 'N-Design'] },
+          { name: '1.5 dCi', engineSize: 1461, horsepower: 110, torque: 260, fuel: 'Dizel', trans: 'Manuel', body: 'SUV', packages: ['Visia', 'Tekna', 'Special Edition'] },
+          { name: '1.6 Benzin', engineSize: 1598, horsepower: 117, torque: 158, fuel: 'Benzin', trans: 'Otomatik', body: 'SUV', packages: ['Visia', 'Tekna'] },
+        ];
+      }
     } else if (lowerBrand.includes('togg')) {
       variantSpecs = [
         { name: 'V1 RWD Standart Menzil', engineSize: 0, horsepower: 218, torque: 350, fuel: 'Elektrik', trans: 'Otomatik', body: 'SUV', packages: ['V1'] },
