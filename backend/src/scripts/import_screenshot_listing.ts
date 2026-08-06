@@ -144,17 +144,30 @@ async function main() {
   }
 
   try {
-    let data: ScreenshotListingInput;
+    let data: ScreenshotListingInput | ScreenshotListingInput[];
     if (require('fs').existsSync(inputArg)) {
       data = JSON.parse(require('fs').readFileSync(inputArg, 'utf-8'));
     } else {
       data = JSON.parse(inputArg);
     }
-    const result = await saveScreenshotListing(data);
-    console.log('\n====================================================================');
-    console.log('  SCREENSHOT LISTING SAVED SUCCESSFULLY TO DATABASE');
-    console.log('====================================================================');
-    console.log(JSON.stringify(result, null, 2));
+
+    if (Array.isArray(data)) {
+      const results = [];
+      for (const item of data) {
+        const res = await saveScreenshotListing(item);
+        results.push(res);
+      }
+      console.log('\n====================================================================');
+      console.log(`  ${results.length} SCREENSHOT LISTINGS SAVED SUCCESSFULLY TO DATABASE`);
+      console.log('====================================================================');
+      console.log(JSON.stringify({ totalImported: results.length, samples: results.slice(0, 3) }, null, 2));
+    } else {
+      const result = await saveScreenshotListing(data);
+      console.log('\n====================================================================');
+      console.log('  SCREENSHOT LISTING SAVED SUCCESSFULLY TO DATABASE');
+      console.log('====================================================================');
+      console.log(JSON.stringify(result, null, 2));
+    }
   } catch (err) {
     console.error('Error saving screenshot listing:', err);
   } finally {
