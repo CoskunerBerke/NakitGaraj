@@ -1,4 +1,5 @@
 import { PrismaClient } from '@prisma/client';
+import * as fs from 'fs';
 
 const prisma = new PrismaClient();
 
@@ -28,7 +29,7 @@ export async function saveScreenshotListing(data: ScreenshotListingInput) {
   });
   if (!manufacturer) {
     manufacturer = await prisma.manufacturer.create({
-      data: { name: data.make, country: 'Almanya' },
+      data: { name: data.make },
     });
   }
 
@@ -44,7 +45,6 @@ export async function saveScreenshotListing(data: ScreenshotListingInput) {
       data: {
         manufacturerId: manufacturer.id,
         name: data.model,
-        vehicleType: 'CAR',
       },
     });
   }
@@ -61,6 +61,9 @@ export async function saveScreenshotListing(data: ScreenshotListingInput) {
       data: {
         modelId: modelRecord.id,
         name: data.variant || 'Standart',
+        engineSize: 1.6,
+        horsepower: 120,
+        torque: 200,
       },
     });
   }
