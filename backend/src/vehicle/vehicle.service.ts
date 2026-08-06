@@ -275,8 +275,8 @@ export class VehicleService {
       lowerModel.includes('fiesta') ||
       lowerModel.includes('sandero')
     ) {
-      basePrice2026 = 1050000;
-      floorPrice = 350000;
+      basePrice2026 = 1400000;
+      floorPrice = 400000;
       isEconomy = true;
     } else if (
       lowerModel.includes('passat') ||
