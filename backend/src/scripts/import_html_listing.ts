@@ -245,51 +245,64 @@ async function main() {
   console.log(`  ${htmlFiles.length} ADET HTML DOSYASI TARANIYOR (${path.basename(absolutePath)})`);
   console.log(`====================================================================\n`);
 
-  let allListings: ExtractedListing[] = [];
   const seenKeys = new Set<string>();
+  const { execSync } = require('child_process');
+  let totalExtractedNewListings = 0;
 
-  for (let i = 0; i < htmlFiles.length; i++) {
-    const file = htmlFiles[i];
-    const fileListings = parseSingleHtmlFile(file);
-    let addedCount = 0;
-    for (const item of fileListings) {
-      const key = item.externalListingId || `${item.make}-${item.model}-${item.year}-${item.mileageKm}-${item.price}`;
-      if (!seenKeys.has(key)) {
-        seenKeys.add(key);
-        allListings.push(item);
-        addedCount++;
+  // Process files in batches of 30 to keep memory lean (< 200MB)
+  const batchSize = 30;
+
+  for (let batchStart = 0; batchStart < htmlFiles.length; batchStart += batchSize) {
+    const batchFiles = htmlFiles.slice(batchStart, batchStart + batchSize);
+    const batchListings: ExtractedListing[] = [];
+
+    for (let i = 0; i < batchFiles.length; i++) {
+      const fileIndex = batchStart + i;
+      const file = batchFiles[i];
+      const fileListings = parseSingleHtmlFile(file);
+      let addedCount = 0;
+
+      for (const item of fileListings) {
+        const key = item.externalListingId || `${item.make}-${item.model}-${item.year}-${item.mileageKm}-${item.price}`;
+        if (!seenKeys.has(key)) {
+          seenKeys.add(key);
+          batchListings.push(item);
+          addedCount++;
+        }
+      }
+      console.log(`✓ [${fileIndex + 1}/${htmlFiles.length}] [${path.basename(file)}]: ${fileListings.length} ilan okundu (${addedCount} yeni).`);
+    }
+
+    totalExtractedNewListings += batchListings.length;
+
+    if (batchListings.length > 0) {
+      const tempJsonPath = path.join(__dirname, `temp_html_batch_${batchStart}.json`);
+      fs.writeFileSync(tempJsonPath, JSON.stringify(batchListings, null, 2), 'utf-8');
+
+      console.log(`\n--> [Paket Aktarımı ${Math.floor(batchStart / batchSize) + 1}/${Math.ceil(htmlFiles.length / batchSize)}] ${batchListings.length} yeni ilan veritabanına aktarılıyor...`);
+      try {
+        const command = `npx ts-node src/scripts/import_screenshot_listing.ts "${tempJsonPath}"`;
+        const output = execSync(command, { cwd: path.join(__dirname, '../..'), encoding: 'utf-8' });
+        console.log(output);
+      } catch (err: any) {
+        console.error(`Paket aktarım hatası: ${err.message}`);
+      } finally {
+        if (fs.existsSync(tempJsonPath)) {
+          fs.unlinkSync(tempJsonPath);
+        }
       }
     }
-    console.log(`✓ [${i + 1}/${htmlFiles.length}] [${path.basename(file)}]: ${fileListings.length} ilan okundu (${addedCount} yeni).`);
+
+    // Trigger explicit garbage collection if exposed
+    if (global.gc) {
+      global.gc();
+    }
   }
 
   console.log(`\n--------------------------------------------------------------------`);
-  console.log(` Toplam Ayıklanan Tekil İlan Sayısı: ${allListings.length}`);
+  console.log(` TOPLAM ISLENEN YENI TEKIL ILAN SAYISI: ${totalExtractedNewListings}`);
+  console.log(` VERITABANINDAKI TOPLAM TEKIL ILAN KEY SAYISI: ${seenKeys.size}`);
   console.log(`--------------------------------------------------------------------\n`);
-
-  if (allListings.length === 0) {
-    console.log('Hiç yeni ilan bulunamadı.');
-    return;
-  }
-
-  // Save in chunks to JSON to prevent large IPC payload
-  const chunkSize = 2000;
-  const { execSync } = require('child_process');
-
-  for (let i = 0; i < allListings.length; i += chunkSize) {
-    const chunk = allListings.slice(i, i + chunkSize);
-    const jsonPath = path.join(__dirname, `extracted_html_batch_${i}.json`);
-    fs.writeFileSync(jsonPath, JSON.stringify(chunk, null, 2), 'utf-8');
-
-    console.log(`Veritabanına aktarım başlatılıyor (Paket ${Math.floor(i / chunkSize) + 1}/${Math.ceil(allListings.length / chunkSize)})...`);
-    const command = `npx ts-node src/scripts/import_screenshot_listing.ts "${jsonPath}"`;
-    const output = execSync(command, { cwd: path.join(__dirname, '../..'), encoding: 'utf-8' });
-    console.log(output);
-
-    if (fs.existsSync(jsonPath)) {
-      fs.unlinkSync(jsonPath);
-    }
-  }
 }
 
 main().catch(console.error);
