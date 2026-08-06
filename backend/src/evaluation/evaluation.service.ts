@@ -581,18 +581,32 @@ export class EvaluationService {
     let fairMarketValue = Math.min(Math.round(baseValuationFinal * conditionFactor), sahibindenMaxCap);
     fairMarketValue = this.roundToCleanGalleryPrice(fairMarketValue);
 
-    // REALISTIC TURKISH GALERİ CASH & CONSIGNMENT PROFIT MODEL:
-    // User Mandate: 
-    // - Consignment Offer = FairMarket - 200.000 TL (Galerinin MINIMUM 200 bin TL kârı)
-    // - Cash Offer = FairMarket - 300.000 TL (Galerinin MAXIMUM 300 bin TL kârı)
-    // (Bütçe araçlar için oran ölçeklenir, lüks araçlarda sabit 200k/300k kâr korunur)
+    // DYNAMIC GALERİ PROFIT MARGIN MODEL (Configurable via Admin Panel):
+    let consignmentProfitPct = 0.06;
+    let cashOfferProfitPct = 0.12;
+    let luxuryMinProfit = 200000;
+    let luxuryMaxProfit = 300000;
+
+    try {
+      const fs = require('fs');
+      const path = require('path');
+      const settingsPath = path.join(process.cwd(), 'market-sync-settings.json');
+      if (fs.existsSync(settingsPath)) {
+        const parsed = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+        if (parsed.consignmentProfitPercentage) consignmentProfitPct = parsed.consignmentProfitPercentage / 100;
+        if (parsed.cashOfferProfitPercentage) cashOfferProfitPct = parsed.cashOfferProfitPercentage / 100;
+        if (parsed.luxuryMinProfitFixed) luxuryMinProfit = parsed.luxuryMinProfitFixed;
+        if (parsed.luxuryMaxProfitFixed) luxuryMaxProfit = parsed.luxuryMaxProfitFixed;
+      }
+    } catch (e) {}
+
     const minProfit = fairMarketValue >= 2000000 
-      ? 200000 
-      : Math.min(200000, Math.max(30000, Math.round(fairMarketValue * 0.06)));
+      ? luxuryMinProfit 
+      : Math.min(luxuryMinProfit, Math.max(30000, Math.round(fairMarketValue * consignmentProfitPct)));
 
     const maxProfit = fairMarketValue >= 2000000 
-      ? 300000 
-      : Math.min(300000, Math.max(50000, Math.round(fairMarketValue * 0.12)));
+      ? luxuryMaxProfit 
+      : Math.min(luxuryMaxProfit, Math.max(50000, Math.round(fairMarketValue * cashOfferProfitPct)));
 
     const standardCashOffer = this.roundToCleanGalleryPrice(fairMarketValue - maxProfit);
     const standardConsignmentOffer = this.roundToCleanGalleryPrice(fairMarketValue - minProfit);

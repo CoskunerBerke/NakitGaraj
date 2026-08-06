@@ -23,6 +23,8 @@ import { RequirePermissions } from '../auth/permissions.decorator';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { TelegramService } from '../telegram/telegram.service';
 
+import { MarketSyncCronService } from '../vehicle/market-sync-cron.service';
+
 @Controller('admin')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class AdminController {
@@ -33,6 +35,7 @@ export class AdminController {
     private importService: ImportService,
     private scraperCronService: ScraperCronService,
     private telegramService: TelegramService,
+    private marketSyncCronService: MarketSyncCronService,
   ) {}
 
   @Get('dashboard')
@@ -234,5 +237,21 @@ Artık gelen tüm yeni <b>Araç Değerlemeleri</b> ve <b>Konsinye Başvuruları<
 `.trim();
 
     return this.telegramService.sendTelegramMessage(text, botToken, chatIds);
+  }
+
+  @Get('market-sync/settings')
+  async getMarketSyncSettings() {
+    return this.marketSyncCronService.getSettings();
+  }
+
+  @Post('market-sync/settings')
+  async saveMarketSyncSettings(@Body() body: any) {
+    const current = this.marketSyncCronService.getSettings();
+    const updated = {
+      ...current,
+      ...body,
+    };
+    this.marketSyncCronService.saveSettings(updated);
+    return { success: true, settings: updated };
   }
 }

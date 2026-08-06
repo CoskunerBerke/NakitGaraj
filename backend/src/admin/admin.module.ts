@@ -8,12 +8,15 @@ import { ImportModule } from '../import/import.module';
 import { EvaluationModule } from '../evaluation/evaluation.module';
 import { ScraperCronService } from '../scraper/scraper-cron.service';
 
+import { VehicleModule } from '../vehicle/vehicle.module';
+
 @Module({
   imports: [
     ConsignmentModule,
     AuditModule,
     ImportModule,
     EvaluationModule,
+    VehicleModule,
   ],
   providers: [
     AdminService,

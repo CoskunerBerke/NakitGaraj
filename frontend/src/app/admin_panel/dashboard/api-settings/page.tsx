@@ -21,9 +21,65 @@ export default function ApiSettingsPage() {
   const [telegramError, setTelegramError] = useState('');
   const [telegramTesting, setTelegramTesting] = useState(false);
 
+  // Galeri Kâr Marjı ve Piyasa Ayarları
+  const [consignmentProfitPct, setConsignmentProfitPct] = useState(6);
+  const [cashOfferProfitPct, setCashOfferProfitPct] = useState(12);
+  const [luxuryMinProfitFixed, setLuxuryMinProfitFixed] = useState(200000);
+  const [luxuryMaxProfitFixed, setLuxuryMaxProfitFixed] = useState(300000);
+  const [monthlyInflationPercentage, setMonthlyInflationPercentage] = useState(2.5);
+  const [profitSaveSuccess, setProfitSaveSuccess] = useState('');
+
   useEffect(() => {
     fetchTelegramSettings();
+    fetchProfitSettings();
   }, []);
+
+  const fetchProfitSettings = async () => {
+    try {
+      const token = localStorage.getItem('admin_token');
+      const res = await fetch(`${API_BASE}/admin/market-sync/settings`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setConsignmentProfitPct(data.consignmentProfitPercentage ?? 6);
+        setCashOfferProfitPct(data.cashOfferProfitPercentage ?? 12);
+        setLuxuryMinProfitFixed(data.luxuryMinProfitFixed ?? 200000);
+        setLuxuryMaxProfitFixed(data.luxuryMaxProfitFixed ?? 300000);
+        setMonthlyInflationPercentage(data.monthlyInflationPercentage ?? 2.5);
+      }
+    } catch (err) {
+      console.error('Kâr ayarları yüklenemedi:', err);
+    }
+  };
+
+  const handleSaveProfitSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setProfitSaveSuccess('');
+    try {
+      const token = localStorage.getItem('admin_token');
+      const res = await fetch(`${API_BASE}/admin/market-sync/settings`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          consignmentProfitPercentage: Number(consignmentProfitPct),
+          cashOfferProfitPercentage: Number(cashOfferProfitPct),
+          luxuryMinProfitFixed: Number(luxuryMinProfitFixed),
+          luxuryMaxProfitFixed: Number(luxuryMaxProfitFixed),
+          monthlyInflationPercentage: Number(monthlyInflationPercentage),
+        }),
+      });
+      if (res.ok) {
+        setProfitSaveSuccess('Galeri Kâr Marjı ve Piyasa Ayarları başarıyla güncellendi!');
+        setTimeout(() => setProfitSaveSuccess(''), 5000);
+      }
+    } catch (err) {
+      console.error('Kâr ayarları kaydedilemedi:', err);
+    }
+  };
 
   const fetchTelegramSettings = async () => {
     try {
@@ -292,6 +348,102 @@ export default function ApiSettingsPage() {
               className="bg-brand-orange hover:bg-brand-orange/90 text-white font-bold py-3.5 rounded-xl text-xs transition-all duration-300 w-full mt-4 cursor-pointer"
             >
               Lisans ve Sağlayıcı Ayarlarını Kaydet
+            </button>
+          </form>
+
+          {/* Galeri Kâr Marjı & Piyasa Oranları Ayarları */}
+          <form onSubmit={handleSaveProfitSettings} className="glass-card rounded-3xl p-6 md:p-8 border border-zinc-200 dark:border-white/5 flex flex-col gap-6">
+            <h3 className="text-sm font-bold text-zinc-900 dark:text-white flex items-center gap-2 border-b border-zinc-200 dark:border-white/5 pb-3">
+              <DollarSign className="w-4.5 h-4.5 text-emerald-500" />
+              Galeri Kâr Marjı & Piyasa Alım Oranları (Müşterinize Sunulan Fiyatlar)
+            </h3>
+
+            {profitSaveSuccess && (
+              <div className="bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-xs p-3.5 rounded-xl flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-500" />
+                <span>{profitSaveSuccess}</span>
+              </div>
+            )}
+
+            <p className="text-xs text-zinc-500 leading-relaxed">
+              Aracın Sahibinden Piyasa Satış Değeri (Piyasa Değeri / MAX) master kalibrasyon motoru tarafından belirlenir. Siz sadece galeri olarak <b>Konsinye Kâr Oranı</b> ve <b>Anında Nakit Alım Kâr Oranı</b> yüzdelerinizi ayarlarsınız.
+            </p>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="flex flex-col gap-2 bg-zinc-50 dark:bg-zinc-900/50 p-4 rounded-2xl border border-zinc-200 dark:border-zinc-800">
+                <div className="flex justify-between items-center">
+                  <label className="text-xs font-bold text-zinc-800 dark:text-zinc-200">🏪 Konsinye Bırakma Kâr Oranı (%)</label>
+                  <span className="text-xs font-bold text-emerald-500 font-mono">%{consignmentProfitPct}</span>
+                </div>
+                <input
+                  type="range"
+                  min="2"
+                  max="15"
+                  step="0.5"
+                  value={consignmentProfitPct}
+                  onChange={(e) => setConsignmentProfitPct(Number(e.target.value))}
+                  className="w-full accent-emerald-500 cursor-pointer"
+                />
+                <span className="text-[10px] text-zinc-400">Örn: Piyasa değeri 600.000 TL araçta %{consignmentProfitPct} kâr marjı düşülüp müşteriye <b>{(600000 * (1 - consignmentProfitPct / 100)).toLocaleString('tr-TR')} TL</b> Konsinye teklifi verilir.</span>
+              </div>
+
+              <div className="flex flex-col gap-2 bg-zinc-50 dark:bg-zinc-900/50 p-4 rounded-2xl border border-zinc-200 dark:border-zinc-800">
+                <div className="flex justify-between items-center">
+                  <label className="text-xs font-bold text-zinc-800 dark:text-zinc-200">⚡ Anında Nakit Alım Kâr Oranı (%)</label>
+                  <span className="text-xs font-bold text-brand-orange font-mono">%{cashOfferProfitPct}</span>
+                </div>
+                <input
+                  type="range"
+                  min="5"
+                  max="25"
+                  step="0.5"
+                  value={cashOfferProfitPct}
+                  onChange={(e) => setCashOfferProfitPct(Number(e.target.value))}
+                  className="w-full accent-brand-orange cursor-pointer"
+                />
+                <span className="text-[10px] text-zinc-400">Örn: Piyasa değeri 600.000 TL araçta %{cashOfferProfitPct} kâr marjı düşülüp müşteriye <b>{(600000 * (1 - cashOfferProfitPct / 100)).toLocaleString('tr-TR')} TL</b> Anında Nakit teklifi verilir.</span>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2">
+              <div className="flex flex-col gap-1.5">
+                <label className="text-xs font-semibold text-zinc-600 dark:text-zinc-400">Lüks Araç (>= 2M ₺) Min Konsinye Kârı (₺)</label>
+                <input
+                  type="number"
+                  value={luxuryMinProfitFixed}
+                  onChange={(e) => setLuxuryMinProfitFixed(Number(e.target.value))}
+                  className="glass-input rounded-xl p-3 text-xs font-mono"
+                />
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <label className="text-xs font-semibold text-zinc-600 dark:text-zinc-400">Lüks Araç (>= 2M ₺) Max Nakit Kârı (₺)</label>
+                <input
+                  type="number"
+                  value={luxuryMaxProfitFixed}
+                  onChange={(e) => setLuxuryMaxProfitFixed(Number(e.target.value))}
+                  className="glass-input rounded-xl p-3 text-xs font-mono"
+                />
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <label className="text-xs font-semibold text-zinc-600 dark:text-zinc-400">Aylık Otomatik Enflasyon Artışı (%)</label>
+                <input
+                  type="number"
+                  step="0.1"
+                  value={monthlyInflationPercentage}
+                  onChange={(e) => setMonthlyInflationPercentage(Number(e.target.value))}
+                  className="glass-input rounded-xl p-3 text-xs font-mono"
+                />
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 px-6 rounded-xl text-xs transition-all w-full sm:w-auto self-start cursor-pointer flex items-center gap-2 mt-2"
+            >
+              <CheckCircle2 className="w-4 h-4" />
+              Galeri Kâr Ayarlarını Kaydet
             </button>
           </form>
 

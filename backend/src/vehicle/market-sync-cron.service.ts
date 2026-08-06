@@ -8,6 +8,10 @@ import * as path from 'path';
 export interface MarketSyncSettings {
   enabled: boolean;
   monthlyInflationPercentage: number;
+  consignmentProfitPercentage: number;
+  cashOfferProfitPercentage: number;
+  luxuryMinProfitFixed: number;
+  luxuryMaxProfitFixed: number;
   lastSyncDate: string | null;
   totalSpecsUpdated: number;
 }
@@ -26,14 +30,28 @@ export class MarketSyncCronService {
     try {
       if (fs.existsSync(this.settingsFilePath)) {
         const raw = fs.readFileSync(this.settingsFilePath, 'utf8');
-        return JSON.parse(raw);
+        const parsed = JSON.parse(raw);
+        return {
+          enabled: parsed.enabled ?? true,
+          monthlyInflationPercentage: parsed.monthlyInflationPercentage ?? 2.5,
+          consignmentProfitPercentage: parsed.consignmentProfitPercentage ?? 6.0,
+          cashOfferProfitPercentage: parsed.cashOfferProfitPercentage ?? 12.0,
+          luxuryMinProfitFixed: parsed.luxuryMinProfitFixed ?? 200000,
+          luxuryMaxProfitFixed: parsed.luxuryMaxProfitFixed ?? 300000,
+          lastSyncDate: parsed.lastSyncDate ?? null,
+          totalSpecsUpdated: parsed.totalSpecsUpdated ?? 0,
+        };
       }
     } catch (err) {
       this.logger.error('Failed to read market-sync-settings.json', err);
     }
     const defaultSettings: MarketSyncSettings = {
       enabled: true,
-      monthlyInflationPercentage: 2.5, // Default 2.5% monthly auto-update
+      monthlyInflationPercentage: 2.5,
+      consignmentProfitPercentage: 6.0,
+      cashOfferProfitPercentage: 12.0,
+      luxuryMinProfitFixed: 200000,
+      luxuryMaxProfitFixed: 300000,
       lastSyncDate: null,
       totalSpecsUpdated: 0,
     };
