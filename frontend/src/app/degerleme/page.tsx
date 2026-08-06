@@ -689,6 +689,7 @@ export default function ValuationWizard() {
                   )}
                 </div>
                 <select
+                  suppressHydrationWarning
                   disabled={!selectedBrand}
                   value={selectedYear}
                   onChange={(e) => {
@@ -790,6 +791,7 @@ export default function ValuationWizard() {
                   )}
                 </div>
                 <select
+                  suppressHydrationWarning
                   disabled={!selectedModel}
                   value={selectedVariant}
                   onChange={(e) => {
@@ -833,6 +835,7 @@ export default function ValuationWizard() {
                   )}
                 </div>
                 <select
+                  suppressHydrationWarning
                   disabled={!selectedVariant}
                   value={selectedPackage}
                   onChange={(e) => {
