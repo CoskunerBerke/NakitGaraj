@@ -18,17 +18,17 @@ interface ExtractedListing {
   externalListingId?: string;
 }
 
-function detectMakeAndModel(filename: string, modelTagText: string, titleText: string): { make: string; model: string } {
-  const combined = `${filename} ${modelTagText} ${titleText}`.toUpperCase();
+function detectMakeAndModel(filename: string, modelTagText: string, titleText: string, folderName: string): { make: string; model: string } {
+  const combined = `${folderName} ${filename} ${modelTagText} ${titleText}`.toUpperCase();
 
   // Known Manufacturers Map
   let make = 'Audi';
 
-  if (combined.includes('ALFA ROMEO') || combined.includes('ALFAROMEO')) {
+  if (combined.includes('ALFA ROMEO') || combined.includes('ALFAROMEO') || folderName.toUpperCase().includes('ALFA')) {
     make = 'Alfa Romeo';
-  } else if (combined.includes('BMW')) {
+  } else if (combined.includes('BMW') || folderName.toUpperCase().includes('BMW')) {
     make = 'BMW';
-  } else if (combined.includes('AUDI')) {
+  } else if (combined.includes('AUDI') || folderName.toUpperCase().includes('AUDI')) {
     make = 'Audi';
   } else if (combined.includes('MERCEDES')) {
     make = 'Mercedes-Benz';
@@ -126,6 +126,7 @@ function parseSingleHtmlFile(filePath: string): ExtractedListing[] {
   const rows = document.querySelectorAll('tr');
   const listings: ExtractedListing[] = [];
   const filename = path.basename(filePath);
+  const folderName = path.basename(path.dirname(filePath));
 
   rows.forEach((rowElement: Element) => {
     try {
@@ -167,7 +168,7 @@ function parseSingleHtmlFile(filePath: string): ExtractedListing[] {
       }
 
       // Dynamic Brand & Model detection
-      const { make, model } = detectMakeAndModel(filename, modelTagText, titleText);
+      const { make, model } = detectMakeAndModel(filename, modelTagText, titleText, folderName);
 
       // Variant
       let variant = modelTagText || 'Standart';
@@ -208,6 +209,23 @@ function parseSingleHtmlFile(filePath: string): ExtractedListing[] {
   return listings;
 }
 
+function getAllHtmlFilesRecursively(dirPath: string): string[] {
+  let results: string[] = [];
+  const list = fs.readdirSync(dirPath);
+
+  list.forEach((file) => {
+    const filePath = path.join(dirPath, file);
+    const stat = fs.statSync(filePath);
+    if (stat && stat.isDirectory()) {
+      results = results.concat(getAllHtmlFilesRecursively(filePath));
+    } else if (file.endsWith('.html') || file.endsWith('.htm')) {
+      results.push(filePath);
+    }
+  });
+
+  return results;
+}
+
 async function main() {
   const targetArg = process.argv[2] || `C:\\Users\\berke\\OneDrive\\Masaüstü\\sahibindne ilan`;
   const absolutePath = path.isAbsolute(targetArg) ? targetArg : path.join(process.cwd(), targetArg);
@@ -217,10 +235,7 @@ async function main() {
   if (fs.existsSync(absolutePath)) {
     const stat = fs.statSync(absolutePath);
     if (stat.isDirectory()) {
-      const files = fs.readdirSync(absolutePath);
-      htmlFiles = files
-        .filter((f) => f.endsWith('.html') || f.endsWith('.htm'))
-        .map((f) => path.join(absolutePath, f));
+      htmlFiles = getAllHtmlFilesRecursively(absolutePath);
     } else {
       htmlFiles = [absolutePath];
     }
@@ -230,7 +245,7 @@ async function main() {
   }
 
   console.log(`\n====================================================================`);
-  console.log(`  ${htmlFiles.length} ADET HTML DOSYASI AŞAMALI OLARAK TARANIYOR`);
+  console.log(`  ${htmlFiles.length} ADET HTML DOSYASI TARANIYOR (${path.basename(absolutePath)})`);
   console.log(`====================================================================\n`);
 
   let allListings: ExtractedListing[] = [];
