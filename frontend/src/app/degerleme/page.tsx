@@ -540,6 +540,7 @@ export default function ValuationWizard() {
             <button
               type="button"
               disabled={s >= step}
+              suppressHydrationWarning
               onClick={() => {
                 if (s < step) setStep(s);
               }}

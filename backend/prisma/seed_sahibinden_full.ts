@@ -29,6 +29,149 @@ interface BrandSeed {
 }
 
 export const masterSahibindenData: BrandSeed[] = [
+  // ================= 0. VOLVO =================
+  {
+    brand: 'Volvo',
+    popularityScore: 9.4,
+    models: [
+      {
+        name: 'S90',
+        popularityScore: 9.6,
+        variants: [
+          { name: '2.0 D B5 Plus Bright', engineSize: 1969, horsepower: 235, torque: 480, cylinders: 4, body: 'Sedan', fuel: 'Dizel', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 6800000, packages: ['Plus Bright', 'Plus Dark', 'Ultimate Bright', 'Ultimate Dark', 'Standart'] },
+          { name: '2.0 D B5', engineSize: 1969, horsepower: 235, torque: 480, cylinders: 4, body: 'Sedan', fuel: 'Dizel', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 6800000, packages: ['Plus Bright', 'Plus Dark', 'Ultimate Bright', 'Ultimate Dark', 'Standart'] },
+          { name: '2.0 D D4', engineSize: 1969, horsepower: 190, torque: 400, cylinders: 4, body: 'Sedan', fuel: 'Dizel', trans: 'Otomatik', drive: 'Önden Çekiş', basePrice: 4800000, packages: ['Inscription', 'Momentum', 'R-Design', 'Standart'] },
+          { name: '2.0 D D5', engineSize: 1969, horsepower: 235, torque: 480, cylinders: 4, body: 'Sedan', fuel: 'Dizel', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 5200000, packages: ['Inscription', 'Momentum', 'R-Design', 'Standart'] },
+          { name: '2.0 T8 Recharge Plus Dark', engineSize: 1969, horsepower: 455, torque: 709, cylinders: 4, body: 'Sedan', fuel: 'Hibrit', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 7200000, packages: ['Plus Bright', 'Plus Dark', 'Ultimate Bright', 'Ultimate Dark', 'Standart'] },
+          { name: '2.0 T8 Recharge', engineSize: 1969, horsepower: 455, torque: 709, cylinders: 4, body: 'Sedan', fuel: 'Hibrit', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 7200000, packages: ['Plus Bright', 'Plus Dark', 'Ultimate Bright', 'Ultimate Dark', 'Standart'] },
+          { name: '3.0', engineSize: 2922, horsepower: 272, torque: 380, cylinders: 6, body: 'Sedan', fuel: 'Benzin', trans: 'Otomatik', drive: 'Önden Çekiş', basePrice: 1800000, packages: ['Standart'] },
+        ],
+      },
+      {
+        name: 'S60',
+        popularityScore: 9.2,
+        variants: [
+          { name: '2.0 B5', engineSize: 1969, horsepower: 250, torque: 350, cylinders: 4, body: 'Sedan', fuel: 'Benzin', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 3600000, packages: ['Plus Dark', 'Plus Bright', 'Ultimate Dark', 'Inscription', 'Momentum', 'R-Design'] },
+          { name: '2.0 D D4', engineSize: 1969, horsepower: 190, torque: 400, cylinders: 4, body: 'Sedan', fuel: 'Dizel', trans: 'Otomatik', drive: 'Önden Çekiş', basePrice: 2800000, packages: ['Inscription', 'Momentum', 'R-Design'] },
+          { name: '1.6 D D2', engineSize: 1560, horsepower: 115, torque: 270, cylinders: 4, body: 'Sedan', fuel: 'Dizel', trans: 'Otomatik', drive: 'Önden Çekiş', basePrice: 1600000, packages: ['Advance', 'Premium', 'Standart'] },
+          { name: '1.6 T T4', engineSize: 1596, horsepower: 180, torque: 240, cylinders: 4, body: 'Sedan', fuel: 'Benzin', trans: 'Otomatik', drive: 'Önden Çekiş', basePrice: 1700000, packages: ['Advance', 'Premium', 'R-Design'] },
+        ],
+      },
+      {
+        name: 'S80',
+        popularityScore: 8.5,
+        variants: [
+          { name: '1.6 D D2', engineSize: 1560, horsepower: 115, torque: 270, cylinders: 4, body: 'Sedan', fuel: 'Dizel', trans: 'Otomatik', drive: 'Önden Çekiş', basePrice: 1400000, packages: ['Executive', 'Premium', 'Standart'] },
+          { name: '2.0 D D4', engineSize: 1969, horsepower: 181, torque: 400, cylinders: 4, body: 'Sedan', fuel: 'Dizel', trans: 'Otomatik', drive: 'Önden Çekiş', basePrice: 1800000, packages: ['Executive', 'Standart'] },
+          { name: '2.4 D D5', engineSize: 2400, horsepower: 215, torque: 440, cylinders: 5, body: 'Sedan', fuel: 'Dizel', trans: 'Otomatik', drive: 'Önden Çekiş', basePrice: 1900000, packages: ['Executive', 'Standart'] },
+        ],
+      },
+      {
+        name: 'XC90',
+        popularityScore: 9.7,
+        variants: [
+          { name: '2.0 B5', engineSize: 1969, horsepower: 250, torque: 350, cylinders: 4, body: 'SUV', fuel: 'Benzin', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 11500000, packages: ['Plus Bright', 'Plus Dark', 'Ultimate Bright'] },
+          { name: '2.0 D B5', engineSize: 1969, horsepower: 235, torque: 480, cylinders: 4, body: 'SUV', fuel: 'Dizel', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 11500000, packages: ['Plus Bright', 'Plus Dark', 'Ultimate Bright'] },
+          { name: '2.0 D D5', engineSize: 1969, horsepower: 235, torque: 480, cylinders: 4, body: 'SUV', fuel: 'Dizel', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 8500000, packages: ['Inscription', 'Momentum', 'R-Design'] },
+          { name: '2.0 T8 Recharge', engineSize: 1969, horsepower: 455, torque: 709, cylinders: 4, body: 'SUV', fuel: 'Hibrit', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 12500000, packages: ['Excellence', 'Inscription', 'Ultimate'] },
+        ],
+      },
+      {
+        name: 'XC60',
+        popularityScore: 9.5,
+        variants: [
+          { name: '2.0 B5', engineSize: 1969, horsepower: 250, torque: 350, cylinders: 4, body: 'SUV', fuel: 'Benzin', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 7200000, packages: ['Plus Dark', 'Plus Bright', 'Ultimate Dark'] },
+          { name: '2.0 D B5', engineSize: 1969, horsepower: 235, torque: 480, cylinders: 4, body: 'SUV', fuel: 'Dizel', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 7200000, packages: ['Plus Dark', 'Plus Bright', 'Ultimate Dark'] },
+          { name: '2.0 D D4', engineSize: 1969, horsepower: 190, torque: 400, cylinders: 4, body: 'SUV', fuel: 'Dizel', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 4800000, packages: ['Inscription', 'Momentum', 'R-Design'] },
+          { name: '2.0 D D5', engineSize: 1969, horsepower: 235, torque: 480, cylinders: 4, body: 'SUV', fuel: 'Dizel', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 5200000, packages: ['Inscription', 'Momentum', 'R-Design'] },
+        ],
+      },
+      {
+        name: 'XC40',
+        popularityScore: 9.3,
+        variants: [
+          { name: '1.5 T3', engineSize: 1477, horsepower: 163, torque: 265, cylinders: 3, body: 'SUV', fuel: 'Benzin', trans: 'Otomatik', drive: 'Önden Çekiş', basePrice: 2800000, packages: ['Inscription', 'Momentum', 'R-Design'] },
+          { name: '2.0 B4', engineSize: 1969, horsepower: 197, torque: 300, cylinders: 4, body: 'SUV', fuel: 'Benzin', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 3900000, packages: ['Inscription', 'Momentum', 'R-Design'] },
+          { name: 'Recharge Electric P8', engineSize: 0, horsepower: 408, torque: 660, cylinders: 0, body: 'SUV', fuel: 'Elektrik', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 4200000, packages: ['Plus', 'Ultimate'] },
+        ],
+      },
+      {
+        name: 'V40',
+        popularityScore: 8.8,
+        variants: [
+          { name: '1.6 D D2', engineSize: 1560, horsepower: 115, torque: 270, cylinders: 4, body: 'Hatchback', fuel: 'Dizel', trans: 'Otomatik', drive: 'Önden Çekiş', basePrice: 1500000, packages: ['Advance', 'Premium', 'R-Design'] },
+          { name: '1.5 T3', engineSize: 1498, horsepower: 152, torque: 250, cylinders: 4, body: 'Hatchback', fuel: 'Benzin', trans: 'Otomatik', drive: 'Önden Çekiş', basePrice: 1600000, packages: ['Advance', 'Premium', 'R-Design'] },
+        ],
+      },
+      {
+        name: 'V40 Cross Country',
+        popularityScore: 8.7,
+        variants: [
+          { name: '1.6 D D2', engineSize: 1560, horsepower: 115, torque: 270, cylinders: 4, body: 'Hatchback', fuel: 'Dizel', trans: 'Otomatik', drive: 'Önden Çekiş', basePrice: 1600000, packages: ['Advance', 'Premium'] },
+          { name: '1.5 T3', engineSize: 1498, horsepower: 152, torque: 250, cylinders: 4, body: 'Hatchback', fuel: 'Benzin', trans: 'Otomatik', drive: 'Önden Çekiş', basePrice: 1700000, packages: ['Advance', 'Premium'] },
+        ],
+      },
+      {
+        name: 'V60',
+        popularityScore: 8.6,
+        variants: [
+          { name: '2.0 B5 Cross Country', engineSize: 1969, horsepower: 250, torque: 350, cylinders: 4, body: 'Station Wagon', fuel: 'Benzin', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 4200000, packages: ['Cross Country', 'Plus Dark'] },
+          { name: '2.0 D D4', engineSize: 1969, horsepower: 190, torque: 400, cylinders: 4, body: 'Station Wagon', fuel: 'Dizel', trans: 'Otomatik', drive: 'Önden Çekiş', basePrice: 3200000, packages: ['Inscription', 'Momentum'] },
+        ],
+      },
+      {
+        name: 'V60 Cross Country',
+        popularityScore: 8.7,
+        variants: [
+          { name: '2.0 B5', engineSize: 1969, horsepower: 250, torque: 350, cylinders: 4, body: 'Station Wagon', fuel: 'Benzin', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 4300000, packages: ['Cross Country', 'Plus Dark'] },
+        ],
+      },
+      {
+        name: 'V90',
+        popularityScore: 8.7,
+        variants: [
+          { name: '2.0 D B5 Cross Country', engineSize: 1969, horsepower: 235, torque: 480, cylinders: 4, body: 'Station Wagon', fuel: 'Dizel', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 7000000, packages: ['Cross Country', 'Plus', 'Ultimate'] },
+          { name: '2.0 D D5 Cross Country', engineSize: 1969, horsepower: 235, torque: 480, cylinders: 4, body: 'Station Wagon', fuel: 'Dizel', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 5800000, packages: ['Cross Country Pro', 'Inscription'] },
+        ],
+      },
+      {
+        name: 'V90 Cross Country',
+        popularityScore: 8.8,
+        variants: [
+          { name: '2.0 D B5', engineSize: 1969, horsepower: 235, torque: 480, cylinders: 4, body: 'Station Wagon', fuel: 'Dizel', trans: 'Otomatik', drive: '4 Çeker (AWD)', basePrice: 7000000, packages: ['Cross Country', 'Plus', 'Ultimate'] },
+        ],
+      },
+      {
+        name: 'S40',
+        popularityScore: 8.9,
+        variants: [
+          { name: '1.6 D', engineSize: 1560, horsepower: 109, torque: 240, cylinders: 4, body: 'Sedan', fuel: 'Dizel', trans: 'Manuel', drive: 'Önden Çekiş', basePrice: 850000, packages: ['Base', 'Dynamic', 'Premium'] },
+          { name: '1.6', engineSize: 1596, horsepower: 100, torque: 150, cylinders: 4, body: 'Sedan', fuel: 'Benzin', trans: 'Manuel', drive: 'Önden Çekiş', basePrice: 750000, packages: ['Base', 'Dynamic'] },
+        ],
+      },
+      {
+        name: 'C30',
+        popularityScore: 8.1,
+        variants: [
+          { name: '1.6 D', engineSize: 1560, horsepower: 109, torque: 240, cylinders: 4, body: 'Hatchback', fuel: 'Dizel', trans: 'Manuel', drive: 'Önden Çekiş', basePrice: 750000, packages: ['R-Design', 'Standart'] },
+        ],
+      },
+      {
+        name: 'C70',
+        popularityScore: 7.9,
+        variants: [
+          { name: '2.0 D', engineSize: 1997, horsepower: 136, torque: 320, cylinders: 4, body: 'Cabrio', fuel: 'Dizel', trans: 'Otomatik', drive: 'Önden Çekiş', basePrice: 1100000, packages: ['Standart'] },
+        ],
+      },
+      {
+        name: 'S70',
+        popularityScore: 7.5,
+        variants: [
+          { name: '2.0 T5', engineSize: 1984, horsepower: 225, torque: 310, cylinders: 5, body: 'Sedan', fuel: 'Benzin', trans: 'Manuel', drive: 'Önden Çekiş', basePrice: 650000, packages: ['Standart'] },
+        ],
+      },
+    ],
+  },
   // ================= 1. BMW =================
   {
     brand: 'BMW',
@@ -427,10 +570,10 @@ export const masterSahibindenData: BrandSeed[] = [
         name: 'Accent',
         popularityScore: 9.4,
         variants: [
-          { name: '1.3', engineSize: 1341, horsepower: 85, torque: 118, cylinders: 4, body: 'Sedan', fuel: 'Benzin', trans: 'Manuel', drive: 'Önden Çekiş', basePrice: 320000, packages: ['1.3i L', 'Admire', 'GL Active', 'GL Comfort', 'GLS', 'GLS Active', 'L Comfort', 'LS'] },
-          { name: '1.5 CRDi', engineSize: 1493, horsepower: 82, torque: 180, cylinders: 3, body: 'Sedan', fuel: 'Dizel', trans: 'Manuel', drive: 'Önden Çekiş', basePrice: 350000, packages: ['Active', 'Admire', 'Comfort', 'GLS', 'LS'] },
-          { name: '1.5 D', engineSize: 1493, horsepower: 82, torque: 180, cylinders: 3, body: 'Sedan', fuel: 'Dizel', trans: 'Manuel', drive: 'Önden Çekiş', basePrice: 310000, packages: ['GL', 'GLS'] },
-          { name: '1.6', engineSize: 1599, horsepower: 105, torque: 143, cylinders: 4, body: 'Sedan', fuel: 'Benzin', trans: 'Otomatik', drive: 'Önden Çekiş', basePrice: 380000, packages: ['Admire', 'GLS'] },
+          { name: '1.3', engineSize: 1341, horsepower: 85, torque: 118, cylinders: 4, body: 'Sedan', fuel: 'Benzin', trans: 'Manuel', drive: 'Önden Çekiş', basePrice: 950000, packages: ['1.3i L', 'Admire', 'GL Active', 'GL Comfort', 'GLS', 'GLS Active', 'L Comfort', 'LS'] },
+          { name: '1.5 CRDi', engineSize: 1493, horsepower: 82, torque: 180, cylinders: 3, body: 'Sedan', fuel: 'Dizel', trans: 'Manuel', drive: 'Önden Çekiş', basePrice: 1050000, packages: ['Active', 'Admire', 'Comfort', 'GLS', 'LS'] },
+          { name: '1.5 D', engineSize: 1493, horsepower: 82, torque: 180, cylinders: 3, body: 'Sedan', fuel: 'Dizel', trans: 'Manuel', drive: 'Önden Çekiş', basePrice: 950000, packages: ['GL', 'GLS'] },
+          { name: '1.6', engineSize: 1599, horsepower: 105, torque: 143, cylinders: 4, body: 'Sedan', fuel: 'Benzin', trans: 'Otomatik', drive: 'Önden Çekiş', basePrice: 1250000, packages: ['Admire', 'GLS'] },
         ],
       },
       {
@@ -793,6 +936,10 @@ export async function seedSahibindenMasterData() {
   }
 
   console.log('--- ALL POPULAR AUTOMOTIVE BRANDS SEEDED SUCCESSFULLY ---');
+
+  // Automatically run V4 recalibration after seeding
+  const { recalibrateAllSpecs } = require('../src/recalibrate_all_vehicle_variants');
+  await recalibrateAllSpecs(prisma);
 }
 
 if (require.main === module) {

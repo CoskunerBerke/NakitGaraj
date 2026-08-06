@@ -97,15 +97,20 @@ export class EvaluationService {
       floorPrice = 12000000;
       isExotic = true;
     }
-    // 2. Exotic / High-End Sports Tier (Sahibinden 2026: 18-25M)
+    // 2. Exotic / High-End Performance Tier (Sahibinden 2026: 18-25M)
     else if (
       lowerBrand.includes('porsche') ||
       lowerBrand.includes('maserati') ||
-      lowerModel.includes('r8') ||
-      lowerModel.includes('amg gt')
+      lowerModel.includes('m5') || lowerModel.includes('m 5') ||
+      lowerModel.includes('m8') || lowerModel.includes('m 8') ||
+      lowerModel.includes('xm') ||
+      lowerModel.includes('g 63') || lowerModel.includes('g63') ||
+      lowerModel.includes('amg gt') || lowerModel.includes('gt 63') ||
+      lowerModel.includes('rs6') || lowerModel.includes('rs7') || lowerModel.includes('rsq8') ||
+      lowerModel.includes('r8')
     ) {
-      basePrice2026 = 18000000;
-      floorPrice = 6000000;
+      basePrice2026 = 24500000;
+      floorPrice = 8000000;
       isExotic = true;
     }
     // 3. Lüks / Executive Tier (Sahibinden 2026: 15-28M)
@@ -125,14 +130,8 @@ export class EvaluationService {
       floorPrice = 6500000;
       isPremium = true;
     }
-    // 4. Mid-Premium Tier (Sahibinden 2026: 8-15M)
+    // 4a. Large SUV / Top Executive Tier (Sahibinden 2026: 11-15M)
     else if (
-      lowerModel.includes('e-class') || lowerModel.includes('e serisi') ||
-      lowerModel.includes('5 series') || lowerModel.includes('5 serisi') ||
-      lowerModel.includes('a6') ||
-      lowerModel.includes('a7') ||
-      lowerModel.includes('s90') ||
-      lowerModel.includes('v90') ||
       lowerModel.includes('xc90') ||
       lowerModel.includes('x5') ||
       lowerModel.includes('x6') ||
@@ -143,8 +142,24 @@ export class EvaluationService {
       lowerModel.includes('velar') ||
       lowerModel.includes('discovery')
     ) {
-      basePrice2026 = 12500000;
-      floorPrice = 3500000;
+      basePrice2026 = 11500000;
+      floorPrice = 3000000;
+      isPremium = true;
+    }
+    // 4b. Executive Sedan & Mid SUV Tier (Volvo S90, V90, XC60, Audi A6, BMW 5, E-Class) (Sahibinden 2026: 6.8-8M)
+    else if (
+      lowerModel.includes('s90') ||
+      lowerModel.includes('v90') ||
+      lowerModel.includes('xc60') ||
+      lowerModel.includes('e-class') || lowerModel.includes('e serisi') ||
+      lowerModel.includes('5 series') || lowerModel.includes('5 serisi') ||
+      lowerModel.includes('a6') ||
+      lowerModel.includes('a7') ||
+      lowerModel.includes('s90') ||
+      lowerModel.includes('v90')
+    ) {
+      basePrice2026 = 7200000;
+      floorPrice = 1000000;
       isPremium = true;
     }
     // 5. Compact Premium Tier (Sahibinden 2026: 3.2-4.5M)
@@ -190,8 +205,8 @@ export class EvaluationService {
       lowerModel.includes('a1') ||
       (lowerBrand.includes('volvo') && (lowerModel.includes('v40') || lowerModel.includes('c30')))
     ) {
-      basePrice2026 = 3200000;
-      floorPrice = 1100000;
+      basePrice2026 = 3700000;
+      floorPrice = 1250000;
       isPremium = true;
     }
     // 7. D-Segment / Upper-Mid Tier (Sahibinden 2026: 2.3-3.2M)
@@ -208,8 +223,8 @@ export class EvaluationService {
       lowerModel.includes('sorento') ||
       lowerModel.includes('outback')
     ) {
-      basePrice2026 = 3100000;
-      floorPrice = 1100000;
+      basePrice2026 = 3600000;
+      floorPrice = 1250000;
     }
     // 8a. Premium Standard SUV (Sahibinden 2026: 2.2-3.0M)
     else if (
@@ -222,8 +237,8 @@ export class EvaluationService {
       lowerModel.includes('outlander') ||
       lowerModel.includes('koleos')
     ) {
-      basePrice2026 = 2900000;
-      floorPrice = 1000000;
+      basePrice2026 = 3500000;
+      floorPrice = 1200000;
     }
     // 8b. Mid Standard SUV / Crossover (Sahibinden 2026: 1.8-2.5M)
     else if (
@@ -241,8 +256,8 @@ export class EvaluationService {
       lowerModel.includes('tiggo') ||
       lowerModel.includes('t10x')
     ) {
-      basePrice2026 = 2650000;
-      floorPrice = 950000;
+      basePrice2026 = 3000000;
+      floorPrice = 1050000;
     }
     // 8c. Budget SUV / MPV (Sahibinden 2026: 1.3-1.8M)
     else if (
@@ -261,8 +276,8 @@ export class EvaluationService {
       lowerModel.includes('t-cross') ||
       lowerModel.includes('t-roc')
     ) {
-      basePrice2026 = 1950000;
-      floorPrice = 750000;
+      basePrice2026 = 2200000;
+      floorPrice = 850000;
     }
     // 9. Standard C-Segment Sedan/HB (Sahibinden 2026: 1.7-2.0M for 2023)
     // Golf, Megane, Focus, Corolla, Civic, Astra, Leon, Octavia, Cerato, Elantra
@@ -282,8 +297,8 @@ export class EvaluationService {
       lowerModel.includes('308') ||
       lowerModel.includes('c4')
     ) {
-      basePrice2026 = 2150000;
-      floorPrice = 750000;
+      basePrice2026 = 2450000;
+      floorPrice = 880000;
     }
     // 10. Compact Economy / B-Segment (Sahibinden 2026: 1.0-1.4M)
     else if (
@@ -316,20 +331,23 @@ export class EvaluationService {
       lowerModel.includes('swift') ||
       lowerModel.includes('baleno')
     ) {
-      basePrice2026 = 1500000;
-      floorPrice = 600000;
+      basePrice2026 = 1700000;
+      floorPrice = 680000;
       isEconomy = true;
     }
 
-    // Use database market price or spec.originalMSRP if present
+    // Authoritative pricing: spec.originalMSRP is calibrated from real Sahibinden market data
     const dbMarket = spec.marketPrices && spec.marketPrices.length > 0 ? spec.marketPrices[0] : null;
-    let baseValuation = (spec.originalMSRP && spec.originalMSRP > 0) ? spec.originalMSRP : basePrice2026;
-    if (dbMarket && dbMarket.currentMarketAverage > 0) {
-      baseValuation = dbMarket.currentMarketAverage;
-    } else if (!spec.originalMSRP && dto.year < 2026) {
+    let baseValuation = (spec.originalMSRP && spec.originalMSRP > 0)
+      ? spec.originalMSRP
+      : (dbMarket && dbMarket.currentMarketAverage > 0 ? dbMarket.currentMarketAverage : basePrice2026);
+
+    if (!spec.originalMSRP && (!dbMarket || !dbMarket.currentMarketAverage) && dto.year < 2026) {
+      // Floor-based decay: value never drops below floorPrice
       const carAge = 2026 - dto.year;
       const decayRate = (isPremium || isExotic) ? 0.94 : 0.88;
-      baseValuation = Math.max(floorPrice, Math.round(baseValuation * Math.pow(decayRate, carAge)));
+      const decayedPortion = (baseValuation - floorPrice) * Math.pow(decayRate, carAge);
+      baseValuation = Math.round(floorPrice + decayedPortion);
     }
 
     const calculatedBasePrice = baseValuation;
@@ -563,12 +581,21 @@ export class EvaluationService {
     let fairMarketValue = Math.min(Math.round(baseValuationFinal * conditionFactor), sahibindenMaxCap);
     fairMarketValue = this.roundToCleanGalleryPrice(fairMarketValue);
 
-    // REALISTIC TURKISH GALERİ CASH & CONSIGNMENT MODEL:
-    // 1. Anında Nakit Alım Teklifi (standardCashOffer): %80 Piyasa Değeri (Galerimize %20 net kâr)
-    // 2. Dükkan Konsinye Teklifi (standardConsignmentOffer): %94-95 Piyasa Değeri (Asla Piyasa Satış Değerini geçemez)
-    const cashMargin = fairMarketValue >= 2000000 ? 0.80 : 0.82;
-    const standardCashOffer = this.roundToCleanGalleryPrice(fairMarketValue * cashMargin);
-    const standardConsignmentOffer = this.roundToCleanGalleryPrice(fairMarketValue * 0.94);
+    // REALISTIC TURKISH GALERİ CASH & CONSIGNMENT PROFIT MODEL:
+    // User Mandate: 
+    // - Consignment Offer = FairMarket - 200.000 TL (Galerinin MINIMUM 200 bin TL kârı)
+    // - Cash Offer = FairMarket - 300.000 TL (Galerinin MAXIMUM 300 bin TL kârı)
+    // (Bütçe araçlar için oran ölçeklenir, lüks araçlarda sabit 200k/300k kâr korunur)
+    const minProfit = fairMarketValue >= 2000000 
+      ? 200000 
+      : Math.min(200000, Math.max(30000, Math.round(fairMarketValue * 0.06)));
+
+    const maxProfit = fairMarketValue >= 2000000 
+      ? 300000 
+      : Math.min(300000, Math.max(50000, Math.round(fairMarketValue * 0.12)));
+
+    const standardCashOffer = this.roundToCleanGalleryPrice(fairMarketValue - maxProfit);
+    const standardConsignmentOffer = this.roundToCleanGalleryPrice(fairMarketValue - minProfit);
 
     let finalOfferedPrice = standardCashOffer;
     let finalConsignmentPrice = standardConsignmentOffer;
@@ -577,7 +604,7 @@ export class EvaluationService {
 
     if (userDesiredPrice > 0) {
       if (userDesiredPrice < 200000) {
-        // A. Troll / Geçersiz Rakam (1 TL, 100 TL, 50.000 TL):
+        // A. Troll / Geçersiz Rakam:
         finalOfferedPrice = standardCashOffer;
         finalConsignmentPrice = standardConsignmentOffer;
         aiAnalysis.push(
@@ -585,31 +612,31 @@ export class EvaluationService {
         );
       } 
       else if (userDesiredPrice <= standardCashOffer) {
-        // B. MÜŞTERİ BİZİM NAKİT TEKLİFİMİZDEN DAHİ DÜŞÜK İSTİYOR!
+        // B. Müşteri teklifimizden düşük istiyor
         finalOfferedPrice = this.roundToCleanGalleryPrice(userDesiredPrice);
-        finalConsignmentPrice = this.roundToCleanGalleryPrice(Math.min(userDesiredPrice * 1.10, standardConsignmentOffer));
+        finalConsignmentPrice = this.roundToCleanGalleryPrice(Math.min(userDesiredPrice + 50000, standardConsignmentOffer));
       } 
-      else if (userDesiredPrice <= Math.round(fairMarketValue * 0.95)) {
-        // C. MÜŞTERİ MAKUL BİR PİYASA FİYATI İSTİYOR (Örn: 7.500.000 ₺ vb.)
-        finalOfferedPrice = this.roundToCleanGalleryPrice(Math.min(userDesiredPrice, standardCashOffer));
+      else if (userDesiredPrice <= standardConsignmentOffer) {
+        // C. Müşteri makul bir fiyat istiyor
+        finalOfferedPrice = standardCashOffer;
         finalConsignmentPrice = this.roundToCleanGalleryPrice(userDesiredPrice);
       } 
       else {
-        // D. MÜŞTERİ PİYASANIN VEYA KONSİNYE TAVANININ ÜSTÜNDE FİYAT İSTİYOR (Örn: 10M ₺ vb.)
+        // D. Müşteri tavan konsinye üstünde fiyat istiyor
         finalOfferedPrice = standardCashOffer;
         finalConsignmentPrice = standardConsignmentOffer;
         aiAnalysis.push(
-          `Girdiğiniz fiyat beklentisi (${userDesiredPrice.toLocaleString('tr-TR')} ₺), Sahibinden.com piyasa satış ortalamasının (${fairMarketValue.toLocaleString('tr-TR')} ₺) üzerindedir. Dükkanımızda alıcı bulabilmesi için tavan konsinye satış fiyatımız ${standardConsignmentOffer.toLocaleString('tr-TR')} ₺ olarak belirlenmiştir.`
+          `Girdiğiniz fiyat beklentisi (${userDesiredPrice.toLocaleString('tr-TR')} ₺), Sahibinden.com piyasa satış ortalamasının (${fairMarketValue.toLocaleString('tr-TR')} ₺) üzerindedir. Dükkanımızda alıcı bulabilmesi ve minimum kâr marjımız korunabilmesi için tavan konsinye satış fiyatımız ${standardConsignmentOffer.toLocaleString('tr-TR')} ₺ olarak belirlenmiştir.`
         );
       }
     }
 
-    // STRICT SAFETY: Konsinye Fiyatı asla Sahibinden Piyasa Satış Değerini ve Tavanı geçemez!
-    finalConsignmentPrice = this.roundToCleanGalleryPrice(Math.min(finalConsignmentPrice, Math.round(fairMarketValue * 0.95)));
+    // STRICT SAFETY: Konsinye Fiyatı asla (Piyasa - minProfit) tavanını geçemez!
+    finalConsignmentPrice = this.roundToCleanGalleryPrice(Math.min(finalConsignmentPrice, standardConsignmentOffer));
 
     const estimatedValue = finalOfferedPrice;
-    const minExpectedValue = this.roundToCleanGalleryPrice(finalOfferedPrice * 0.94);
-    const quickSaleValue = this.roundToCleanGalleryPrice(finalOfferedPrice * 0.92);
+    const minExpectedValue = this.roundToCleanGalleryPrice(standardCashOffer * 0.96);
+    const quickSaleValue = this.roundToCleanGalleryPrice(standardCashOffer * 0.94);
     let confidenceScore = 95;
     if (dto.damageStatus === 'UNKNOWN') confidenceScore -= 5;
     if (dto.mileage > 250000) confidenceScore -= 4;

@@ -467,6 +467,10 @@ async function main() {
   }
 
   console.log('Seeding finished successfully!');
+
+  // Automatically run V4 recalibration after seeding
+  const { recalibrateAllSpecs } = require('../src/recalibrate_all_vehicle_variants');
+  await recalibrateAllSpecs(prisma);
 }
 
 main()
