@@ -685,11 +685,11 @@ export class EvaluationService {
     // Ceiling (Max İlan): Zero-damage / clean low km top listings reach ~106% of market average for economy, ~110% for premium
     const floorMarketPrice = (dbMarket && dbMarket.minPrice > 0)
       ? dbMarket.minPrice
-      : this.roundToCleanGalleryPrice(fairMarketValue * (isPremium || isExotic ? 0.60 : 0.50));
+      : this.roundToCleanGalleryPrice(fairMarketValue * (isPremium || isExotic ? 0.60 : 0.45));
 
     const ceilingMarketPrice = (dbMarket && dbMarket.maxPrice > 0)
       ? dbMarket.maxPrice
-      : this.roundToCleanGalleryPrice(fairMarketValue * (isPremium || isExotic ? 1.10 : 1.06));
+      : this.roundToCleanGalleryPrice(fairMarketValue * (isPremium || isExotic ? 1.35 : 1.60));
 
     let confidenceScore = 95;
     if (dto.damageStatus === 'UNKNOWN') confidenceScore -= 5;
