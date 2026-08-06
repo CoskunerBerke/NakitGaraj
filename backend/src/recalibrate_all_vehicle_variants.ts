@@ -277,11 +277,12 @@ export async function recalibrateAllSpecs(prisma: PrismaClient) {
       else if (targetStr.includes('ibiza') || targetStr.includes('arona')) { base2026 = 1400000; floorPrice = 250000; }
     }
     else if (brand === 'dacia') {
-      decayRate = 0.87; floorPrice = 140000;
-      if (targetStr.includes('duster')) { base2026 = 1800000; floorPrice = 450000; }
-      else if (targetStr.includes('jogger')) { base2026 = 1700000; floorPrice = 430000; }
-      else if (targetStr.includes('sandero')) { base2026 = 1250000; floorPrice = 300000; }
-      else if (targetStr.includes('logan')) { base2026 = 850000; floorPrice = 200000; }
+      decayRate = 0.88; floorPrice = 250000;
+      if (targetStr.includes('duster')) { base2026 = 1850000; floorPrice = 450000; }
+      else if (targetStr.includes('jogger')) { base2026 = 1750000; floorPrice = 430000; }
+      else if (targetStr.includes('stepway')) { base2026 = 1500000; floorPrice = 350000; }
+      else if (targetStr.includes('sandero')) { base2026 = 1300000; floorPrice = 320000; }
+      else if (targetStr.includes('logan')) { base2026 = 950000; floorPrice = 250000; }
     }
 
     // =====================================================
@@ -290,33 +291,28 @@ export async function recalibrateAllSpecs(prisma: PrismaClient) {
     // =====================================================
     const getYearMultiplier = (y: number): number => {
       if (y >= 2026) return 1.00;
-      if (y === 2025) return 0.91;
-      if (y === 2024) return 0.83;
-      if (y === 2023) return 0.75;
-      if (y === 2022) return 0.68;
-      if (y === 2021) return 0.62;
-      if (y === 2020) return 0.56;
-      if (y === 2019) return 0.51;
-      if (y === 2018) return 0.46;
-      if (y === 2017) return 0.42;
-      if (y === 2016) return 0.38;
-      if (y === 2015) return 0.35;
-      if (y === 2014) return 0.33;
-      if (y === 2013) return 0.31;
-      if (y === 2012) return 0.29;
-      if (y === 2011) return 0.27;
-      if (y === 2010) return 0.25;
-      if (y === 2009) return 0.24;
-      if (y === 2008) return 0.23;
-      if (y === 2007) return 0.22;
-      if (y === 2006) return 0.21;
-      if (y === 2005) return 0.20;
-      if (y === 2004) return 0.19;
-      if (y === 2003) return 0.18;
-      if (y === 2002) return 0.17;
-      if (y === 2001) return 0.16;
-      if (y === 2000) return 0.15;
-      return 0.14;
+      if (y === 2025) return 0.92;
+      if (y === 2024) return 0.85;
+      if (y === 2023) return 0.78;
+      if (y === 2022) return 0.72;
+      if (y === 2021) return 0.66;
+      if (y === 2020) return 0.60;
+      if (y === 2019) return 0.55;
+      if (y === 2018) return 0.51;
+      if (y === 2017) return 0.48; // For 2017 Sandero Stepway: 1.500.000 * 0.48 = 720.000 TL market average!
+      if (y === 2016) return 0.44;
+      if (y === 2015) return 0.41;
+      if (y === 2014) return 0.38;
+      if (y === 2013) return 0.35;
+      if (y === 2012) return 0.33;
+      if (y === 2011) return 0.31;
+      if (y === 2010) return 0.29;
+      if (y === 2009) return 0.27;
+      if (y === 2008) return 0.25;
+      if (y === 2007) return 0.23;
+      if (y === 2006) return 0.22;
+      if (y === 2005) return 0.21;
+      return 0.20;
     };
 
     const multiplier = getYearMultiplier(year);
