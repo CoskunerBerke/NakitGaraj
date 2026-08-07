@@ -16,7 +16,9 @@ export class VehicleService {
           some: {
             marketPrices: {
               some: {
-                currentMarketAverage: { gt: 0 },
+                regionalPriceDifferences: {
+                  contains: 'nakitAlisReferansi',
+                },
               },
             },
           },
@@ -35,7 +37,9 @@ export class VehicleService {
           some: {
             marketPrices: {
               some: {
-                currentMarketAverage: { gt: 0 },
+                regionalPriceDifferences: {
+                  contains: 'nakitAlisReferansi',
+                },
               },
             },
           },
@@ -47,7 +51,7 @@ export class VehicleService {
   }
 
   async getVariants(modelId: string) {
-    const cacheKey = `variants_populated_${modelId}`;
+    const cacheKey = `variants_real_imported_${modelId}`;
     const cached = await this.cache.get<any[]>(cacheKey);
     if (cached) return cached;
 
@@ -58,7 +62,9 @@ export class VehicleService {
           some: {
             marketPrices: {
               some: {
-                currentMarketAverage: { gt: 0 },
+                regionalPriceDifferences: {
+                  contains: 'nakitAlisReferansi',
+                },
               },
             },
           },
