@@ -1,6 +1,7 @@
 import { CleanListingItem } from './emsal-matcher.service';
 
 export interface PricingEngineOutput {
+  adjustedP35: number;
   fairMarketValue: number;
   cashOffer: number;
   cashOfferMin: number;
@@ -17,6 +18,8 @@ export interface PricingEngineOutput {
   manualApprovalReason?: string;
   mileageAdjustment?: number;
   kmDelta?: number;
+  kmDecayPer10k?: number;
+  referenceMedianMileage?: number;
   mileageAdjustmentSource?: string;
 }
 
@@ -231,6 +234,7 @@ export class RobustPricingCalculator {
     if (matchedLevel === 4) confidenceScore -= 20;
 
     return {
+      adjustedP35,
       fairMarketValue,
       cashOffer,
       cashOfferMin,
@@ -248,6 +252,8 @@ export class RobustPricingCalculator {
       mileageAdjustment,
       kmDelta,
       mileageAdjustmentSource,
+      kmDecayPer10k,
+      referenceMedianMileage: baseReferenceKm,
     };
   }
 

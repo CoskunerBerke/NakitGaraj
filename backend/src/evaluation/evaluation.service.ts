@@ -271,6 +271,7 @@ export class EvaluationService {
         originalMSRP: spec.originalMSRP,
       },
       results: {
+        adjustedP35: calc.adjustedP35,
         fairMarketValue: calc.fairMarketValue,
         cashOffer: calc.cashOffer,
         cashOfferMin: calc.cashOfferMin,
@@ -394,6 +395,133 @@ export class EvaluationService {
         confidenceScore: `${item.confidenceScore}%`,
       },
       aiAnalysis: item.aiAnalysis ? JSON.parse(item.aiAnalysis as string) : [],
+    };
+  }
+
+  async calculateVehicleValuationPreview(dto: CreateEvaluationDto) {
+    const whereCondition: any = {
+      year: dto.year,
+      manufacturerId: dto.manufacturerId,
+      modelId: dto.modelId,
+    };
+    if (dto.variantId) whereCondition.variantId = dto.variantId;
+    if (dto.packageId) whereCondition.packageId = dto.packageId;
+    if (dto.bodyTypeId) whereCondition.bodyTypeId = dto.bodyTypeId;
+    if (dto.fuelTypeId) whereCondition.fuelTypeId = dto.fuelTypeId;
+    if (dto.transmissionTypeId) whereCondition.transmissionTypeId = dto.transmissionTypeId;
+
+    let spec = await this.prisma.vehicleSpecification.findFirst({
+      where: whereCondition,
+      include: {
+        manufacturer: true,
+        model: true,
+        variant: true,
+        package: true,
+        bodyType: true,
+        fuelType: true,
+        transmissionType: true,
+      },
+    });
+
+    if (!spec && dto.variantId) {
+      spec = await this.prisma.vehicleSpecification.findFirst({
+        where: {
+          year: dto.year,
+          manufacturerId: dto.manufacturerId,
+          modelId: dto.modelId,
+          variantId: dto.variantId,
+        },
+        include: {
+          manufacturer: true,
+          model: true,
+          variant: true,
+          package: true,
+          bodyType: true,
+          fuelType: true,
+          transmissionType: true,
+        },
+      });
+    }
+
+    if (!spec) {
+      return {
+        status: 'NOT_TESTABLE_THROUGH_LIVE_API',
+        confidenceScore: 0,
+        message: 'Specification record not found',
+        results: null,
+      };
+    }
+
+    let damagePenalty = 0;
+    if (dto.damageStatus === 'YES') {
+      damagePenalty = 0.08;
+    } else if (dto.damageStatus === 'NO') {
+      damagePenalty = 0;
+    } else {
+      damagePenalty = 0.04;
+    }
+
+    const emsalResult = await this.emsalMatcherService.matchComparableListings({
+      make: spec.manufacturer.name,
+      model: spec.model.name,
+      variant: spec.variant?.name,
+      year: dto.year,
+      mileageKm: dto.mileage,
+      bodyType: spec.bodyType?.name,
+      fuelType: spec.fuelType?.name,
+      transmission: spec.transmissionType?.name,
+    });
+
+    if (emsalResult.level === 4 || emsalResult.matchedCount === 0) {
+      return {
+        status: 'INSUFFICIENT_DATA',
+        confidenceScore: 0,
+        message: 'Yeterli piyasa verisi bulunamadı',
+        results: null,
+      };
+    }
+
+    const calc = RobustPricingCalculator.computeValuationFromSnapshot({
+      weightedP5: emsalResult.weightedP5 || (emsalResult.weightedP50 || 0) * 0.85,
+      weightedP35: emsalResult.weightedP35 || (emsalResult.weightedP50 || 0) * 0.92,
+      weightedP50: emsalResult.weightedP50 || 0,
+      weightedP60: emsalResult.weightedP60 || (emsalResult.weightedP50 || 0) * 1.02,
+      weightedP95: emsalResult.weightedP95 || (emsalResult.weightedP50 || 0) * 1.15,
+      realMatchedListingCount: emsalResult.matchedCount,
+      kmDecayPer10k: emsalResult.kmDecayPer10k || 0.0025,
+      referenceMedianMileage: emsalResult.referenceMedianMileage || 100000,
+      mileageAdjustmentSource: emsalResult.mileageAdjustmentSource || 'DEFAULT_FALLBACK',
+      userYear: dto.year,
+      userMileage: dto.mileage,
+      damagePenalty,
+      userDesiredPrice: dto.userDesiredPrice,
+      matchedLevel: emsalResult.level,
+      baseConfidenceScore: emsalResult.confidenceScore,
+    });
+
+    return {
+      status: calc.requiresManualApproval ? 'MANUAL_EVALUATION_REQUIRED' : 'SUCCESS',
+      confidenceScore: calc.confidenceScore,
+      message: 'Başarılı',
+      results: {
+        adjustedP35: calc.adjustedP35,
+        fairMarketValue: calc.fairMarketValue,
+        cashOffer: calc.cashOffer,
+        cashOfferMin: calc.cashOfferMin,
+        cashOfferMax: calc.cashOfferMax,
+        consignmentListingPrice: calc.consignmentListingPrice,
+        expectedConsignmentSalePrice: calc.expectedConsignmentSalePrice,
+        consignmentCommission: calc.consignmentCommission,
+        customerConsignmentNet: calc.customerConsignmentNet,
+        estimatedDaysToSell: `${calc.estimatedDaysToSellMin}-${calc.estimatedDaysToSellMax} gün`,
+        confidenceScore: calc.confidenceScore,
+        matchedListingCount: calc.matchedListingCount,
+        matchedLevel: emsalResult.level,
+        pricingExplanation: emsalResult.explanationNote,
+        requiresManualApproval: calc.requiresManualApproval,
+        kmDecayPer10k: emsalResult.kmDecayPer10k || 0.0025,
+        referenceMedianMileage: emsalResult.referenceMedianMileage || 100000,
+      }
     };
   }
 }

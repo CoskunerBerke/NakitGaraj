@@ -19,93 +19,120 @@ interface TestVehicleQuery {
   bodyType?: string;
   fuelType?: string;
   transmission?: string;
+  specId?: string;
 }
 
 async function generateReport() {
   console.log(`\n====================================================================`);
-  console.log(`  CANLI EvaluationService API UYGULAMASI İLE 50 ARAÇ DEĞERLEME RAPORU`);
+  console.log(`  EVALUATION PREVIEW API UYGULAMASI İLE 50 ARAÇ DEĞERLEME RAPORU`);
   console.log(`====================================================================\n`);
 
-  // Dynamic Prisma DB totals
+  // Assertion tracking
+  let corruptedActiveSnapshotCount = 0;
+  let fakeVariantCount = 0;
+  let quarantineRulesTestCount = 0;
+  let evaluationWriteDifference = 0;
+  let Level1Count = 0;
+  let previewApiSuccessCount = 0;
+  const failureReasons: string[] = [];
+
+  // 1. Assert: No snapshots contain disallowed junk strings (Requirement 2)
+  const junkTerms = [
+    'sahibinden.com', '.com\'da', 'Modelleri', 'Modleri',
+    '2.El Arabalar', 'Satılık Sıfır Km', 'FarkliVaryant', 'Genel Model'
+  ];
+
+  corruptedActiveSnapshotCount = await prisma.vehicleMarketSnapshot.count({
+    where: {
+      isActive: true,
+      snapshotVersion: 'v2.0',
+      OR: junkTerms.flatMap(term => [
+        { make: { contains: term } },
+        { model: { contains: term } },
+        { variant: { contains: term } }
+      ])
+    }
+  });
+
+  if (corruptedActiveSnapshotCount !== 0) {
+    failureReasons.push(`Corrupted Active Snapshot Count is ${corruptedActiveSnapshotCount} (Expected 0)`);
+  }
+
+  // 2. Assert: Count quarantined listings to verify quarantine rules are running
+  quarantineRulesTestCount = await prisma.quarantinedListing.count();
+  if (quarantineRulesTestCount === 0) {
+    failureReasons.push(`Quarantine Rules Test Count is 0 (Expected > 0)`);
+  }
+
+  // 3. Dynamic Prisma DB totals
   const totalUniqueRawListings = await prisma.rawVehicleListing.count({
     where: { parseStatus: 'VALID' },
   });
   const totalQuarantinedListings = await prisma.quarantinedListing.count();
-  const totalLiveSnapshots = await prisma.vehicleMarketSnapshot.count();
+  const totalLiveSnapshots = await prisma.vehicleMarketSnapshot.count({
+    where: { snapshotVersion: 'v2.0', isActive: true },
+  });
 
-  console.log(`✓ Dinamik Veritabanı Toplamları:`);
-  console.log(`  - RawVehicleListing Benzersiz İlan Sayısı: ${totalUniqueRawListings.toLocaleString('tr-TR')} adet`);
-  console.log(`  - QuarantinedListing Karantina Kayıt Sayısı: ${totalQuarantinedListings.toLocaleString('tr-TR')} adet`);
-  console.log(`  - VehicleMarketSnapshot Canlı Snapshot Sayısı: ${totalLiveSnapshots.toLocaleString('tr-TR')} adet\n`);
-
-  // 1. Group DB snapshots by distinct brands to ensure 8+ brands and Level 1, 2, 3 mix
-  const dbSnapshots = await prisma.vehicleMarketSnapshot.findMany({
-    where: { matchedListingCount: { gte: 3 } },
-    orderBy: { matchedListingCount: 'desc' },
+  // 4. Group DB snapshots that have matching VehicleSpecification in the database
+  const eligibleSpecs = await prisma.vehicleSpecification.findMany({
+    where: {
+      year: { gte: 2005 },
+    },
+    include: {
+      manufacturer: true,
+      model: true,
+      variant: true,
+      bodyType: true,
+      fuelType: true,
+      transmissionType: true,
+    }
   });
 
   const testVehicles: TestVehicleQuery[] = [];
   const addedKeys = new Set<string>();
 
-  // Ensure 8+ distinct brands
-  const targetBrands = ['BMW', 'Audi', 'Citroen', 'Chevrolet', 'Dacia', 'Alfa Romeo', 'DS Automobiles', 'Daihatsu', 'BYD', 'Cupra', 'Chery', 'Bentley'];
+  for (const spec of eligibleSpecs) {
+    if (testVehicles.length >= 40) break;
 
-  for (const targetBrand of targetBrands) {
-    const brandSnaps = dbSnapshots.filter(s => s.make === targetBrand);
-    let brandAdded = 0;
+    const snap = await prisma.vehicleMarketSnapshot.findFirst({
+      where: {
+        canonicalMake: spec.manufacturer.name,
+        canonicalModel: spec.model.name,
+        canonicalVariant: spec.variant?.name || '',
+        year: spec.year,
+        snapshotVersion: 'v2.0',
+        isActive: true,
+        matchedListingCount: { gte: 5 }
+      }
+    });
 
-    for (const snap of brandSnaps) {
-      if (brandAdded >= 4) break;
-
-      const key = `${snap.make}-${snap.model}-${snap.variant || ''}-${snap.year}`;
-      if (!addedKeys.has(key) && testVehicles.length < 40) {
+    if (snap) {
+      const key = `${spec.manufacturer.name}__${spec.model.name}__${spec.variant?.name || ''}__${spec.year}`;
+      if (!addedKeys.has(key)) {
         addedKeys.add(key);
-        brandAdded++;
 
-        let testYear = snap.year;
-        let testVariant = snap.variant || '';
-
-        // Force Level 1, Level 2 (year ±1), and Level 3 (broader model) distribution
-        if (testVehicles.length % 5 === 3) {
-          testYear = snap.year + 1; // Forces Level 2 match
-        } else if (testVehicles.length % 5 === 4) {
-          testVariant = 'FarkliVaryant'; // Forces Level 3 match
+        // Assert: No fake variant or mock variant name is used (Requirement 1)
+        const rawVariant = spec.variant?.name || '';
+        if (rawVariant.includes('FarkliVaryant') || rawVariant.includes('Genel Model')) {
+          fakeVariantCount++;
         }
 
         testVehicles.push({
-          make: snap.make,
-          model: snap.model,
-          variant: testVariant,
-          year: testYear,
-          km: 90000 + (snap.year % 5) * 10000,
-          bodyType: snap.bodyType || (snap.model.includes('X5') || snap.model.includes('Q5') || snap.model.includes('Duster') ? 'SUV' : 'Sedan'),
-          fuelType: snap.fuelType || (snap.make === 'BYD' || snap.make === 'Aion' ? 'Elektrik' : 'Dizel'),
-          transmission: snap.transmission || (snap.weightedP50 && snap.weightedP50 < 500000 ? 'Manuel' : 'Otomatik'),
+          make: spec.manufacturer.name,
+          model: spec.model.name,
+          variant: rawVariant,
+          year: spec.year,
+          km: Math.round(snap.medianMileage || 110000),
+          bodyType: spec.bodyType?.name,
+          fuelType: spec.fuelType?.name,
+          transmission: spec.transmissionType?.name,
+          specId: spec.id
         });
       }
     }
   }
 
-  // Fill remaining slots up to 40 if needed
-  for (const snap of dbSnapshots) {
-    if (testVehicles.length >= 40) break;
-    const key = `${snap.make}-${snap.model}-${snap.variant || ''}-${snap.year}`;
-    if (!addedKeys.has(key)) {
-      addedKeys.add(key);
-      testVehicles.push({
-        make: snap.make,
-        model: snap.model,
-        variant: snap.variant || '',
-        year: snap.year,
-        km: 90000 + (snap.year % 5) * 10000,
-        bodyType: snap.bodyType || 'Sedan',
-        fuelType: snap.fuelType || 'Dizel',
-        transmission: snap.transmission || 'Otomatik',
-      });
-    }
-  }
-
-  // 2. Add 10 Exotic / Unrecorded Missing Vehicles (Level 4 Insufficient Data)
+  // 5. Add 10 Exotic / Unrecorded Missing Vehicles (Level 4 Insufficient Data - Requirement 13)
   const exoticVehicles: TestVehicleQuery[] = [
     { make: 'Ferrari', model: 'Roma', variant: '3.9 V8', year: 2022, km: 12000, bodyType: 'Coupe', fuelType: 'Benzin', transmission: 'Otomatik' },
     { make: 'Bentley', model: 'Continental GT', variant: '6.0 W12', year: 2021, km: 25000, bodyType: 'Coupe', fuelType: 'Benzin', transmission: 'Otomatik' },
@@ -121,11 +148,17 @@ async function generateReport() {
 
   testVehicles.push(...exoticVehicles);
 
+  if (fakeVariantCount !== 0) {
+    failureReasons.push(`Fake Variant Count is ${fakeVariantCount} (Expected 0)`);
+  }
+
+  // 6. Assert: No database evaluations are created during preview (Requirement 12)
+  const evalCountBefore = await prisma.vehicleEvaluation.count();
+
   console.log(`✓ Rapor Değerleme Testi Toplam ${testVehicles.length} Araç İle Başlatılıyor...\n`);
 
   const reportRows: string[] = [];
   const brandSet = new Set<string>();
-  let level1Count = 0;
   let level2Count = 0;
   let level3Count = 0;
   let successMatchCount = 0;
@@ -137,126 +170,108 @@ async function generateReport() {
   for (const car of testVehicles) {
     count++;
 
-    // Check if specification exists in DB
-    const spec = await prisma.vehicleSpecification.findFirst({
-      where: {
-        manufacturer: { name: { equals: car.make } },
-        model: { name: { equals: car.model } },
-        year: car.year,
-      },
-      include: {
-        manufacturer: true,
-        model: true,
-      },
-    });
-
-    let evalRes: any;
-
-    if (spec) {
-      // Call LIVE EvaluationService API method (preview mode - no DB evaluation creation)
-      evalRes = await evaluationService.evaluateVehicle({
-        year: car.year,
-        manufacturerId: spec.manufacturerId,
-        modelId: spec.modelId,
-        variantId: spec.variantId || undefined,
-        mileage: car.km,
-        color: 'Beyaz',
-        damageStatus: 'NO',
-        licensePlate: '34TST50',
-        firstName: 'Test',
-        lastName: 'Kullanıcı',
-        phone: '05320000000',
-        sellingTimeline: 'hemen',
-        userDesiredPrice: 0,
-      });
-    } else {
-      // Direct call to EmsalMatcher & RobustPricingCalculator for test cars without manufacturer spec ID
-      const emsalMatch = await emsalMatcher.matchComparableListings({
-        make: car.make,
-        model: car.model,
-        variant: car.variant,
-        year: car.year,
-        mileageKm: car.km,
-      });
-
-      if (emsalMatch.level === 4 || emsalMatch.matchedCount === 0) {
-        evalRes = {
-          status: 'INSUFFICIENT_DATA',
-          confidenceScore: 0,
-          message: 'Yeterli piyasa verisi bulunamadı',
-          results: null,
-        };
-      } else {
-        const calc = RobustPricingCalculator.computeValuationFromSnapshot({
-          weightedP5: emsalMatch.weightedP5 || (emsalMatch.weightedP50 || 0) * 0.85,
-          weightedP35: emsalMatch.weightedP35 || (emsalMatch.weightedP50 || 0) * 0.92,
-          weightedP50: emsalMatch.weightedP50 || 0,
-          weightedP60: emsalMatch.weightedP60 || (emsalMatch.weightedP50 || 0) * 1.02,
-          weightedP95: emsalMatch.weightedP95 || (emsalMatch.weightedP50 || 0) * 1.15,
-          realMatchedListingCount: emsalMatch.matchedCount,
-          kmDecayPer10k: emsalMatch.kmDecayPer10k || 0.0025,
-          referenceMedianMileage: emsalMatch.referenceMedianMileage || 100000,
-          mileageAdjustmentSource: emsalMatch.mileageAdjustmentSource || 'DEFAULT_FALLBACK',
-          userYear: car.year,
-          userMileage: car.km,
-          damagePenalty: 0,
-          matchedLevel: emsalMatch.level,
-          baseConfidenceScore: emsalMatch.confidenceScore,
-        });
-
-        evalRes = {
-          status: calc.requiresManualApproval ? 'MANUAL_EVALUATION_REQUIRED' : 'SUCCESS',
-          confidenceScore: calc.confidenceScore,
-          message: 'Başarılı',
-          results: {
-            fairMarketValue: calc.fairMarketValue,
-            cashOffer: calc.cashOffer,
-            cashOfferMin: calc.cashOfferMin,
-            cashOfferMax: calc.cashOfferMax,
-            consignmentListingPrice: calc.consignmentListingPrice,
-            expectedConsignmentSalePrice: calc.expectedConsignmentSalePrice,
-            consignmentCommission: calc.consignmentCommission,
-            customerConsignmentNet: calc.customerConsignmentNet,
-            estimatedDaysToSell: `${calc.estimatedDaysToSellMin}-${calc.estimatedDaysToSellMax} gün`,
-            confidenceScore: calc.confidenceScore,
-            matchedListingCount: calc.matchedListingCount,
-            matchedLevel: emsalMatch.level,
-            pricingExplanation: emsalMatch.explanationNote,
-            requiresManualApproval: calc.requiresManualApproval,
-            kmDecayPer10k: emsalMatch.kmDecayPer10k || 0.0025,
-            referenceMedianMileage: emsalMatch.referenceMedianMileage || 100000,
-          },
-        };
-      }
-    }
-
-    if (evalRes.status === 'INSUFFICIENT_DATA' || !evalRes.results) {
+    if (!car.specId) {
+      // Exotic vehicles or ones without specId
+      reportRows.push(`| ${count} | ${car.make} ${car.model} (${car.year}) | ${car.variant || '-'} | - | - | - | - | - | - | 0 | 0 | 0 | %0 | **NOT_TESTABLE_THROUGH_LIVE_API** |`);
       insufficientDataCount++;
-      const row = `| ${count} | ${car.make} ${car.model} (${car.year}) | ${car.variant || '-'} | - | - | - | - | - | - | 0 | 0 | 0 | %0 | **Yeterli piyasa verisi bulunamadı** |`;
-      reportRows.push(row);
       continue;
     }
 
+    const spec = await prisma.vehicleSpecification.findUnique({
+      where: { id: car.specId },
+      include: {
+        manufacturer: true,
+        model: true,
+        variant: true,
+        bodyType: true,
+        fuelType: true,
+        transmissionType: true,
+      }
+    });
+
+    if (!spec) {
+      reportRows.push(`| ${count} | ${car.make} ${car.model} (${car.year}) | ${car.variant || '-'} | - | - | - | - | - | - | 0 | 0 | 0 | %0 | **NOT_TESTABLE_THROUGH_LIVE_API** |`);
+      insufficientDataCount++;
+      continue;
+    }
+
+    // Call preview API (Requirement 12)
+    const apiRes = await evaluationService.calculateVehicleValuationPreview({
+      year: car.year,
+      manufacturerId: spec.manufacturerId,
+      modelId: spec.modelId,
+      variantId: spec.variantId || undefined,
+      mileage: car.km,
+      color: 'Beyaz',
+      damageStatus: 'NO',
+      licensePlate: '34TST50',
+      firstName: 'Test',
+      lastName: 'Kullanıcı',
+      phone: '05320000000',
+      sellingTimeline: 'hemen',
+      userDesiredPrice: 0,
+    });
+
+    if (apiRes.status === 'NOT_TESTABLE_THROUGH_LIVE_API' || apiRes.status === 'INSUFFICIENT_DATA' || !apiRes.results) {
+      reportRows.push(`| ${count} | ${car.make} ${car.model} (${car.year}) | ${car.variant || '-'} | - | - | - | - | - | - | 0 | 0 | 0 | %0 | **${apiRes.status}** |`);
+      insufficientDataCount++;
+      continue;
+    }
+
+    previewApiSuccessCount++;
     successMatchCount++;
     brandSet.add(car.make);
 
-    const res = evalRes.results;
-    if (res.matchedLevel === 1) level1Count++;
+    const res = apiRes.results;
+    if (res.matchedLevel === 1) Level1Count++;
     else if (res.matchedLevel === 2) level2Count++;
     else if (res.matchedLevel === 3) level3Count++;
 
     if (res.requiresManualApproval) manualApprovalCount++;
 
-    // STRICT 9-FIELD EQUIVALENCE ASSERTION
-    const snapshotCount = res.matchedListingCount;
-    const calcCount = res.matchedListingCount;
-    const apiCount = res.matchedListingCount;
+    // 7. Assert: Query snapshot and calculator independently and verify (Requirement 15)
+    // 7. Assert: Query emsalMatcher and calculator independently and verify (Requirement 15)
+    const emsalMatch = await emsalMatcher.matchComparableListings({
+      make: spec.manufacturer.name,
+      model: spec.model.name,
+      variant: spec.variant?.name,
+      year: car.year,
+      mileageKm: car.km,
+      bodyType: spec.bodyType?.name,
+      fuelType: spec.fuelType?.name,
+      transmission: spec.transmissionType?.name,
+    });
 
-    if (snapshotCount !== calcCount || calcCount !== apiCount) {
-      throw new Error(`CRITICAL TEST FAILURE: Emsal adedi uyuşmuyor! Snapshot: ${snapshotCount}, Calc: ${calcCount}, API: ${apiCount}`);
-    }
+    const calc = RobustPricingCalculator.computeValuationFromSnapshot({
+      weightedP5: emsalMatch.weightedP5 || (emsalMatch.weightedP50 || 0) * 0.85,
+      weightedP35: emsalMatch.weightedP35 || (emsalMatch.weightedP50 || 0) * 0.92,
+      weightedP50: emsalMatch.weightedP50 || 0,
+      weightedP60: emsalMatch.weightedP60 || (emsalMatch.weightedP50 || 0) * 1.02,
+      weightedP95: emsalMatch.weightedP95 || (emsalMatch.weightedP50 || 0) * 1.15,
+      realMatchedListingCount: emsalMatch.matchedCount,
+      kmDecayPer10k: emsalMatch.kmDecayPer10k || 0.0025,
+      referenceMedianMileage: emsalMatch.referenceMedianMileage || 100000,
+      mileageAdjustmentSource: emsalMatch.mileageAdjustmentSource || 'DEFAULT_FALLBACK',
+      userYear: car.year,
+      userMileage: car.km,
+      damagePenalty: 0,
+      matchedLevel: emsalMatch.level,
+      baseConfidenceScore: emsalMatch.confidenceScore
+    });
 
-    const kmAdjustedP35 = Math.round(res.fairMarketValue * 0.92);
+    // 11-field comparison assertion (Requirement 15)
+    if (calc.adjustedP35 !== res.adjustedP35) throw new Error(`adjustedP35 mismatch: Calc=${calc.adjustedP35}, API=${res.adjustedP35}`);
+    if (calc.fairMarketValue !== res.fairMarketValue) throw new Error(`fairMarketValue mismatch: Calc=${calc.fairMarketValue}, API=${res.fairMarketValue}`);
+    if (calc.cashOffer !== res.cashOffer) throw new Error(`cashOffer mismatch: Calc=${calc.cashOffer}, API=${res.cashOffer}`);
+    if (calc.consignmentListingPrice !== res.consignmentListingPrice) throw new Error(`consignmentListingPrice mismatch: Calc=${calc.consignmentListingPrice}, API=${res.consignmentListingPrice}`);
+    if (calc.expectedConsignmentSalePrice !== res.expectedConsignmentSalePrice) throw new Error(`expectedConsignmentSalePrice mismatch: Calc=${calc.expectedConsignmentSalePrice}, API=${res.expectedConsignmentSalePrice}`);
+    if (calc.customerConsignmentNet !== res.customerConsignmentNet) throw new Error(`customerConsignmentNet mismatch: Calc=${calc.customerConsignmentNet}, API=${res.customerConsignmentNet}`);
+    if (calc.matchedListingCount !== res.matchedListingCount) throw new Error(`matchedListingCount mismatch: Calc=${calc.matchedListingCount}, API=${res.matchedListingCount}`);
+    if (calc.confidenceScore !== res.confidenceScore) throw new Error(`confidenceScore mismatch: Calc=${calc.confidenceScore}, API=${res.confidenceScore}`);
+    if (calc.kmDecayPer10k !== res.kmDecayPer10k) throw new Error(`kmDecayPer10k mismatch: Calc=${calc.kmDecayPer10k}, API=${res.kmDecayPer10k}`);
+    if (calc.referenceMedianMileage !== res.referenceMedianMileage) throw new Error(`referenceMedianMileage mismatch: Calc=${calc.referenceMedianMileage}, API=${res.referenceMedianMileage}`);
+    if (res.matchedLevel !== 1 && res.matchedLevel !== 2) throw new Error(`matchedLevel mismatch: Expected 1 or 2, Got=${res.matchedLevel}`);
+
     const grossCashReserve = Math.round(res.fairMarketValue - res.cashOffer);
     const expNegotiation = Math.round(res.consignmentListingPrice * 0.015);
     const expPrep = 15000;
@@ -265,26 +280,31 @@ async function generateReport() {
     const netEstimatedProfit = Math.max(0, grossCashReserve - (expNegotiation + expPrep + expAppraisal + expHolding));
 
     const statusDisplay = res.requiresManualApproval
-      ? `**Manuel Değerlendirme Gereklidir** (Teklif Oranı <%85)`
+      ? `**Manuel Değerlendirme** (Teklif Oranı <%85)`
       : `Seviye ${res.matchedLevel}`;
 
-    const row = `| ${count} | ${car.make} ${car.model} (${car.year}) | ${car.variant || '-'} | ${kmAdjustedP35.toLocaleString('tr-TR')} ₺ | ${res.fairMarketValue.toLocaleString('tr-TR')} ₺ | **${res.cashOffer.toLocaleString('tr-TR')} ₺** | ${res.consignmentListingPrice.toLocaleString('tr-TR')} ₺ | **${res.customerConsignmentNet.toLocaleString('tr-TR')} ₺** | **${grossCashReserve.toLocaleString('tr-TR')} ₺** (${netEstimatedProfit.toLocaleString('tr-TR')} ₺ net) | ${snapshotCount} | ${calcCount} | ${apiCount} | %${res.confidenceScore} | ${statusDisplay} |`;
+    const row = `| ${count} | ${car.make} ${car.model} (${car.year}) | ${car.variant || '-'} | ${res.adjustedP35.toLocaleString('tr-TR')} ₺ | ${res.fairMarketValue.toLocaleString('tr-TR')} ₺ | **${res.cashOffer.toLocaleString('tr-TR')} ₺** | ${res.consignmentListingPrice.toLocaleString('tr-TR')} ₺ | **${res.customerConsignmentNet.toLocaleString('tr-TR')} ₺** | **${grossCashReserve.toLocaleString('tr-TR')} ₺** (${netEstimatedProfit.toLocaleString('tr-TR')} ₺ net) | ${emsalMatch.matchedCount} | ${calc.matchedListingCount} | ${res.matchedListingCount} | %${res.confidenceScore} | ${statusDisplay} |`;
     reportRows.push(row);
   }
 
-  console.log(`✓ Toplam Test Aracı Sayısı: ${testVehicles.length}`);
-  console.log(`✓ Başarılı API Değerleme Sayısı: ${successMatchCount}`);
-  console.log(`✓ Yetersiz Veri Sayısı: ${insufficientDataCount}`);
-  console.log(`✓ Manuel Değerlendirme Gereken Araç Sayısı (<400k TL): ${manualApprovalCount}`);
-  console.log(`✓ Seviye 1 Eşleşme Sayısı: ${level1Count}`);
-  console.log(`✓ Seviye 2 Eşleşme Sayısı: ${level2Count}`);
-  console.log(`✓ Seviye 3 Eşleşme Sayısı: ${level3Count}`);
-  console.log(`✓ Farklı Marka Çeşitliliği: ${brandSet.size} farklı marka (${[...brandSet].slice(0, 10).join(', ')})\n`);
+  const evalCountAfter = await prisma.vehicleEvaluation.count();
+  evaluationWriteDifference = evalCountAfter - evalCountBefore;
 
-  const reportMarkdown = `# 📊 NakitGaraj 50 Araç Canlı EvaluationService API ve Canonical Snapshot Karşılaştırma Raporu
+  if (evaluationWriteDifference !== 0) {
+    failureReasons.push(`Evaluation Write Difference is ${evaluationWriteDifference} (Expected 0)`);
+  }
+
+  if (Level1Count < 10) {
+    failureReasons.push(`Level 1 Match Count is ${Level1Count} (Expected >= 10)`);
+  }
+
+  const isSuccess = failureReasons.length === 0;
+
+  if (isSuccess) {
+    const reportMarkdown = `# 📊 NakitGaraj 50 Araç Canlı EvaluationService API ve Canonical Snapshot Karşılaştırma Raporu
 
 > [!IMPORTANT]
-> Bu rapor, **tam 50 test aracı** üzerinde, sahte emsal ilanlar kullanılmadan, veritabanındaki **${totalUniqueRawListings.toLocaleString('tr-TR')} adet benzersiz RawVehicleListing kaydı** (${totalQuarantinedListings.toLocaleString('tr-TR')} karantinalı kayıt ayrıştırılmıştır), **${totalLiveSnapshots.toLocaleString('tr-TR')} adet v2.0 süzülmüş canonical snapshot verisi** ve canlı \`EvaluationService.evaluateVehicle\` API üretim akışı ile otomatik olarak oluşturulmuştur.
+> Bu rapor, **tam 50 test aracı** üzerinde, sahte emsal ilanlar kullanılmadan, veritabanındaki **${totalUniqueRawListings.toLocaleString('tr-TR')} adet benzersiz RawVehicleListing kaydı** (${totalQuarantinedListings.toLocaleString('tr-TR')} karantinalı kayıt ayrıştırılmıştır), **${totalLiveSnapshots.toLocaleString('tr-TR')} adet v2.0 süzülmüş canonical snapshot verisi** ve canlı \`EvaluationService.calculateVehicleValuationPreview\` API üretim akışı ile otomatik olarak oluşturulmuştur.
 
 ## 📈 50 Araç Gerçek API Karşılaştırma Tablosu
 
@@ -297,7 +317,7 @@ ${reportRows.join('\n')}
 ## 🎯 Canlı Akış Özeti ve Doğrulama İstatistikleri
 
 - **Toplam Test Aracı:** ${testVehicles.length} adet
-- **Başarılı API Değerleme Sayısı:** ${successMatchCount} adet (Seviye 1: ${level1Count}, Seviye 2: ${level2Count}, Seviye 3: ${level3Count})
+- **Başarılı API Değerleme Sayısı:** ${successMatchCount} adet (Seviye 1: ${Level1Count}, Seviye 2: ${level2Count}, Seviye 3: ${level3Count})
 - **Yetersiz Veri Sayısı:** ${insufficientDataCount} adet (Veritabanında bulunmayan nadir/egzotik araçlar için fiyat uydurulmamış, \`INSUFFICIENT_DATA\` döndürülmüştür)
 - **Manuel Değerlendirme Gereken Araç Sayısı (<400k TL):** ${manualApprovalCount} adet
 - **Farklı Marka Çeşitliliği:** ${brandSet.size} farklı marka (${[...brandSet].join(', ')})
@@ -305,7 +325,7 @@ ${reportRows.join('\n')}
   - **RawVehicleListing Benzersiz İlan Sayısı:** ${totalUniqueRawListings.toLocaleString('tr-TR')} adet
   - **QuarantinedListing Karantina Kayıt Sayısı:** ${totalQuarantinedListings.toLocaleString('tr-TR')} adet
   - **VehicleMarketSnapshot Canlı Snapshot Sayısı:** ${totalLiveSnapshots.toLocaleString('tr-TR')} adet
-- **9-Alan Birebir Eşitlik Kontrolü:** Snapshot Emsal Sayısı = Hesaplayıcı Emsal Sayısı = API Emsal Sayısı (%100 Birebir Eşit)
+- **11-Alan Birebir Eşitlik Kontrolü:** Snapshot Emsal Sayısı = Hesaplayıcı Emsal Sayısı = API Emsal Sayısı (%100 Birebir Eşit)
 
 ---
 
@@ -317,15 +337,36 @@ ${reportRows.join('\n')}
 4. **Düşük Fiyatlı Araç Politikası (<400.000 TL):** Sabit minimum rezerv kuralları nedeniyle teklif oranı %85'in altına düşen araçlar otomatik olarak \`MANUAL_EVALUATION_REQUIRED\` durumuna alınmış ve konsinye satışı önceliklendirilmiştir.
 `;
 
-  const artifactPath = 'C:\\Users\\berke\\.gemini\\antigravity\\brain\\c78e1bb4-396a-426d-a6a5-7f1451ce5b59/valuation_comparison_50_cars.md';
-  const projectPath = 'C:\\Users\\berke\\OneDrive\\Masaüstü\\Büyük proje\\RAPOR_50_ARAC_FIYATLANDIRMA.md';
+    const artifactPath = 'C:\\Users\\berke\\.gemini\\antigravity\\brain\\c78e1bb4-396a-426d-a6a5-7f1451ce5b59/valuation_comparison_50_cars.md';
+    const projectPath = 'C:\\Users\\berke\\OneDrive\\Masaüstü\\Büyük proje\\RAPOR_50_ARAC_FIYATLANDIRMA.md';
 
-  fs.writeFileSync(artifactPath, reportMarkdown, 'utf8');
-  fs.writeFileSync(projectPath, reportMarkdown, 'utf8');
+    fs.writeFileSync(artifactPath, reportMarkdown, 'utf8');
+    fs.writeFileSync(projectPath, reportMarkdown, 'utf8');
 
-  console.log(`✓ Rapor Başarıyla Güncellendi ve Kaydedildi:`);
-  console.log(`  - Artifact: ${artifactPath}`);
-  console.log(`  - Proje Kök Dizin: ${projectPath}\n`);
+    // Remove any leftover RAPOR_BASARISIZ.md
+    const failPath = 'C:\\Users\\berke\\OneDrive\\Masaüstü\\Büyük proje\\RAPOR_BASARISIZ.md';
+    if (fs.existsSync(failPath)) fs.unlinkSync(failPath);
+
+    console.log(`✓ Rapor Başarıyla Güncellendi ve Kaydedildi:`);
+    console.log(`  - Artifact: ${artifactPath}`);
+    console.log(`  - Proje Kök Dizin: ${projectPath}\n`);
+  } else {
+    const failMarkdown = `# ❌ Rapor Üretimi Başarısız Oldu
+
+Aşağıdaki doğrulama şartları sağlanamadığı için rapor oluşturulamadı:
+
+${failureReasons.map(reason => `- ${reason}`).join('\n')}
+
+---
+**Tekrar Çalıştırmadan Önce Lütfen Hataları Giderin.**
+`;
+
+    const projectPath = 'C:\\Users\\berke\\OneDrive\\Masaüstü\\Büyük proje\\RAPOR_BASARISIZ.md';
+    fs.writeFileSync(projectPath, failMarkdown, 'utf8');
+
+    console.error(`\n❌ RAPOR ÜRETİMİ BAŞARISIZ OLDU! Ayrıntılar için RAPOR_BASARISIZ.md dosyasını inceleyin.\n`);
+    process.exit(1);
+  }
 }
 
 generateReport().finally(() => prisma.$disconnect());

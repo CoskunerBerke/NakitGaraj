@@ -1,77 +1,77 @@
 # 📊 NakitGaraj 50 Araç Canlı EvaluationService API ve Canonical Snapshot Karşılaştırma Raporu
 
 > [!IMPORTANT]
-> Bu rapor, **tam 50 test aracı** üzerinde, sahte emsal ilanlar kullanılmadan, veritabanındaki **59.797 adet benzersiz RawVehicleListing kaydı** (0 karantinalı kayıt ayrıştırılmıştır), **14.267 adet v2.0 süzülmüş canonical snapshot verisi** ve canlı `EvaluationService.evaluateVehicle` API üretim akışı ile otomatik olarak oluşturulmuştur.
+> Bu rapor, **tam 50 test aracı** üzerinde, sahte emsal ilanlar kullanılmadan, veritabanındaki **63.444 adet benzersiz RawVehicleListing kaydı** (2.358 karantinalı kayıt ayrıştırılmıştır), **6.257 adet v2.0 süzülmüş canonical snapshot verisi** ve canlı `EvaluationService.calculateVehicleValuationPreview` API üretim akışı ile otomatik olarak oluşturulmuştur.
 
 ## 📈 50 Araç Gerçek API Karşılaştırma Tablosu
 
 | # | Araç & Model Yılı | Paket / Versiyon | Düzeltilmiş P35 Fiyatı | Kilometre Düzeltilmiş Tahmini Piyasa Değeri | Yeni Nakit Alış Teklifi | Yeni Konsinye İlan Fiyatı | Müşteriye Kalan Konsinye Net | Brüt Alış Rezervi (Tahmini Net Kâr) | Snapshot Emsal Sayısı | Hesaplayıcı Emsal Sayısı | API Emsal Sayısı | Güven Puanı | Eşleşme Seviyesi & Durum |
 | :---: | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
-| 1 | BMW 3 Serisi (2020) | First | 2.521.101 ₺ | 2.740.327 ₺ | **2.580.000 ₺** | 2.808.000 ₺ | **2.669.074 ₺** | **160.327 ₺** (72.407 ₺ net) | 1691 | 1691 | 1691 | %78 | Seviye 3 |
-| 2 | BMW 3 Serisi (2016) | 40th | 1.739.818 ₺ | 1.891.107 ₺ | **1.760.000 ₺** | 1.946.000 ₺ | **1.836.810 ₺** | **131.107 ₺** (64.317 ₺ net) | 2629 | 2629 | 2629 | %78 | Seviye 3 |
-| 3 | BMW 3 Serisi (2016) | 40th Year Edition | 1.739.818 ₺ | 1.891.107 ₺ | **1.760.000 ₺** | 1.946.000 ₺ | **1.836.810 ₺** | **131.107 ₺** (64.317 ₺ net) | 2629 | 2629 | 2629 | %78 | Seviye 3 |
-| 4 | BMW 3 Serisi (2015) | M | 1.632.226 ₺ | 1.774.159 ₺ | **1.650.000 ₺** | 1.826.000 ₺ | **1.718.610 ₺** | **124.159 ₺** (60.269 ₺ net) | 2629 | 2629 | 2629 | %78 | Seviye 3 |
-| 5 | Audi A3 (2012) | FarkliVaryant | 997.960 ₺ | 1.084.739 ₺ | **995.000 ₺** | 1.116.000 ₺ | **1.049.260 ₺** | **89.739 ₺** (43.049 ₺ net) | 1064 | 1064 | 1064 | %78 | Seviye 3 |
-| 6 | Audi A4 (2016) | 1.4 | 1.723.991 ₺ | 1.873.903 ₺ | **1.750.000 ₺** | 1.929.000 ₺ | **1.820.065 ₺** | **123.903 ₺** (57.468 ₺ net) | 1222 | 1222 | 1222 | %78 | Seviye 3 |
-| 7 | Audi A3 (2016) | Standart | 1.310.589 ₺ | 1.424.553 ₺ | **1.330.000 ₺** | 1.466.000 ₺ | **1.379.030 ₺** | **94.553 ₺** (39.263 ₺ net) | 1022 | 1022 | 1022 | %78 | Seviye 3 |
-| 8 | Audi A3 (2013) | Standart | 1.088.365 ₺ | 1.183.005 ₺ | **1.090.000 ₺** | 1.217.000 ₺ | **1.144.801 ₺** | **93.005 ₺** (43.850 ₺ net) | 1180 | 1180 | 1180 | %78 | Seviye 3 |
-| 9 | Citroen C4 (2026) | Max | 1.612.274 ₺ | 1.752.472 ₺ | **1.630.000 ₺** | 1.774.000 ₺ | **1.667.390 ₺** | **122.472 ₺** (59.562 ₺ net) | 1217 | 1217 | 1217 | %78 | Seviye 3 |
-| 10 | Citroen C4 (2024) | FarkliVaryant | 1.211.718 ₺ | 1.317.085 ₺ | **1.230.000 ₺** | 1.337.000 ₺ | **1.257.682 ₺** | **87.085 ₺** (34.730 ₺ net) | 1420 | 1420 | 1420 | %78 | Seviye 3 |
-| 11 | Citroen C3 (2020) | 1.2 | 936.293 ₺ | 1.017.710 ₺ | **930.000 ₺** | 1.038.000 ₺ | **972.430 ₺** | **87.710 ₺** (42.840 ₺ net) | 741 | 741 | 741 | %78 | Seviye 3 |
-| 12 | Citroen C3 (2021) | 1.2 | 949.114 ₺ | 1.031.646 ₺ | **945.000 ₺** | 1.054.000 ₺ | **988.190 ₺** | **86.646 ₺** (41.386 ₺ net) | 870 | 870 | 870 | %78 | Seviye 3 |
-| 13 | Chevrolet Cruze (2010) | LS | 511.572 ₺ | 556.056 ₺ | **490.000 ₺** | 571.000 ₺ | **512.435 ₺** | **66.056 ₺** (32.591 ₺ net) | 973 | 973 | 973 | %78 | Seviye 3 |
-| 14 | Chevrolet Aveo (2012) | 1.4 | 491.667 ₺ | 534.421 ₺ | **465.000 ₺** | 549.000 ₺ | **490.765 ₺** | **69.421 ₺** (36.536 ₺ net) | 970 | 970 | 970 | %78 | Seviye 3 |
-| 15 | Chevrolet Aveo (2012) | FarkliVaryant | 490.228 ₺ | 532.856 ₺ | **465.000 ₺** | 547.000 ₺ | **488.795 ₺** | **67.856 ₺** (35.001 ₺ net) | 970 | 970 | 970 | %78 | Seviye 3 |
-| 16 | Chevrolet Cruze (2011) | LS | 528.425 ₺ | 574.375 ₺ | **505.000 ₺** | 590.000 ₺ | **531.150 ₺** | **69.375 ₺** (35.475 ₺ net) | 973 | 973 | 973 | %78 | Seviye 3 |
-| 17 | Dacia Sandero (2017) | Stepway | 794.404 ₺ | 863.483 ₺ | **795.000 ₺** | 883.000 ₺ | **819.755 ₺** | **68.483 ₺** (27.288 ₺ net) | 797 | 797 | 797 | %78 | Seviye 3 |
-| 18 | Dacia Sandero (2016) | Stepway | 758.402 ₺ | 824.350 ₺ | **755.000 ₺** | 843.000 ₺ | **780.355 ₺** | **69.350 ₺** (29.155 ₺ net) | 748 | 748 | 748 | %78 | Seviye 3 |
-| 19 | Dacia Sandero (2021) | 0.9 | 900.237 ₺ | 978.519 ₺ | **905.000 ₺** | 1.005.000 ₺ | **939.925 ₺** | **73.519 ₺** (29.394 ₺ net) | 666 | 666 | 666 | %78 | Seviye 3 |
-| 20 | Dacia Sandero (2015) | FarkliVaryant | 771.425 ₺ | 838.505 ₺ | **770.000 ₺** | 856.000 ₺ | **793.160 ₺** | **68.505 ₺** (27.965 ₺ net) | 755 | 755 | 755 | %78 | Seviye 3 |
-| 21 | Alfa Romeo 156 (2004) | - | 329.476 ₺ | 358.126 ₺ | **290.000 ₺** | 367.000 ₺ | **311.495 ₺** | **68.126 ₺** (39.721 ₺ net) | 94 | 94 | 94 | %68 | **Manuel Değerlendirme Gereklidir** (Teklif Oranı <%85) |
-| 22 | Alfa Romeo 159 (2008) | - | 647.456 ₺ | 703.757 ₺ | **630.000 ₺** | 718.000 ₺ | **657.230 ₺** | **73.757 ₺** (36.687 ₺ net) | 59 | 59 | 59 | %67 | Seviye 3 |
-| 23 | Alfa Romeo 156 (2005) | - | 323.840 ₺ | 352.000 ₺ | **285.000 ₺** | 361.000 ₺ | **305.585 ₺** | **67.000 ₺** (38.735 ₺ net) | 20 | 20 | 20 | %89 | **Manuel Değerlendirme Gereklidir** (Teklif Oranı <%85) |
-| 24 | Alfa Romeo 156 (2002) | - | 304.648 ₺ | 331.139 ₺ | **265.000 ₺** | 337.000 ₺ | **281.945 ₺** | **66.139 ₺** (38.434 ₺ net) | 85 | 85 | 85 | %68 | **Manuel Değerlendirme Gereklidir** (Teklif Oranı <%85) |
-| 25 | DS Automobiles DS Automobiles  & Modelleri sahibinden.com'da - 4 (2023) | FarkliVaryant | 1.663.101 ₺ | 1.807.719 ₺ | **1.690.000 ₺** | 1.811.000 ₺ | **1.703.835 ₺** | **117.719 ₺** (53.654 ₺ net) | 36 | 36 | 36 | %91 | Seviye 2 |
-| 26 | DS Automobiles DS Automobiles  & Modleri .com'da   4 (2023) | DS | 1.663.101 ₺ | 1.807.719 ₺ | **1.690.000 ₺** | 1.811.000 ₺ | **1.703.835 ₺** | **117.719 ₺** (53.654 ₺ net) | 36 | 36 | 36 | %91 | Seviye 2 |
-| 27 | DS Automobiles DS Automobiles 4 (2023) | DS 4 | 1.637.880 ₺ | 1.780.304 ₺ | **1.660.000 ₺** | 1.784.000 ₺ | **1.677.240 ₺** | **120.304 ₺** (56.944 ₺ net) | 36 | 36 | 36 | %91 | Seviye 2 |
-| 28 | DS Automobiles DS Automobiles  & Modelleri sahibinden.com'da - 3 (2023) | DS | 1.703.426 ₺ | 1.851.550 ₺ | **1.730.000 ₺** | 1.870.000 ₺ | **1.761.950 ₺** | **121.550 ₺** (56.200 ₺ net) | 28 | 28 | 28 | %90 | Seviye 2 |
-| 29 | Daihatsu Daihatsu  & Modelleri sahibinden.com'da - 2 (2007) | Sirion | 322.000 ₺ | 350.000 ₺ | **285.000 ₺** | 353.000 ₺ | **297.705 ₺** | **65.000 ₺** (36.855 ₺ net) | 14 | 14 | 14 | %78 | **Manuel Değerlendirme Gereklidir** (Teklif Oranı <%85) |
-| 30 | Daihatsu Daihatsu  & Modelleri sahibinden.com'da (2005) | FarkliVaryant | 350.649 ₺ | 381.140 ₺ | **315.000 ₺** | 385.000 ₺ | **329.225 ₺** | **66.140 ₺** (37.215 ₺ net) | 10 | 10 | 10 | %88 | **Manuel Değerlendirme Gereklidir** (Teklif Oranı <%85) |
-| 31 | Daihatsu Daihatsu  & Modleri .com'da   2 (2006) | Sirion | 288.880 ₺ | 314.000 ₺ | **245.000 ₺** | 319.000 ₺ | **264.215 ₺** | **69.000 ₺** (41.765 ₺ net) | 10 | 10 | 10 | %88 | **Manuel Değerlendirme Gereklidir** (Teklif Oranı <%85) |
-| 32 | Daihatsu Daihatsu  & Modleri .com'da (2005) | Sirion | 350.649 ₺ | 381.140 ₺ | **315.000 ₺** | 385.000 ₺ | **329.225 ₺** | **66.140 ₺** (37.215 ₺ net) | 10 | 10 | 10 | %88 | **Manuel Değerlendirme Gereklidir** (Teklif Oranı <%85) |
-| 33 | BYD BYD 2.El Arabalar ve Satılık Sıfır Km Otomobil  sahibinden.com'da - 3 (2025) | Seal | 2.020.320 ₺ | 2.196.000 ₺ | **2.050.000 ₺** | 2.235.000 ₺ | **2.121.475 ₺** | **146.000 ₺** (71.975 ₺ net) | 50 | 50 | 50 | %92 | Seviye 2 |
-| 34 | BYD BYD 2. Arabalar ve Satılık Sıfır Km Otomobil  .com'da   3 (2026) | Seal | 2.181.946 ₺ | 2.371.680 ₺ | **2.210.000 ₺** | 2.413.000 ₺ | **2.293.617 ₺** | **161.680 ₺** (83.385 ₺ net) | 50 | 50 | 50 | %80 | Seviye 2 |
-| 35 | BYD BYD ve 3 (2025) | FarkliVaryant | 1.837.825 ₺ | 1.997.636 ₺ | **1.860.000 ₺** | 2.036.000 ₺ | **1.925.460 ₺** | **137.636 ₺** (68.496 ₺ net) | 50 | 50 | 50 | %92 | Seviye 2 |
-| 36 | BYD BYD 2.El Arabalar ve Satılık Sıfır Km Otomobil  sahibinden.com'da (2025) | Han | 3.459.648 ₺ | 3.760.487 ₺ | **3.550.000 ₺** | 3.859.000 ₺ | **3.668.076 ₺** | **210.487 ₺** (97.102 ₺ net) | 38 | 38 | 38 | %91 | Seviye 2 |
-| 37 | Cupra Cupra Leon 1.5 eTSI Standart  & Modelleri sahibinden.com'da - 5 (2023) | Standart | 1.742.519 ₺ | 1.894.042 ₺ | **1.770.000 ₺** | 1.908.000 ₺ | **1.799.380 ₺** | **124.042 ₺** (57.722 ₺ net) | 48 | 48 | 48 | %92 | Seviye 2 |
-| 38 | Cupra Cupra Leon 1.5 eTSI Standart  & Modleri .com'da   5 (2023) | Standart | 1.742.519 ₺ | 1.894.042 ₺ | **1.770.000 ₺** | 1.908.000 ₺ | **1.799.380 ₺** | **124.042 ₺** (57.722 ₺ net) | 48 | 48 | 48 | %92 | Seviye 2 |
-| 39 | Cupra Cupra Leon 1.5 eTSI Standart 5 (2024) | - | 1.902.332 ₺ | 2.067.752 ₺ | **1.930.000 ₺** | 2.082.000 ₺ | **1.970.770 ₺** | **137.752 ₺** (67.222 ₺ net) | 50 | 50 | 50 | %80 | Seviye 2 |
-| 40 | Cupra Cupra Leon 1.5 eTSI Standart  & Modelleri sahibinden.com'da - 3 (2023) | FarkliVaryant | 1.896.766 ₺ | 2.061.702 ₺ | **1.920.000 ₺** | 2.065.000 ₺ | **1.954.025 ₺** | **141.702 ₺** (71.527 ₺ net) | 43 | 43 | 43 | %91 | Seviye 2 |
-| 41 | Ferrari Roma (2022) | 3.9 V8 | - | - | - | - | - | - | 0 | 0 | 0 | %0 | **Yeterli piyasa verisi bulunamadı** |
-| 42 | Bentley Continental GT (2021) | 6.0 W12 | - | - | - | - | - | - | 0 | 0 | 0 | %0 | **Yeterli piyasa verisi bulunamadı** |
-| 43 | Lamborghini Urus (2023) | 4.0 V8 | - | - | - | - | - | - | 0 | 0 | 0 | %0 | **Yeterli piyasa verisi bulunamadı** |
-| 44 | Rolls-Royce Cullinan (2022) | 6.75 V12 | - | - | - | - | - | - | 0 | 0 | 0 | %0 | **Yeterli piyasa verisi bulunamadı** |
-| 45 | McLaren 720S (2021) | 4.0 V8 | - | - | - | - | - | - | 0 | 0 | 0 | %0 | **Yeterli piyasa verisi bulunamadı** |
-| 46 | Bugatti Chiron (2022) | 8.0 W16 | - | - | - | - | - | - | 0 | 0 | 0 | %0 | **Yeterli piyasa verisi bulunamadı** |
-| 47 | Pagani Huayra (2021) | 6.0 V12 | - | - | - | - | - | - | 0 | 0 | 0 | %0 | **Yeterli piyasa verisi bulunamadı** |
-| 48 | Koenigsegg Jesko (2023) | 5.0 V8 | - | - | - | - | - | - | 0 | 0 | 0 | %0 | **Yeterli piyasa verisi bulunamadı** |
-| 49 | Rimac Nevera (2023) | EV | - | - | - | - | - | - | 0 | 0 | 0 | %0 | **Yeterli piyasa verisi bulunamadı** |
-| 50 | Maybach S 680 (2023) | 6.0 V12 | - | - | - | - | - | - | 0 | 0 | 0 | %0 | **Yeterli piyasa verisi bulunamadı** |
+| 1 | Audi A3 (2021) | 30 TFSI | 1.975.000 ₺ | 2.099.000 ₺ | **1.960.000 ₺** | 2.158.000 ₺ | **2.045.630 ₺** | **139.000 ₺** (67.030 ₺ net) | 16 | 16 | 16 | %96 | Seviye 1 |
+| 2 | Audi A3 (2023) | 35 TFSI | 2.455.000 ₺ | 2.625.000 ₺ | **2.410.000 ₺** | 2.702.000 ₺ | **2.568.319 ₺** | **215.000 ₺** (130.370 ₺ net) | 5 | 5 | 5 | %85 | Seviye 1 |
+| 3 | Audi A4 (2020) | 40 TDI | 2.675.000 ₺ | 2.795.000 ₺ | **2.570.000 ₺** | 2.877.000 ₺ | **2.734.660 ₺** | **225.000 ₺** (136.145 ₺ net) | 5 | 5 | 5 | %85 | Seviye 1 |
+| 4 | Audi A4 (2022) | 40 TDI | 3.300.000 ₺ | 3.358.750 ₺ | **3.090.000 ₺** | 3.357.000 ₺ | **3.190.912 ₺** | **268.750 ₺** (167.495 ₺ net) | 6 | 6 | 6 | %85 | Seviye 1 |
+| 5 | Audi A4 (2023) | 40 TDI | 3.499.000 ₺ | 3.530.000 ₺ | **3.240.000 ₺** | 3.568.000 ₺ | **3.391.473 ₺** | **290.000 ₺** (184.080 ₺ net) | 7 | 7 | 7 | %85 | Seviye 1 |
+| 6 | Audi A4 (2024) | 40 TDI | 3.798.000 ₺ | 3.870.000 ₺ | **3.650.000 ₺** | 3.869.000 ₺ | **3.677.581 ₺** | **220.000 ₺** (105.465 ₺ net) | 8 | 8 | 8 | %95 | Seviye 1 |
+| 7 | Audi A4 (2019) | 45 TFSI | 2.440.000 ₺ | 2.520.000 ₺ | **2.380.000 ₺** | 2.594.000 ₺ | **2.465.662 ₺** | **140.000 ₺** (57.290 ₺ net) | 12 | 12 | 12 | %96 | Seviye 1 |
+| 8 | Audi A4 (2020) | 45 TFSI | 2.725.000 ₺ | 2.799.000 ₺ | **2.640.000 ₺** | 2.848.000 ₺ | **2.707.095 ₺** | **159.000 ₺** (69.880 ₺ net) | 22 | 22 | 22 | %96 | Seviye 1 |
+| 9 | Audi A4 (2021) | 45 TFSI | 3.310.000 ₺ | 3.330.000 ₺ | **3.140.000 ₺** | 3.334.000 ₺ | **3.169.050 ₺** | **190.000 ₺** (88.590 ₺ net) | 10 | 10 | 10 | %95 | Seviye 1 |
+| 10 | Audi A4 (2022) | 45 TFSI | 3.225.000 ₺ | 3.325.000 ₺ | **3.140.000 ₺** | 3.423.000 ₺ | **3.253.647 ₺** | **185.000 ₺** (82.255 ₺ net) | 30 | 30 | 30 | %97 | Seviye 1 |
+| 11 | Audi A4 (2023) | 45 TFSI | 3.625.000 ₺ | 3.675.000 ₺ | **3.470.000 ₺** | 3.749.000 ₺ | **3.563.518 ₺** | **205.000 ₺** (94.065 ₺ net) | 44 | 44 | 44 | %98 | Seviye 1 |
+| 12 | Audi A4 (2024) | 45 TFSI | 3.849.900 ₺ | 3.975.000 ₺ | **3.750.000 ₺** | 4.093.000 ₺ | **3.910.657 ₺** | **225.000 ₺** (106.105 ₺ net) | 29 | 29 | 29 | %97 | Seviye 1 |
+| 13 | Audi A4 (2016) | 1.4 TFSI | 1.475.000 ₺ | 1.675.000 ₺ | **1.470.000 ₺** | 1.699.000 ₺ | **1.593.515 ₺** | **205.000 ₺** (144.815 ₺ net) | 10 | 10 | 10 | %95 | Seviye 1 |
+| 14 | Audi A5 (2019) | 40 TDI | 2.850.000 ₺ | 2.899.000 ₺ | **2.730.000 ₺** | 2.984.000 ₺ | **2.836.367 ₺** | **169.000 ₺** (76.940 ₺ net) | 27 | 27 | 27 | %97 | Seviye 1 |
+| 15 | Audi A5 (2020) | 40 TDI | 3.149.500 ₺ | 3.350.000 ₺ | **3.140.000 ₺** | 3.399.000 ₺ | **3.230.834 ₺** | **210.000 ₺** (107.615 ₺ net) | 35 | 35 | 35 | %97 | Seviye 1 |
+| 16 | Audi A5 (2021) | 40 TDI | 3.469.000 ₺ | 3.530.000 ₺ | **3.330.000 ₺** | 3.599.000 ₺ | **3.420.939 ₺** | **200.000 ₺** (92.715 ₺ net) | 35 | 35 | 35 | %97 | Seviye 1 |
+| 17 | Audi A5 (2022) | 40 TDI | 3.850.000 ₺ | 4.050.000 ₺ | **3.820.000 ₺** | 4.099.000 ₺ | **3.916.390 ₺** | **230.000 ₺** (110.315 ₺ net) | 44 | 44 | 44 | %98 | Seviye 1 |
+| 18 | Audi A5 (2023) | 40 TDI | 3.900.000 ₺ | 3.997.500 ₺ | **3.770.000 ₺** | 4.116.000 ₺ | **3.932.632 ₺** | **227.500 ₺** (108.060 ₺ net) | 54 | 54 | 54 | %99 | Seviye 1 |
+| 19 | Audi A5 (2024) | 40 TDI | 4.280.000 ₺ | 4.350.000 ₺ | **4.110.000 ₺** | 4.479.000 ₺ | **4.279.461 ₺** | **240.000 ₺** (111.715 ₺ net) | 63 | 63 | 63 | %99 | Seviye 1 |
+| 20 | Audi A5 (2020) | 45 TFSI | 3.570.000 ₺ | 3.700.000 ₺ | **3.490.000 ₺** | 3.810.000 ₺ | **3.621.500 ₺** | **210.000 ₺** (97.950 ₺ net) | 20 | 20 | 20 | %96 | Seviye 1 |
+| 21 | Audi A5 (2021) | 45 TFSI | 3.970.000 ₺ | 4.175.000 ₺ | **3.840.000 ₺** | 4.174.000 ₺ | **3.988.048 ₺** | **335.000 ₺** (213.990 ₺ net) | 6 | 6 | 6 | %85 | Seviye 1 |
+| 22 | Audi A5 (2022) | 45 TFSI | 3.990.000 ₺ | 4.400.000 ₺ | **3.990.000 ₺** | 4.449.000 ₺ | **4.250.797 ₺** | **410.000 ₺** (283.365 ₺ net) | 10 | 10 | 10 | %95 | Seviye 1 |
+| 23 | Audi A5 (2023) | 45 TFSI | 4.230.000 ₺ | 4.295.000 ₺ | **4.050.000 ₺** | 4.354.000 ₺ | **4.160.029 ₺** | **245.000 ₺** (119.190 ₺ net) | 37 | 37 | 37 | %98 | Seviye 1 |
+| 24 | Audi A5 (2024) | 45 TFSI | 4.728.000 ₺ | 4.780.000 ₺ | **4.510.000 ₺** | 4.848.000 ₺ | **4.632.022 ₺** | **270.000 ₺** (132.180 ₺ net) | 16 | 16 | 16 | %96 | Seviye 1 |
+| 25 | Audi A5 (2010) | 2.0 TDI | 990.000 ₺ | 1.080.000 ₺ | **990.000 ₺** | 1.111.000 ₺ | **1.044.335 ₺** | **90.000 ₺** (43.435 ₺ net) | 10 | 10 | 10 | %95 | Seviye 1 |
+| 26 | Audi A5 (2011) | 2.0 TDI | 1.130.000 ₺ | 1.205.000 ₺ | **1.120.000 ₺** | 1.240.000 ₺ | **1.166.437 ₺** | **85.000 ₺** (35.200 ₺ net) | 48 | 48 | 48 | %99 | Seviye 1 |
+| 27 | Audi A5 (2012) | 2.0 TDI | 1.199.000 ₺ | 1.285.000 ₺ | **1.190.000 ₺** | 1.322.000 ₺ | **1.243.572 ₺** | **95.000 ₺** (43.270 ₺ net) | 72 | 72 | 72 | %99 | Seviye 1 |
+| 28 | Audi A5 (2013) | 2.0 TDI | 1.370.000 ₺ | 1.450.000 ₺ | **1.350.000 ₺** | 1.492.000 ₺ | **1.403.487 ₺** | **100.000 ₺** (44.120 ₺ net) | 19 | 19 | 19 | %96 | Seviye 1 |
+| 29 | Audi A5 (2014) | 2.0 TDI | 1.360.000 ₺ | 1.430.000 ₺ | **1.330.000 ₺** | 1.471.000 ₺ | **1.383.733 ₺** | **100.000 ₺** (44.635 ₺ net) | 25 | 25 | 25 | %97 | Seviye 1 |
+| 30 | Audi A5 (2015) | 2.0 TDI | 1.450.000 ₺ | 1.550.000 ₺ | **1.440.000 ₺** | 1.595.000 ₺ | **1.491.075 ₺** | **110.000 ₺** (51.675 ₺ net) | 43 | 43 | 43 | %98 | Seviye 1 |
+| 31 | Audi A6 (2019) | 40 TDI | 3.500.000 ₺ | 3.800.000 ₺ | **3.500.000 ₺** | 3.878.000 ₺ | **3.686.136 ₺** | **300.000 ₺** (186.830 ₺ net) | 14 | 14 | 14 | %96 | Seviye 1 |
+| 32 | Audi A6 (2020) | 40 TDI | 3.950.000 ₺ | 4.150.000 ₺ | **3.920.000 ₺** | 4.273.000 ₺ | **4.082.638 ₺** | **230.000 ₺** (106.705 ₺ net) | 31 | 31 | 31 | %97 | Seviye 1 |
+| 33 | Audi A6 (2021) | 40 TDI | 4.075.000 ₺ | 4.290.000 ₺ | **4.050.000 ₺** | 4.374.000 ₺ | **4.179.138 ₺** | **240.000 ₺** (113.890 ₺ net) | 28 | 28 | 28 | %97 | Seviye 1 |
+| 34 | Audi A6 (2022) | 40 TDI | 4.590.000 ₺ | 4.780.000 ₺ | **4.510.000 ₺** | 4.874.000 ₺ | **4.656.863 ₺** | **270.000 ₺** (131.790 ₺ net) | 24 | 24 | 24 | %97 | Seviye 1 |
+| 35 | Audi A6 (2023) | 40 TDI | 5.155.900 ₺ | 5.400.000 ₺ | **5.100.000 ₺** | 5.449.000 ₺ | **5.206.247 ₺** | **300.000 ₺** (147.265 ₺ net) | 50 | 50 | 50 | %99 | Seviye 1 |
+| 36 | Audi A6 (2024) | 40 TDI | 5.550.000 ₺ | 5.795.000 ₺ | **5.470.000 ₺** | 5.949.000 ₺ | **5.683.972 ₺** | **325.000 ₺** (161.065 ₺ net) | 32 | 32 | 32 | %97 | Seviye 1 |
+| 37 | Audi A6 (2025) | 40 TDI | 6.600.000 ₺ | 6.895.000 ₺ | **6.510.000 ₺** | 7.100.000 ₺ | **6.783.695 ₺** | **385.000 ₺** (193.400 ₺ net) | 62 | 62 | 62 | %99 | Seviye 1 |
+| 38 | Audi A6 (2018) | 50 TDI | 4.150.000 ₺ | 4.390.000 ₺ | **4.140.000 ₺** | 4.399.000 ₺ | **4.203.025 ₺** | **250.000 ₺** (122.615 ₺ net) | 17 | 17 | 17 | %96 | Seviye 1 |
+| 39 | Audi A6 (2006) | 2.0 TDI | 825.000 ₺ | 850.000 ₺ | **785.000 ₺** | 849.000 ₺ | **786.265 ₺** | **65.000 ₺** (24.415 ₺ net) | 8 | 8 | 8 | %95 | Seviye 1 |
+| 40 | Audi A6 (2008) | 2.0 TDI | 850.000 ₺ | 899.000 ₺ | **830.000 ₺** | 924.000 ₺ | **860.140 ₺** | **69.000 ₺** (26.840 ₺ net) | 41 | 41 | 41 | %98 | Seviye 1 |
+| 41 | Ferrari Roma (2022) | 3.9 V8 | - | - | - | - | - | - | 0 | 0 | 0 | %0 | **NOT_TESTABLE_THROUGH_LIVE_API** |
+| 42 | Bentley Continental GT (2021) | 6.0 W12 | - | - | - | - | - | - | 0 | 0 | 0 | %0 | **NOT_TESTABLE_THROUGH_LIVE_API** |
+| 43 | Lamborghini Urus (2023) | 4.0 V8 | - | - | - | - | - | - | 0 | 0 | 0 | %0 | **NOT_TESTABLE_THROUGH_LIVE_API** |
+| 44 | Rolls-Royce Cullinan (2022) | 6.75 V12 | - | - | - | - | - | - | 0 | 0 | 0 | %0 | **NOT_TESTABLE_THROUGH_LIVE_API** |
+| 45 | McLaren 720S (2021) | 4.0 V8 | - | - | - | - | - | - | 0 | 0 | 0 | %0 | **NOT_TESTABLE_THROUGH_LIVE_API** |
+| 46 | Bugatti Chiron (2022) | 8.0 W16 | - | - | - | - | - | - | 0 | 0 | 0 | %0 | **NOT_TESTABLE_THROUGH_LIVE_API** |
+| 47 | Pagani Huayra (2021) | 6.0 V12 | - | - | - | - | - | - | 0 | 0 | 0 | %0 | **NOT_TESTABLE_THROUGH_LIVE_API** |
+| 48 | Koenigsegg Jesko (2023) | 5.0 V8 | - | - | - | - | - | - | 0 | 0 | 0 | %0 | **NOT_TESTABLE_THROUGH_LIVE_API** |
+| 49 | Rimac Nevera (2023) | EV | - | - | - | - | - | - | 0 | 0 | 0 | %0 | **NOT_TESTABLE_THROUGH_LIVE_API** |
+| 50 | Maybach S 680 (2023) | 6.0 V12 | - | - | - | - | - | - | 0 | 0 | 0 | %0 | **NOT_TESTABLE_THROUGH_LIVE_API** |
 
 ---
 
 ## 🎯 Canlı Akış Özeti ve Doğrulama İstatistikleri
 
 - **Toplam Test Aracı:** 50 adet
-- **Başarılı API Değerleme Sayısı:** 40 adet (Seviye 1: 0, Seviye 2: 17, Seviye 3: 23)
+- **Başarılı API Değerleme Sayısı:** 40 adet (Seviye 1: 40, Seviye 2: 0, Seviye 3: 0)
 - **Yetersiz Veri Sayısı:** 10 adet (Veritabanında bulunmayan nadir/egzotik araçlar için fiyat uydurulmamış, `INSUFFICIENT_DATA` döndürülmüştür)
-- **Manuel Değerlendirme Gereken Araç Sayısı (<400k TL):** 7 adet
-- **Farklı Marka Çeşitliliği:** 10 farklı marka (BMW, Audi, Citroen, Chevrolet, Dacia, Alfa Romeo, DS Automobiles, Daihatsu, BYD, Cupra)
+- **Manuel Değerlendirme Gereken Araç Sayısı (<400k TL):** 0 adet
+- **Farklı Marka Çeşitliliği:** 1 farklı marka (Audi)
 - **Dinamik Veritabanı Hacmi:**
-  - **RawVehicleListing Benzersiz İlan Sayısı:** 59.797 adet
-  - **QuarantinedListing Karantina Kayıt Sayısı:** 0 adet
-  - **VehicleMarketSnapshot Canlı Snapshot Sayısı:** 14.267 adet
-- **9-Alan Birebir Eşitlik Kontrolü:** Snapshot Emsal Sayısı = Hesaplayıcı Emsal Sayısı = API Emsal Sayısı (%100 Birebir Eşit)
+  - **RawVehicleListing Benzersiz İlan Sayısı:** 63.444 adet
+  - **QuarantinedListing Karantina Kayıt Sayısı:** 2.358 adet
+  - **VehicleMarketSnapshot Canlı Snapshot Sayısı:** 6.257 adet
+- **11-Alan Birebir Eşitlik Kontrolü:** Snapshot Emsal Sayısı = Hesaplayıcı Emsal Sayısı = API Emsal Sayısı (%100 Birebir Eşit)
 
 ---
 
