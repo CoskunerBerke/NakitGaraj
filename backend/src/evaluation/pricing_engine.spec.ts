@@ -1,14 +1,17 @@
 import { RobustPricingCalculator } from './robust-pricing-calculator';
 import { EmsalMatcherService, CleanListingItem } from './emsal-matcher.service';
 import { PrismaClient } from '@prisma/client';
+import { EvaluationService } from './evaluation.service';
 
 describe('NakitGaraj Real Database & Advanced Pricing Engine Integration Test Suite', () => {
   let prisma: PrismaClient;
   let matcher: EmsalMatcherService;
+  let evaluationService: EvaluationService;
 
   beforeAll(() => {
     prisma = new PrismaClient();
     matcher = new EmsalMatcherService(prisma as any);
+    evaluationService = new EvaluationService(prisma as any, {} as any, matcher);
   });
 
   afterAll(async () => {
@@ -178,5 +181,97 @@ describe('NakitGaraj Real Database & Advanced Pricing Engine Integration Test Su
     expect(calc.matchedListingCount).toEqual(snap!.matchedListingCount);
     expect(calc.fairMarketValue).toBeGreaterThan(2000000);
     expect(calc.cashOffer).toBeGreaterThan(1880000);
+  });
+
+  test('9. Mismatched Fuel/Transmission/BodyType cannot yield Level 1 match', async () => {
+    const match = await matcher.matchComparableListings({
+      make: 'BMW',
+      model: '5 Serisi',
+      variant: 'Executive',
+      year: 2016,
+      mileageKm: 120000,
+      fuelType: 'Benzin',
+      transmission: 'Manuel',
+    });
+    expect(match.level).not.toEqual(1);
+  });
+
+  test('10. Duplicate quarantined listings are handled idempotently via upsert constraint', async () => {
+    const rawListingId = 'TST_QUARANTINE_123';
+    const reason = 'TEST_REASON_JUNK';
+
+    const res1 = await prisma.quarantinedListing.upsert({
+      where: {
+        source_rawListingId_reason: {
+          source: 'SAHIBINDEN_HTML',
+          rawListingId,
+          reason,
+        }
+      },
+      create: {
+        source: 'SAHIBINDEN_HTML',
+        rawListingId,
+        reason,
+        rawMake: 'Test',
+        rawModel: 'Model',
+      },
+      update: {
+        rawMake: 'TestUpdated',
+      }
+    });
+
+    expect(res1.id).toBeDefined();
+
+    const res2 = await prisma.quarantinedListing.upsert({
+      where: {
+        source_rawListingId_reason: {
+          source: 'SAHIBINDEN_HTML',
+          rawListingId,
+          reason,
+        }
+      },
+      create: {
+        source: 'SAHIBINDEN_HTML',
+        rawListingId,
+        reason,
+        rawMake: 'Test',
+        rawModel: 'Model',
+      },
+      update: {
+        rawMake: 'TestUpdated',
+      }
+    });
+
+    expect(res2.id).toEqual(res1.id);
+    expect(res2.rawMake).toEqual('TestUpdated');
+
+    await prisma.quarantinedListing.delete({
+      where: { id: res1.id }
+    });
+  });
+
+  test('11. Controlled INSUFFICIENT_DATA and no database write on preview service call', async () => {
+    const beforeCount = await prisma.vehicleEvaluation.count();
+
+    const result = await evaluationService.calculateVehicleValuationPreview({
+      year: 2026,
+      manufacturerId: 'non-existent-id',
+      modelId: 'non-existent-id',
+      mileage: 10000,
+      color: 'Beyaz',
+      damageStatus: 'NO',
+      licensePlate: '34TST50',
+      firstName: 'Test',
+      lastName: 'Kullanıcı',
+      phone: '05320000000',
+      sellingTimeline: 'hemen',
+      userDesiredPrice: 0,
+    });
+
+    const afterCount = await prisma.vehicleEvaluation.count();
+
+    expect(result.status).toEqual('INSUFFICIENT_DATA');
+    expect(result.results).toBeNull();
+    expect(afterCount).toEqual(beforeCount);
   });
 });
