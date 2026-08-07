@@ -13,6 +13,11 @@ export interface PricingEngineOutput {
   estimatedDaysToSellMax: number;
   matchedListingCount: number;
   confidenceScore: number;
+  requiresManualApproval?: boolean;
+  manualApprovalReason?: string;
+  mileageAdjustment?: number;
+  kmDelta?: number;
+  mileageAdjustmentSource?: string;
 }
 
 export class RobustPricingCalculator {
@@ -113,6 +118,8 @@ export class RobustPricingCalculator {
     weightedP95: number;
     realMatchedListingCount: number;
     kmDecayPer10k?: number;
+    referenceMedianMileage?: number;
+    mileageAdjustmentSource?: string;
     userYear: number;
     userMileage: number;
     damagePenalty?: number;
@@ -128,6 +135,8 @@ export class RobustPricingCalculator {
       weightedP95,
       realMatchedListingCount,
       kmDecayPer10k = 0.0025,
+      referenceMedianMileage,
+      mileageAdjustmentSource = 'DEFAULT_FALLBACK',
       userYear,
       userMileage,
       damagePenalty = 0,
@@ -144,10 +153,11 @@ export class RobustPricingCalculator {
       throw new Error('Yeterli piyasa verisi bulunamadı');
     }
 
-    // 1. KM & Condition Adjustment
+    // 1. KM & Condition Adjustment using referenceMedianMileage
     const age = Math.max(1, 2026 - userYear);
     const expectedKm = age * 15000;
-    const kmDelta = userMileage - expectedKm;
+    const baseReferenceKm = (referenceMedianMileage && referenceMedianMileage > 0) ? referenceMedianMileage : expectedKm;
+    const kmDelta = userMileage - baseReferenceKm;
 
     let kmRatio = Math.min(0.12, Math.max(-0.10, (kmDelta / 10000) * kmDecayPer10k));
     const mileageAdjustment = -Math.round(p50Market * kmRatio);
@@ -170,10 +180,9 @@ export class RobustPricingCalculator {
       velocityAdjustment -= 0.005;
     }
 
-    // FIX: Evaluate comp count risk on REAL matched listing count!
     let compCountRisk = 0;
     if (realMatchedListingCount < 8) {
-      compCountRisk = 0.025; // 2.5% data risk penalty only when real comps < 8
+      compCountRisk = 0.025;
     }
 
     const finalReserveRate = baseRate + velocityAdjustment + compCountRisk;
@@ -190,6 +199,15 @@ export class RobustPricingCalculator {
     }
 
     let cashOffer = this.roundCashOffer(cashOfferRaw);
+
+    // Low-price vehicle (<400k TL) policy: check offer ratio vs market value
+    let requiresManualApproval = false;
+    let manualApprovalReason: string | undefined;
+    if (fairMarketValue < 400000 && (cashOffer / fairMarketValue) < 0.85) {
+      requiresManualApproval = true;
+      manualApprovalReason = 'Düşük segment araçlarda sabit rezerv kuralı gereği nakit teklif oranı %85 altına düşmektedir. Manuel değerlendirme gereklidir.';
+    }
+
     const cashOfferMin = this.roundCashOffer(cashOffer * 0.96);
     const cashOfferMax = this.roundCashOffer(cashOffer * 1.02);
 
@@ -225,6 +243,11 @@ export class RobustPricingCalculator {
       estimatedDaysToSellMax: daysMax,
       matchedListingCount: realMatchedListingCount,
       confidenceScore: Math.max(0, Math.min(99, confidenceScore)),
+      requiresManualApproval,
+      manualApprovalReason,
+      mileageAdjustment,
+      kmDelta,
+      mileageAdjustmentSource,
     };
   }
 
@@ -240,6 +263,9 @@ export class RobustPricingCalculator {
     matchedLevel: number;
     baseConfidenceScore: number;
     realMatchedListingCount?: number;
+    kmDecayPer10k?: number;
+    referenceMedianMileage?: number;
+    mileageAdjustmentSource?: string;
   }): PricingEngineOutput {
     const {
       cleanListings,
@@ -250,6 +276,9 @@ export class RobustPricingCalculator {
       matchedLevel,
       baseConfidenceScore,
       realMatchedListingCount = cleanListings.length,
+      kmDecayPer10k,
+      referenceMedianMileage,
+      mileageAdjustmentSource,
     } = params;
 
     const rawPrices = cleanListings.map(l => l.price).filter(p => p > 0);
@@ -263,6 +292,9 @@ export class RobustPricingCalculator {
       weightedP60: percentiles.p60,
       weightedP95: percentiles.p95,
       realMatchedListingCount,
+      kmDecayPer10k,
+      referenceMedianMileage,
+      mileageAdjustmentSource,
       userYear,
       userMileage,
       damagePenalty,

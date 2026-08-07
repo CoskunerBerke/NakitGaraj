@@ -65,6 +65,24 @@ export class EvaluationService {
     }
 
     if (!spec) {
+      const manufacturer = await this.prisma.manufacturer.findUnique({ where: { id: dto.manufacturerId } });
+      const model = await this.prisma.model.findUnique({ where: { id: dto.modelId } });
+      if (manufacturer && model) {
+        spec = {
+          id: `virtual-spec-${dto.manufacturerId}`,
+          year: dto.year,
+          manufacturer,
+          model,
+          variant: null,
+          package: null,
+          bodyType: null,
+          fuelType: null,
+          transmissionType: null,
+        } as any;
+      }
+    }
+
+    if (!spec) {
       throw new NotFoundException(
         'Girilen araç özelliklerine uygun piyasa verisi bulunamadı. Lütfen bilgileri kontrol ediniz.',
       );
@@ -127,6 +145,9 @@ export class EvaluationService {
       weightedP60: emsalResult.weightedP60 || (emsalResult.weightedP50 || 0) * 1.02,
       weightedP95: emsalResult.weightedP95 || (emsalResult.weightedP50 || 0) * 1.15,
       realMatchedListingCount: emsalResult.matchedCount,
+      kmDecayPer10k: emsalResult.kmDecayPer10k || 0.0025,
+      referenceMedianMileage: emsalResult.referenceMedianMileage || 100000,
+      mileageAdjustmentSource: emsalResult.mileageAdjustmentSource || 'DEFAULT_FALLBACK',
       userYear: dto.year,
       userMileage: dto.mileage,
       damagePenalty,
@@ -136,6 +157,45 @@ export class EvaluationService {
     });
 
     aiAnalysis.push(emsalResult.explanationNote);
+    aiAnalysis.push(`Kilometre Düzeltmesi: Referans Medyan Km: ${(emsalResult.referenceMedianMileage || 100000).toLocaleString('tr-TR')} km | Araç Km: ${dto.mileage.toLocaleString('tr-TR')} km | Fark: ${calc.kmDelta} km | Katsayı: %${((emsalResult.kmDecayPer10k || 0.0025) * 100).toFixed(2)}/10.000km | Düzeltme: ${(calc.mileageAdjustment || 0).toLocaleString('tr-TR')} ₺ (Kaynak: ${emsalResult.mileageAdjustmentSource || 'DEFAULT_FALLBACK'})`);
+
+    if (calc.requiresManualApproval) {
+      return {
+        status: 'MANUAL_EVALUATION_REQUIRED',
+        confidenceScore: calc.confidenceScore,
+        message: calc.manualApprovalReason || 'Düşük segment araçlarda manuel değerlendirme gereklidir',
+        vehicle: {
+          year: spec.year,
+          brand: spec.manufacturer.name,
+          model: spec.model.name,
+          variant: spec.variant?.name || '',
+          package: spec.package?.name || '',
+          bodyType: spec.bodyType?.name || '',
+          fuelType: spec.fuelType?.name || '',
+          transmission: spec.transmissionType?.name || '',
+        },
+        results: {
+          fairMarketValue: calc.fairMarketValue,
+          cashOffer: calc.cashOffer,
+          cashOfferMin: calc.cashOfferMin,
+          cashOfferMax: calc.cashOfferMax,
+          consignmentListingPrice: calc.consignmentListingPrice,
+          expectedConsignmentSalePrice: calc.expectedConsignmentSalePrice,
+          consignmentCommission: calc.consignmentCommission,
+          customerConsignmentNet: calc.customerConsignmentNet,
+          estimatedDaysToSell: `${calc.estimatedDaysToSellMin}-${calc.estimatedDaysToSellMax} gün`,
+          confidenceScore: calc.confidenceScore,
+          matchedListingCount: calc.matchedListingCount,
+          matchedLevel: emsalResult.level,
+          pricingExplanation: calc.manualApprovalReason,
+          requiresManualApproval: true,
+          kmDecayPer10k: emsalResult.kmDecayPer10k || 0.0025,
+          referenceMedianMileage: emsalResult.referenceMedianMileage || 100000,
+        },
+        aiAnalysis,
+        comparableListings: [],
+      };
+    }
 
     if (emsalResult.isLimitedComps) {
       aiAnalysis.push('UYARI: Aracınız için sınırlı sayıda emsal bulunabilmiştir. Fiyat için galerimizden ek teyit almanızı öneririz.');

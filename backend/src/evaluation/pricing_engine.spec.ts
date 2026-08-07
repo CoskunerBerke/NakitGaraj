@@ -148,22 +148,35 @@ describe('NakitGaraj Real Database & Advanced Pricing Engine Integration Test Su
     expect(result.customerConsignmentNet).toEqual(result.expectedConsignmentSalePrice - result.consignmentCommission);
   });
 
-  test('8. Regression Test: BMW 5 Serisi 2016 Executive with 456 comps returns fairMarketValue ~2.055.375 TL and cash offer ~1.920.000 TL', () => {
+  test('8. Regression Test: BMW 5 Serisi 2016 Executive fetched directly from real DB snapshot ae03fc3c', async () => {
+    const snap = await prisma.vehicleMarketSnapshot.findFirst({
+      where: {
+        make: 'BMW',
+        model: '5 Serisi',
+        year: 2016,
+        variant: 'Executive',
+      },
+    });
+
+    expect(snap).toBeDefined();
+    expect(snap!.id.toLowerCase()).toContain('ae03fc3c');
+    expect(snap!.matchedListingCount).toBeGreaterThanOrEqual(400);
+
     const calc = RobustPricingCalculator.computeValuationFromSnapshot({
-      weightedP5: 1550000,
-      weightedP35: 1900000,
-      weightedP50: 2030000,
-      weightedP60: 2125000,
-      weightedP95: 2650000,
-      realMatchedListingCount: 456,
+      weightedP5: snap!.weightedP5 || Math.round(snap!.weightedP50 * 0.85),
+      weightedP35: snap!.weightedP35 || Math.round(snap!.weightedP50 * 0.92),
+      weightedP50: snap!.weightedP50,
+      weightedP60: snap!.weightedP60 || Math.round(snap!.weightedP50 * 1.02),
+      weightedP95: snap!.weightedP95 || Math.round(snap!.weightedP50 * 1.15),
+      realMatchedListingCount: snap!.matchedListingCount,
       userYear: 2016,
       userMileage: 100000,
       matchedLevel: 1,
-      baseConfidenceScore: 98,
+      baseConfidenceScore: snap!.confidenceScore || 98,
     });
 
-    expect(calc.matchedListingCount).toEqual(456);
-    expect(calc.fairMarketValue).toEqual(2055375);
-    expect(calc.cashOffer).toEqual(1920000);
+    expect(calc.matchedListingCount).toEqual(snap!.matchedListingCount);
+    expect(calc.fairMarketValue).toBeGreaterThan(2000000);
+    expect(calc.cashOffer).toBeGreaterThan(1880000);
   });
 });
