@@ -194,7 +194,11 @@ export class EmsalMatcherService {
     userYear: number;
   }) {
     const { make, model, variant, yearExact, yearMin, yearMax, userYear } = filter;
-    const whereClause: any = { make: { equals: make.trim() } };
+    const whereClause: any = {
+      make: { equals: make.trim() },
+      snapshotVersion: 'v2.0',
+      isActive: true,
+    };
     if (model) whereClause.model = { equals: model.trim() };
     if (variant && variant.trim() !== '' && variant.trim() !== 'Standart' && variant.trim() !== 'FarkliVaryant') {
       whereClause.variant = { equals: variant.trim() };
@@ -305,6 +309,8 @@ export class EmsalMatcherService {
 
     const whereClause: any = {
       make: { equals: make.trim() },
+      snapshotVersion: 'v2.0',
+      isActive: true,
     };
 
     if (model) {

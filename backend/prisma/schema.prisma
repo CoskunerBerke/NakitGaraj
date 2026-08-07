@@ -282,14 +282,15 @@ model VehicleMarketSnapshot {
   bodyType               String?
   fuelType               String?
   transmission           String?
-  canonicalMake          String?
-  canonicalModel         String?
-  canonicalVariant       String?
-  canonicalTrim          String?
-  canonicalBodyType      String?
-  canonicalFuelType      String?
-  canonicalTransmission  String?
+  canonicalMake          String   @default("")
+  canonicalModel         String   @default("")
+  canonicalVariant       String   @default("")
+  canonicalTrim          String   @default("")
+  canonicalBodyType      String   @default("")
+  canonicalFuelType      String   @default("")
+  canonicalTransmission  String   @default("")
   snapshotVersion        String   @default("v2.0")
+  isActive               Boolean  @default(true)
   matchedLevel           Int      @default(1)
   matchedListingCount    Int      @default(0)
   uniqueListingCount     Int      @default(0)
@@ -311,7 +312,7 @@ model VehicleMarketSnapshot {
   createdAt              DateTime @default(now())
   updatedAt              DateTime @updatedAt
 
-  @@unique([make, model, year, variant])
+  @@unique([canonicalMake, canonicalModel, canonicalVariant, canonicalTrim, year, canonicalBodyType, canonicalFuelType, canonicalTransmission, snapshotVersion])
 }
 
 model VehicleTransactionRecord {

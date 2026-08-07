@@ -1,6 +1,7 @@
 import { PrismaClient } from '@prisma/client';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as cheerio from 'cheerio';
 import { CanonicalNormalizer } from '../evaluation/canonical-normalizer';
 import { RobustPricingCalculator } from '../evaluation/robust-pricing-calculator';
 
@@ -41,9 +42,53 @@ interface RawListingData {
   parseStatus: string;
 }
 
+function calculateDataQualityScore(params: {
+  matchedListingCount: number;
+  mileageSampleCount: number;
+  prices: number[];
+  canonicalVariant: string | null;
+  canonicalBodyType: string | null;
+  canonicalFuelType: string | null;
+  canonicalTransmission: string | null;
+}): number {
+  let score = 50.0; // Base score
+
+  // 1. Unique listing count contribution (max 20 points)
+  const countFactor = Math.min(20, params.matchedListingCount * 1.5);
+  score += countFactor;
+
+  // 2. Mileage coverage ratio contribution (max 15 points)
+  if (params.matchedListingCount > 0) {
+    const kmRatio = params.mileageSampleCount / params.matchedListingCount;
+    score += kmRatio * 15;
+  }
+
+  // 3. Metadata completeness contribution (max 15 points)
+  if (params.canonicalVariant) score += 4;
+  if (params.canonicalBodyType && params.canonicalBodyType !== '') score += 4;
+  if (params.canonicalFuelType && params.canonicalFuelType !== '') score += 4;
+  if (params.canonicalTransmission && params.canonicalTransmission !== '') score += 3;
+
+  // 4. Price consistency / distribution contribution (max 15 points)
+  if (params.prices.length >= 3) {
+    const mean = params.prices.reduce((sum, p) => sum + p, 0) / params.prices.length;
+    const variance = params.prices.reduce((sum, p) => sum + Math.pow(p - mean, 2), 0) / params.prices.length;
+    const stdDev = Math.sqrt(variance);
+    const cv = mean > 0 ? stdDev / mean : 0.5;
+
+    // Lower CV (coefficient of variation) means higher price consistency
+    const priceConsistencyFactor = Math.max(0, 15 - (cv * 30));
+    score += priceConsistencyFactor;
+  } else {
+    score += 5; // default fallback if too few listings to compute stddev
+  }
+
+  return Math.max(0, Math.min(100, Math.round(score * 10) / 10));
+}
+
 async function main() {
   console.log(`\n====================================================================`);
-  console.log(`  CANONICAL NORMALİZASYON VE ULTRA HIZLI İLAN AKTARIMI`);
+  console.log(`  CHEERIO SATIR PARSER VE ATOMİK İLAN YAZMA`);
   console.log(`====================================================================\n`);
 
   const startTime = Date.now();
@@ -62,56 +107,50 @@ async function main() {
 
       const html = fs.readFileSync(filePath, 'utf8');
 
-      // Fast TR row extraction using regular expression pattern matching
-      const trMatches = html.match(/<tr[^>]*data-id="(\d+)"[\s\S]*?<\/tr>/gi) || [];
+      // Slice table or tbody block to keep Cheerio loading sub-second per file
+      const tableMatch = html.match(/<table[^>]*>([\s\S]*?)<\/table>/i) || html.match(/<tbody[^>]*>([\s\S]*?)<\/tbody>/i);
+      const htmlToLoad = tableMatch ? tableMatch[0] : html;
+      const $ = cheerio.load(htmlToLoad);
+      const rows = $('tr[data-id]');
 
-      for (const trHtml of trMatches) {
-        const idMatch = trHtml.match(/data-id="(\d+)"/i);
-        if (!idMatch) continue;
-        const dataId = idMatch[1];
+      rows.each((_, el) => {
+        const tr = $(el);
+        const dataId = tr.attr('data-id');
+        if (!dataId) return;
 
-        // Price extraction
-        const priceMatch = trHtml.match(/<td[^>]*class="[^"]*searchResultsPriceValue[^"]*"[^>]*>[\s\S]*?([\d.]+)\s*TL/i) || trHtml.match(/([\d\.]+)\s*TL/i);
-        if (!priceMatch) continue;
-        const priceStr = priceMatch[1].replace(/\./g, '').replace(/\D/g, '');
+        const title = tr.find('td.searchResultsTitleValue').text().trim();
+        const priceTd = tr.find('td.searchResultsPriceValue').text().trim();
+        const priceStr = priceTd.replace(/\./g, '').replace(/\D/g, '');
         const price = parseInt(priceStr, 10);
 
-        // Attribute cells extraction (0 = Year, 1 = Mileage, 2 = Color)
-        const attrMatches = trHtml.match(/<td[^>]*class="[^"]*searchResultsAttributeValue[^"]*"[^>]*>([\s\S]*?)<\/td>/gi) || [];
-        const attrTexts = attrMatches.map(cell => cell.replace(/<[^>]+>/g, '').trim());
+        const attrs = tr.find('td.searchResultsAttributeValue').map((_, cell) => $(cell).text().trim()).get();
+        const tagText = tr.find('td.searchResultsTagAttributeValue').text().trim();
 
         let year = 0;
-        if (attrTexts[0]) {
-          const parsedYear = parseInt(attrTexts[0].replace(/\D/g, ''), 10);
+        if (attrs[0]) {
+          const parsedYear = parseInt(attrs[0].replace(/\D/g, ''), 10);
           if (!isNaN(parsedYear) && parsedYear >= 1980 && parsedYear <= 2026) {
             year = parsedYear;
           }
         }
 
         if (price < 50000 || price > 150000000 || year === 0) {
-          continue;
+          return;
         }
 
-        // Section 1.B: Mileage Validations
         let mileageKm: number | null = null;
-        if (attrTexts[1]) {
-          const parsedKm = parseInt(attrTexts[1].replace(/\./g, '').replace(/\D/g, ''), 10);
+        if (attrs[1]) {
+          const parsedKm = parseInt(attrs[1].replace(/\./g, '').replace(/\D/g, ''), 10);
           if (!isNaN(parsedKm) && parsedKm >= 0 && parsedKm <= 2000000 && parsedKm !== year && parsedKm !== price) {
             mileageKm = parsedKm;
           }
         }
 
-        // Title and Variant extraction
-        const titleMatch = trHtml.match(/<td[^>]*class="[^"]*searchResultsTitleValue[^"]*"[^>]*>([\s\S]*?)<\/td>/i);
-        const rawTitle = titleMatch ? titleMatch[1].replace(/<[^>]+>/g, '').trim() : '';
+        const rawVariant = tagText || fileName;
+        const isDamaged = tr.text().toLowerCase().includes('ağır hasar') || tr.text().toLowerCase().includes('pert');
 
-        const tagMatch = trHtml.match(/<td[^>]*class="[^"]*searchResultsTagAttributeValue[^"]*"[^>]*>([\s\S]*?)<\/td>/i);
-        const rawVariant = tagMatch ? tagMatch[1].replace(/<[^>]+>/g, '').trim() : fileName;
-
-        const isDamaged = trHtml.toLowerCase().includes('ağır hasar') || trHtml.toLowerCase().includes('pert');
-
-        // CANONICAL NORMALIZATION LAYER (Section 1.A)
-        const canonical = CanonicalNormalizer.normalize(rawMake, fileName, rawVariant, rawTitle);
+        // Clean and normalize listing (Requirement 3)
+        const canonical = CanonicalNormalizer.normalize(rawMake, fileName, rawVariant, title);
 
         if (!canonical.isValid) {
           quarantinedList.push({
@@ -119,11 +158,11 @@ async function main() {
             rawMake,
             rawModel: fileName,
             rawVariant,
-            rawTitle,
+            rawTitle: title,
             sourceFile: filePath,
             reason: canonical.quarantineReason || 'CANONICAL_TEST_BAŞARISIZ',
           });
-          continue;
+          return;
         }
 
         const uniqueKey = `SAHIBINDEN_HTML_${dataId}`;
@@ -136,7 +175,7 @@ async function main() {
             rawMake,
             rawModel: fileName,
             rawVariant,
-            rawTitle,
+            rawTitle: title,
             canonicalMake: canonical.canonicalMake,
             canonicalModel: canonical.canonicalModel,
             canonicalVariant: canonical.canonicalVariant,
@@ -147,40 +186,89 @@ async function main() {
             parseStatus: 'VALID',
           });
         }
-      }
+      });
     } catch (err) {}
   }
 
   console.log(`✓ Bellekte ${rawListingMap.size} geçerli tekil ilan ve ${quarantinedList.length} karantinalı kayıt toplandı.`);
 
-  // Batch insert into RawVehicleListing
-  const rawListingsArray = Array.from(rawListingMap.values());
+  // Requirement 6: Non-destructive raw listing writing (use upsert/compare in memory, don't use deleteMany)
+  console.log(`✓ Veritabanı ile karşılaştırma yapılıyor...`);
+  const existingRaw = await prisma.rawVehicleListing.findMany({
+    select: { id: true, sourceListingId: true, price: true, mileageKm: true }
+  });
+  const existingRawMap = new Map(existingRaw.map(r => [r.sourceListingId, r]));
 
-  // Wipe old raw listings for idempotent re-ingestion
-  await prisma.rawVehicleListing.deleteMany({});
-  await prisma.quarantinedListing.deleteMany({});
+  const toCreateRaw: any[] = [];
+  const toUpdateRaw: any[] = [];
 
+  for (const item of rawListingMap.values()) {
+    const existing = existingRawMap.get(item.sourceListingId);
+    if (existing) {
+      if (existing.price !== item.price || existing.mileageKm !== item.mileageKm) {
+        toUpdateRaw.push({
+          id: existing.id,
+          price: item.price,
+          mileageKm: item.mileageKm,
+        });
+      }
+    } else {
+      toCreateRaw.push(item);
+    }
+  }
+
+  // Create new raw listings in chunks
   const chunkSize = 1000;
-  for (let i = 0; i < rawListingsArray.length; i += chunkSize) {
-    const chunk = rawListingsArray.slice(i, i + chunkSize);
+  for (let i = 0; i < toCreateRaw.length; i += chunkSize) {
+    const chunk = toCreateRaw.slice(i, i + chunkSize);
     await prisma.rawVehicleListing.createMany({
       data: chunk as any,
     });
   }
 
-  for (let i = 0; i < quarantinedList.length; i += chunkSize) {
-    const chunk = quarantinedList.slice(i, i + chunkSize);
+  // Update existing raw listings (update lastSeenAt and latest price/mileage)
+  console.log(`✓ Mevcut ilanların güncelleme işlemleri yapılıyor (${toUpdateRaw.length} adet)...`);
+  for (let i = 0; i < toUpdateRaw.length; i += chunkSize) {
+    const chunk = toUpdateRaw.slice(i, i + chunkSize);
+    await prisma.$transaction(
+      chunk.map(item =>
+        prisma.rawVehicleListing.update({
+          where: { id: item.id },
+          data: {
+            price: item.price,
+            mileageKm: item.mileageKm,
+            lastSeenAt: new Date(),
+          }
+        })
+      )
+    );
+  }
+
+  // Update quarantined listings
+  const existingQuarantined = await prisma.quarantinedListing.findMany({
+    select: { rawListingId: true }
+  });
+  const existingQuarSet = new Set(existingQuarantined.map(q => q.rawListingId).filter(Boolean));
+
+  const toCreateQuar = quarantinedList.filter(q => !existingQuarSet.has(q.rawListingId));
+  for (let i = 0; i < toCreateQuar.length; i += chunkSize) {
+    const chunk = toCreateQuar.slice(i, i + chunkSize);
     await prisma.quarantinedListing.createMany({
       data: chunk,
     });
   }
 
-  console.log(`✓ RawVehicleListing (${rawListingsArray.length}) ve QuarantinedListing (${quarantinedList.length}) veritabanına yazıldı.\n`);
+  console.log(`✓ RawVehicleListing ve QuarantinedListing başarıyla güncellendi.\n`);
 
-  // 2. GENERATE VERSIONED MARKET SNAPSHOTS FROM RawVehicleListing (Section 2)
+  // Requirement 7: Atomic Snapshot Replacement
   console.log(`====================================================================`);
-  console.log(`  SÜRÜMLÜ PİYASA SNAPSHOT'LARI ÜRETİLİYOR (snapshotVersion = "v2.0")`);
+  console.log(`  SÜRÜMLÜ PİYASA SNAPSHOT'LARI ÜRETİLİYOR (v2.0_temp)`);
   console.log(`====================================================================\n`);
+
+  // Clear any leftover v2.0_temp snapshots first
+  await prisma.vehicleMarketSnapshot.deleteMany({
+    where: { snapshotVersion: 'v2.0_temp' },
+  });
 
   const validRawListings = await prisma.rawVehicleListing.findMany({
     where: { parseStatus: 'VALID', isDamaged: false },
@@ -189,19 +277,43 @@ async function main() {
   const groupMap = new Map<string, typeof validRawListings>();
 
   for (const item of validRawListings) {
-    const key = `${item.canonicalMake}__${item.canonicalModel}__${item.canonicalVariant || 'STANDART'}__${item.year}`;
+    const key = `${item.canonicalMake}__${item.canonicalModel}__${item.canonicalVariant || ''}__${item.year}`;
     if (!groupMap.has(key)) {
       groupMap.set(key, []);
     }
     groupMap.get(key)!.push(item);
   }
 
+  console.log(`✓ Emsal teknik özellikleri (VehicleSpecification) önbelleğe alınıyor...`);
+  const distinctMakes = Array.from(new Set(validRawListings.map(l => l.canonicalMake)));
+  const specs = await prisma.vehicleSpecification.findMany({
+    where: {
+      manufacturer: { name: { in: distinctMakes } },
+    },
+    include: {
+      manufacturer: true,
+      model: true,
+      bodyType: true,
+      fuelType: true,
+      transmissionType: true,
+    }
+  });
+
+  const specMap = new Map<string, typeof specs[0]>();
+  for (const s of specs) {
+    const key = `${s.manufacturer.name.trim()}__${s.model.name.trim()}__${s.year}`;
+    if (!specMap.has(key)) {
+      specMap.set(key, s);
+    }
+  }
+  console.log(`✓ Toplam ${specMap.size} teknik özellik eşleştirme için hazır.\n`);
+
   let snapshotsCreated = 0;
 
   for (const [key, items] of groupMap.entries()) {
     const [make, model, variantStr, yearStr] = key.split('__');
     const year = parseInt(yearStr, 10);
-    const variant = variantStr === 'STANDART' ? null : variantStr;
+    const variant = variantStr === '' ? null : variantStr;
 
     const rawPrices = items.map(i => i.price);
     const cleanedPrices = RobustPricingCalculator.cleanOutliersIQR(rawPrices);
@@ -209,13 +321,13 @@ async function main() {
 
     if (cleanedPrices.length === 0) continue;
 
-    // Section 3: Robust Mileage Decay Computation
+    // Mileage Stats
     const validKmItems = items.filter(i => i.mileageKm !== null && i.mileageKm! > 0);
     const kmSampleCount = validKmItems.length;
 
     let medianMileage: number | null = null;
     let averageMileage: number | null = null;
-    let kmDecayPer10k = 0.0025; // Default 0.25% per 10k km
+    let kmDecayPer10k = 0.0025;
     let mileageAdjustmentSource = 'DEFAULT_FALLBACK';
 
     if (kmSampleCount > 0) {
@@ -224,7 +336,6 @@ async function main() {
       averageMileage = Math.round(kms.reduce((sum, val) => sum + val, 0) / kms.length);
 
       if (kmSampleCount >= 8) {
-        // Robust Regression with >= 8 pairs
         const meanX = validKmItems.reduce((s, item) => s + (item.mileageKm! / 10000), 0) / kmSampleCount;
         const meanY = validKmItems.reduce((s, item) => s + item.price, 0) / kmSampleCount;
 
@@ -249,6 +360,25 @@ async function main() {
       }
     }
 
+    // Lookup specification from in-memory pre-fetched map
+    const specKey = `${make.trim()}__${model.trim()}__${year}`;
+    const spec = specMap.get(specKey);
+
+    const canonicalBodyType = spec?.bodyType?.name || '';
+    const canonicalFuelType = spec?.fuelType?.name || '';
+    const canonicalTransmission = spec?.transmissionType?.name || '';
+
+    // Requirement 11: Dynamic dataQualityScore
+    const dataQualityScore = calculateDataQualityScore({
+      matchedListingCount: items.length,
+      mileageSampleCount: kmSampleCount,
+      prices: cleanedPrices,
+      canonicalVariant: variant,
+      canonicalBodyType,
+      canonicalFuelType,
+      canonicalTransmission,
+    });
+
     const uniqueListingIds = items.map(i => i.sourceListingId);
 
     const snapshotDataObj = {
@@ -262,20 +392,37 @@ async function main() {
       iqrUpperBound: Math.max(...cleanedPrices),
     };
 
+    // Upsert into v2.0_temp snapshot version
     await prisma.vehicleMarketSnapshot.upsert({
       where: {
-        make_model_year_variant: {
-          make,
-          model,
+        canonicalMake_canonicalModel_canonicalVariant_canonicalTrim_year_canonicalBodyType_canonicalFuelType_canonicalTransmission_snapshotVersion: {
+          canonicalMake: make,
+          canonicalModel: model,
+          canonicalVariant: variant || '',
+          canonicalTrim: '',
           year,
-          variant: variant || '',
-        },
+          canonicalBodyType,
+          canonicalFuelType,
+          canonicalTransmission,
+          snapshotVersion: 'v2.0_temp',
+        }
       },
       update: {
+        make,
+        model,
+        variant: variant || '',
+        bodyType: canonicalBodyType,
+        fuelType: canonicalFuelType,
+        transmission: canonicalTransmission,
         canonicalMake: make,
         canonicalModel: model,
-        canonicalVariant: variant,
-        snapshotVersion: 'v2.0',
+        canonicalVariant: variant || '',
+        canonicalTrim: '',
+        canonicalBodyType,
+        canonicalFuelType,
+        canonicalTransmission,
+        snapshotVersion: 'v2.0_temp',
+        isActive: false,
         matchedListingCount: items.length,
         uniqueListingCount: items.length,
         weightedP5: percentiles.p5,
@@ -289,7 +436,7 @@ async function main() {
         mileageAdjustmentSource,
         kmDecayPer10k,
         confidenceScore: items.length >= 12 ? 98 : (items.length >= 6 ? 88 : 72),
-        dataQualityScore: 100.0,
+        dataQualityScore,
         snapshotDataJson: JSON.stringify(snapshotDataObj),
       },
       create: {
@@ -297,10 +444,18 @@ async function main() {
         model,
         variant: variant || '',
         year,
+        bodyType: canonicalBodyType,
+        fuelType: canonicalFuelType,
+        transmission: canonicalTransmission,
         canonicalMake: make,
         canonicalModel: model,
-        canonicalVariant: variant,
-        snapshotVersion: 'v2.0',
+        canonicalVariant: variant || '',
+        canonicalTrim: '',
+        canonicalBodyType,
+        canonicalFuelType,
+        canonicalTransmission,
+        snapshotVersion: 'v2.0_temp',
+        isActive: false,
         matchedListingCount: items.length,
         uniqueListingCount: items.length,
         weightedP5: percentiles.p5,
@@ -314,13 +469,23 @@ async function main() {
         mileageAdjustmentSource,
         kmDecayPer10k,
         confidenceScore: items.length >= 12 ? 98 : (items.length >= 6 ? 88 : 72),
-        dataQualityScore: 100.0,
+        dataQualityScore,
         snapshotDataJson: JSON.stringify(snapshotDataObj),
       },
     });
 
     snapshotsCreated++;
   }
+
+  // ATOMIC DATABASE SWAP TRANSACTION
+  console.log(`✓ Atomik veri geçişi başlatılıyor...`);
+  await prisma.$transaction([
+    prisma.vehicleMarketSnapshot.deleteMany({ where: { snapshotVersion: 'v2.0' } }),
+    prisma.vehicleMarketSnapshot.updateMany({
+      where: { snapshotVersion: 'v2.0_temp' },
+      data: { snapshotVersion: 'v2.0', isActive: true },
+    }),
+  ]);
 
   const durationSec = ((Date.now() - startTime) / 1000).toFixed(1);
   console.log(`✓ TOPLAM ${snapshotsCreated} ADET v2.0 SÜRÜMLÜ CANONICAL PİYASA SNAPSHOT'I ${durationSec} SANİYEDE YENİLENDİ!\n`);
