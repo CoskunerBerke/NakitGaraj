@@ -20,8 +20,22 @@ export interface ScreenshotListingInput {
   sourceUrl?: string;
 }
 
+async function withRetry<T>(fn: () => Promise<T>, retries = 5, delayMs = 150): Promise<T> {
+  let attempt = 0;
+  while (true) {
+    try {
+      return await fn();
+    } catch (err: any) {
+      attempt++;
+      if (attempt >= retries) throw err;
+      await new Promise((res) => setTimeout(res, delayMs * attempt));
+    }
+  }
+}
+
 export async function saveScreenshotListing(data: ScreenshotListingInput) {
-  const externalListingId = data.listingId || `ss-import-${Date.now()}`;
+  return withRetry(async () => {
+    const externalListingId = data.listingId || `ss-import-${Date.now()}`;
 
   // Find or create Manufacturer
   let manufacturer = await prisma.manufacturer.findFirst({
@@ -160,18 +174,19 @@ export async function saveScreenshotListing(data: ScreenshotListingInput) {
     });
   }
 
-  return {
-    status: 'SUCCESS',
-    externalListingId,
-    make: data.make,
-    model: data.model,
-    variant: data.variant,
-    trim: data.trim,
-    year: data.year,
-    price: data.price,
-    mileageKm: data.mileageKm,
-    message: 'Screenshot vehicle listing extracted and saved to database successfully.',
-  };
+    return {
+      status: 'SUCCESS',
+      externalListingId,
+      make: data.make,
+      model: data.model,
+      variant: data.variant,
+      trim: data.trim,
+      year: data.year,
+      price: data.price,
+      mileageKm: data.mileageKm,
+      message: 'Screenshot vehicle listing extracted and saved to database successfully.',
+    };
+  });
 }
 
 async function main() {
