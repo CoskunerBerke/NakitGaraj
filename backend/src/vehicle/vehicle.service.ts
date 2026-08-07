@@ -34,7 +34,7 @@ export class VehicleService {
       if (fs.existsSync(DESKTOP_DIR)) {
         validNames = fs.readdirSync(DESKTOP_DIR).filter((d: string) => {
           const p = path.join(DESKTOP_DIR, d);
-          return fs.statSync(p).isDirectory() && fs.readdirSync(p).some((f: string) => f.toLowerCase().endsWith('.html'));
+          return fs.statSync(p).isDirectory();
         });
       }
     } catch (e) {}
