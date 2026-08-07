@@ -2,16 +2,29 @@ import { PrismaClient } from '@prisma/client';
 const prisma = new PrismaClient();
 
 async function main() {
-  const specCount = await prisma.vehicleSpecification.count();
-  const marketPriceCount = await prisma.vehicleMarketPrice.count();
-  const evalCount = await prisma.vehicleEvaluation.count();
+  const brands = await prisma.manufacturer.findMany({
+    where: {
+      specifications: {
+        some: {
+          marketPrices: {
+            some: {
+              regionalPriceDifferences: {
+                contains: 'nakitAlisReferansi',
+              },
+            },
+          },
+        },
+      },
+    },
+    select: { name: true },
+    orderBy: { name: 'asc' },
+  });
 
   console.log(`\n==================================================`);
-  console.log(`   VERİTABANI DOĞRULAMA KONTROLÜ (SIFIR VERİ KAYBI)`);
+  console.log(`SAHİBİNDEN'DEN İTHAL EDİLMİŞ GERÇEK MARKALAR (${brands.length} ADET):`);
   console.log(`==================================================`);
-  console.log(`✓ Toplam Fiyatlandırılmış Araç Paket/Yıl (VehicleSpecification): ${specCount}`);
-  console.log(`✓ Toplam Aktif Piyasa Kaydı (VehicleMarketPrice): ${marketPriceCount}`);
-  console.log(`✓ Toplam Yapılan Araç Değerlemesi (VehicleEvaluation): ${evalCount}\n`);
+  console.log(brands.map((b: { name: string }) => b.name).join(', '));
+  console.log('\n');
 }
 
 main().finally(() => prisma.$disconnect());
