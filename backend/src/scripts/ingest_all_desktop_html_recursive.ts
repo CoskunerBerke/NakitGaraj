@@ -77,9 +77,22 @@ async function main() {
         const dataId = idMatch && idMatch[1] ? idMatch[1] : `${makeName}-${year}-${price}-${parsedRowCount}`;
         const uniqueKey = `shb-${dataId}`;
 
-        let cleanModel = fileName.replace(/fiyatları/gi, '').replace(/_\d+/g, '').trim();
+        let cleanModel = fileName
+          .replace(/fiyatları/gi, '')
+          .replace(/_\d+/g, '')
+          .replace(/sahibinden/gi, '')
+          .replace(/ikinci/gi, '')
+          .replace(/el/gi, '')
+          .replace(/[-_]/g, ' ')
+          .trim();
 
-        // Specific submodel detection
+        if (!cleanModel || cleanModel.length < 2) {
+          cleanModel = 'Genel Model';
+        } else {
+          cleanModel = cleanModel.charAt(0).toUpperCase() + cleanModel.slice(1);
+        }
+
+        // Specific submodel normalization
         if (makeName === 'Audi') {
           if (cleanModel.toUpperCase().includes('A6')) cleanModel = 'A6';
           else if (cleanModel.toUpperCase().includes('A4')) cleanModel = 'A4';
@@ -90,6 +103,22 @@ async function main() {
         } else if (makeName === 'BMW') {
           if (cleanModel.toUpperCase().includes('3 SER') || cleanModel.includes('320')) cleanModel = '3 Serisi';
           else if (cleanModel.toUpperCase().includes('5 SER') || cleanModel.includes('520')) cleanModel = '5 Serisi';
+        } else if (makeName === 'Citroen') {
+          if (cleanModel.toUpperCase().includes('C4')) cleanModel = 'C4';
+          else if (cleanModel.toUpperCase().includes('C5')) cleanModel = 'C5';
+          else if (cleanModel.toUpperCase().includes('ELYSEE') || cleanModel.toUpperCase().includes('C ELYS')) cleanModel = 'C-Elysée';
+          else if (cleanModel.toUpperCase().includes('C3')) cleanModel = 'C3';
+        } else if (makeName === 'Dacia') {
+          if (cleanModel.toUpperCase().includes('DUSTER')) cleanModel = 'Duster';
+          else if (cleanModel.toUpperCase().includes('SANDERO')) cleanModel = 'Sandero';
+          else if (cleanModel.toUpperCase().includes('LOGAN')) cleanModel = 'Logan';
+          else if (cleanModel.toUpperCase().includes('LODGY')) cleanModel = 'Lodgy';
+        } else if (makeName === 'Chevrolet') {
+          if (cleanModel.toUpperCase().includes('CRUZE')) cleanModel = 'Cruze';
+          else if (cleanModel.toUpperCase().includes('AVEO')) cleanModel = 'Aveo';
+          else if (cleanModel.toUpperCase().includes('CAPTIVA')) cleanModel = 'Captiva';
+        } else if (makeName === 'Alfa Romeo') {
+          if (cleanModel.toUpperCase().includes('GIULIETTA')) cleanModel = 'Giulietta';
         }
 
         // Parse real mileage (km)
@@ -127,7 +156,7 @@ async function main() {
   console.log(`✓ Tekilleştirilmiş Toplam İlan Sayısı: ${listingMap.size} adet (Mükerrer ilanlar temizlendi).\n`);
 
   // Group by: `${make}__${model}__${variant}__${year}`
-  const groupMap = new Map<string, number[]>();
+  const groupMap = new Map<string, ExtractedListing[]>();
 
   for (const item of listingMap.values()) {
     if (item.isDamaged) continue; // Exclude heavy damage from clean market snapshots
@@ -136,24 +165,73 @@ async function main() {
     if (!groupMap.has(key)) {
       groupMap.set(key, []);
     }
-    groupMap.get(key)!.push(item.price);
+    groupMap.get(key)!.push(item);
   }
 
   let snapshotCreated = 0;
 
-  for (const [key, prices] of groupMap.entries()) {
+  for (const [key, items] of groupMap.entries()) {
     const [make, model, variant, yearStr] = key.split('__');
     const year = parseInt(yearStr, 10);
 
-    const sorted = [...prices].sort((a, b) => a - b);
-    const len = sorted.length;
+    const prices = items.map(i => i.price).sort((a, b) => a - b);
+    const len = prices.length;
     if (len === 0) continue;
 
-    const p5 = sorted[Math.floor(len * 0.05)] || sorted[0];
-    const p35 = sorted[Math.floor(len * 0.35)] || sorted[0];
-    const p50 = sorted[Math.floor(len * 0.50)] || sorted[0];
-    const p60 = sorted[Math.floor(len * 0.60)] || sorted[0];
-    const p95 = sorted[Math.floor(len * 0.95)] || sorted[len - 1];
+    const p5 = prices[Math.floor(len * 0.05)] || prices[0];
+    const p35 = prices[Math.floor(len * 0.35)] || prices[0];
+    const p50 = prices[Math.floor(len * 0.50)] || prices[0];
+    const p60 = prices[Math.floor(len * 0.60)] || prices[0];
+    const p95 = prices[Math.floor(len * 0.95)] || prices[len - 1];
+
+    // Mileage regression & distribution stats
+    const validKmItems = items.filter(i => i.mileageKm !== null && i.mileageKm > 0);
+    const kmSampleCount = validKmItems.length;
+
+    let medianMileage = 100000;
+    let averageMileage = 100000;
+    let kmDecayPer10k = 0.003; // Default 0.3% per 10k km
+    let mileageAdjustmentSource = 'DEFAULT_FALLBACK';
+
+    if (kmSampleCount > 0) {
+      const kms = validKmItems.map(i => i.mileageKm!).sort((a, b) => a - b);
+      medianMileage = kms[Math.floor(kms.length / 2)];
+      averageMileage = Math.round(kms.reduce((sum, val) => sum + val, 0) / kms.length);
+
+      if (kmSampleCount >= 4) {
+        // Robust Linear Regression: slope of price vs (km / 10000)
+        const meanX = validKmItems.reduce((s, item) => s + (item.mileageKm! / 10000), 0) / kmSampleCount;
+        const meanY = validKmItems.reduce((s, item) => s + item.price, 0) / kmSampleCount;
+
+        let num = 0;
+        let den = 0;
+        for (const item of validKmItems) {
+          const x = item.mileageKm! / 10000;
+          const y = item.price;
+          num += (x - meanX) * (y - meanY);
+          den += (x - meanX) * (x - meanX);
+        }
+
+        if (den > 0) {
+          const slope = num / den; // TL change per 10,000 km
+          if (slope < 0 && p50 > 0) {
+            kmDecayPer10k = Math.min(0.02, Math.abs(slope) / p50);
+            mileageAdjustmentSource = 'LEARNED_FROM_LISTINGS';
+          }
+        }
+      }
+    }
+
+    const listingIds = items.map(i => i.id);
+
+    const snapshotDataObj = {
+      listingIds,
+      medianMileage,
+      averageMileage,
+      mileageSampleCount: kmSampleCount,
+      kmDecayPer10k,
+      mileageAdjustmentSource,
+    };
 
     await prisma.vehicleMarketSnapshot.upsert({
       where: {
@@ -171,7 +249,9 @@ async function main() {
         weightedP50: p50,
         weightedP60: p60,
         weightedP95: p95,
+        kmDecayPer10k,
         confidenceScore: len >= 12 ? 98 : (len >= 6 ? 88 : 70),
+        snapshotDataJson: JSON.stringify(snapshotDataObj),
       },
       create: {
         make,
@@ -184,7 +264,9 @@ async function main() {
         weightedP50: p50,
         weightedP60: p60,
         weightedP95: p95,
+        kmDecayPer10k,
         confidenceScore: len >= 12 ? 98 : (len >= 6 ? 88 : 70),
+        snapshotDataJson: JSON.stringify(snapshotDataObj),
       },
     });
 

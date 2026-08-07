@@ -120,8 +120,13 @@ export class EvaluationService {
       };
     }
 
-    const calc = RobustPricingCalculator.computeValuation({
-      cleanListings: emsalResult.cleanListings,
+    const calc = RobustPricingCalculator.computeValuationFromSnapshot({
+      weightedP5: emsalResult.weightedP5 || (emsalResult.weightedP50 || 0) * 0.85,
+      weightedP35: emsalResult.weightedP35 || (emsalResult.weightedP50 || 0) * 0.92,
+      weightedP50: emsalResult.weightedP50 || 0,
+      weightedP60: emsalResult.weightedP60 || (emsalResult.weightedP50 || 0) * 1.02,
+      weightedP95: emsalResult.weightedP95 || (emsalResult.weightedP50 || 0) * 1.15,
+      realMatchedListingCount: emsalResult.matchedCount,
       userYear: dto.year,
       userMileage: dto.mileage,
       damagePenalty,
@@ -217,8 +222,8 @@ export class EvaluationService {
         estimatedDaysToSell: `${calc.estimatedDaysToSellMin}-${calc.estimatedDaysToSellMax} gün`,
         confidenceScore: calc.confidenceScore,
         matchedListingCount: calc.matchedListingCount,
-        matchedLevel: calc.matchedLevel,
-        pricingExplanation: calc.pricingExplanation,
+        matchedLevel: emsalResult.level,
+        pricingExplanation: emsalResult.explanationNote,
         // Backward Compatibility Aliases:
         estimatedValue: calc.cashOffer,
         finalOfferedPrice: calc.cashOffer,

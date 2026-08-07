@@ -26,9 +26,12 @@ export interface EmsalMatchResult {
   isLimitedComps: boolean;
   explanationNote: string;
   snapshotId?: string;
+  weightedP5?: number;
   weightedP35?: number;
   weightedP50?: number;
   weightedP60?: number;
+  weightedP95?: number;
+  kmDecayPer10k?: number;
 }
 
 @Injectable()
@@ -52,31 +55,32 @@ export class EmsalMatcherService {
   }): Promise<EmsalMatchResult> {
     const { make, model, variant, year, mileageKm, bodyType, fuelType, transmission } = params;
 
-    // 1. Level 1: Exact Make, Model, Variant, Year
+    // 1. Level 1: Exact Make, Model, Variant, Year (Requires full metadata presence)
     let snapshot = await this.querySnapshotFromDb({
       make,
       model,
       variant,
       yearExact: year,
-      bodyType,
-      fuelType,
-      transmission,
     });
 
     if (snapshot && snapshot.matchedListingCount >= 5) {
       const cleanComps = this.convertSnapshotToCleanListings(snapshot, mileageKm);
       const dynamicScore = Math.min(99, Math.max(83, 85 + Math.floor(snapshot.matchedListingCount / 12)));
+
       return {
         level: 1,
         matchedCount: snapshot.matchedListingCount,
         cleanListings: cleanComps,
         confidenceScore: dynamicScore,
         isLimitedComps: false,
-        explanationNote: `Seviye 1: ${make} ${model} ${variant || ''} (${year}) veritabanındaki ${snapshot.matchedListingCount} adet gerçek Sahibinden ilan emsaliyle eşleşti. (Snapshot ID: ${snapshot.id.slice(0, 8)})`,
+        explanationNote: `Seviye 1: ${make} ${model} ${variant || ''} (${year}) veritabanındaki ${snapshot.matchedListingCount} adet gerçek Sahibinden ilan emsaliyle tam eşleşti. (Snapshot ID: ${snapshot.id.slice(0, 8)})`,
         snapshotId: snapshot.id,
+        weightedP5: snapshot.weightedP5,
         weightedP35: snapshot.weightedP35,
         weightedP50: snapshot.weightedP50,
         weightedP60: snapshot.weightedP60,
+        weightedP95: snapshot.weightedP95,
+        kmDecayPer10k: snapshot.kmDecayPer10k || 0.0025,
       };
     }
 
@@ -101,9 +105,12 @@ export class EmsalMatcherService {
         isLimitedComps: false,
         explanationNote: `Seviye 2: ${make} ${model} ${variant || ''} (${year - 1}-${year + 1}) grubundaki ${snapshotL2.matchedListingCount} adet gerçek emsal ${snapshotL2.snapshotCount} snapshot birleştirilerek ve yıllık %8 değer kaybı düzeltmesi uygulanarak hesaplandı. (Snapshot ID: ${snapshotL2.id.slice(0, 8)})`,
         snapshotId: snapshotL2.id,
+        weightedP5: snapshotL2.weightedP5,
         weightedP35: snapshotL2.weightedP35,
         weightedP50: snapshotL2.weightedP50,
         weightedP60: snapshotL2.weightedP60,
+        weightedP95: snapshotL2.weightedP95,
+        kmDecayPer10k: 0.0025,
       };
     }
 
@@ -127,9 +134,12 @@ export class EmsalMatcherService {
         isLimitedComps: false,
         explanationNote: `Seviye 3: ${make} ${model} genel model grubundaki ${snapshotL3.matchedListingCount} adet gerçek ilan emsali ağırlıklı ortalamayla hesaplandı. (Snapshot ID: ${snapshotL3.id.slice(0, 8)})`,
         snapshotId: snapshotL3.id,
+        weightedP5: snapshotL3.weightedP5,
         weightedP35: snapshotL3.weightedP35,
         weightedP50: snapshotL3.weightedP50,
         weightedP60: snapshotL3.weightedP60,
+        weightedP95: snapshotL3.weightedP95,
+        kmDecayPer10k: 0.0025,
       };
     }
 
