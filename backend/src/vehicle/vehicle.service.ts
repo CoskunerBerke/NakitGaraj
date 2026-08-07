@@ -10,35 +10,60 @@ export class VehicleService {
   ) {}
 
   async getBrands() {
-    let brands = await this.prisma.manufacturer.findMany({
+    const brands = await this.prisma.manufacturer.findMany({
+      where: {
+        specifications: {
+          some: {
+            marketPrices: {
+              some: {
+                currentMarketAverage: { gt: 0 },
+              },
+            },
+          },
+        },
+      },
       orderBy: { name: 'asc' },
     });
-
-    if (brands.length < 15) {
-      await this.ensureMajorBrandsAndModelsSeeded();
-      brands = await this.prisma.manufacturer.findMany({
-        orderBy: { name: 'asc' },
-      });
-    }
-
     return brands;
   }
 
   async getModels(brandId: string) {
     const models = await this.prisma.model.findMany({
-      where: { manufacturerId: brandId },
+      where: {
+        manufacturerId: brandId,
+        specifications: {
+          some: {
+            marketPrices: {
+              some: {
+                currentMarketAverage: { gt: 0 },
+              },
+            },
+          },
+        },
+      },
       orderBy: { name: 'asc' },
     });
     return models;
   }
 
   async getVariants(modelId: string) {
-    const cacheKey = `variants_${modelId}`;
+    const cacheKey = `variants_populated_${modelId}`;
     const cached = await this.cache.get<any[]>(cacheKey);
     if (cached) return cached;
 
     const variants = await this.prisma.variant.findMany({
-      where: { modelId },
+      where: {
+        modelId,
+        specifications: {
+          some: {
+            marketPrices: {
+              some: {
+                currentMarketAverage: { gt: 0 },
+              },
+            },
+          },
+        },
+      },
       orderBy: { name: 'asc' },
     });
     await this.cache.set(cacheKey, variants, 3600);
