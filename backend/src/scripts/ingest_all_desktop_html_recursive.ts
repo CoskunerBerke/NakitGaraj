@@ -1,21 +1,11 @@
 import { PrismaClient } from '@prisma/client';
 import * as fs from 'fs';
 import * as path from 'path';
+import { CanonicalNormalizer } from '../evaluation/canonical-normalizer';
+import { RobustPricingCalculator } from '../evaluation/robust-pricing-calculator';
 
 const prisma = new PrismaClient();
 const DESKTOP_DIR = 'C:\\Users\\berke\\OneDrive\\Masaüstü\\sahibindne ilan';
-
-interface ExtractedListing {
-  id: string;
-  make: string;
-  model: string;
-  variant: string;
-  year: number;
-  price: number;
-  mileageKm: number | null;
-  city?: string;
-  isDamaged: boolean;
-}
 
 function scanHtmlFilesRecursively(dir: string, fileList: string[] = []): string[] {
   if (!fs.existsSync(dir)) return fileList;
@@ -33,164 +23,199 @@ function scanHtmlFilesRecursively(dir: string, fileList: string[] = []): string[
   return fileList;
 }
 
+interface RawListingData {
+  source: string;
+  sourceListingId: string;
+  sourceFile: string;
+  rawMake: string;
+  rawModel: string;
+  rawVariant?: string;
+  rawTitle?: string;
+  canonicalMake: string;
+  canonicalModel: string;
+  canonicalVariant: string | null;
+  year: number;
+  mileageKm: number | null;
+  price: number;
+  isDamaged: boolean;
+  parseStatus: string;
+}
+
 async function main() {
   console.log(`\n====================================================================`);
-  console.log(`  MASAÜSTÜ İLAN KLASÖRLERİNİ RECURSIVE TARAMA VE SIZINTISIZ TEKİLLEŞTİRME`);
+  console.log(`  CANONICAL NORMALİZASYON VE ULTRA HIZLI İLAN AKTARIMI`);
   console.log(`====================================================================\n`);
 
+  const startTime = Date.now();
   const allHtmlPaths = scanHtmlFilesRecursively(DESKTOP_DIR);
-  console.log(`✓ Toplam ${allHtmlPaths.length} adet HTML dosyası özyinelemeli (recursive) olarak bulundu.\n`);
+  console.log(`✓ Toplam ${allHtmlPaths.length} adet HTML dosyası özyinelemeli (recursive) olarak tarandı.\n`);
 
-  const listingMap = new Map<string, ExtractedListing>();
-
-  let parsedRowCount = 0;
+  const rawListingMap = new Map<string, RawListingData>();
+  const quarantinedList: any[] = [];
 
   for (const filePath of allHtmlPaths) {
     try {
       const relativePath = path.relative(DESKTOP_DIR, filePath);
       const pathParts = relativePath.split(path.sep);
-      const makeName = pathParts[0] || 'Genel';
+      const rawMake = pathParts[0] || 'Genel';
       const fileName = path.basename(filePath, '.html');
 
       const html = fs.readFileSync(filePath, 'utf8');
 
-      // Match rows
-      const trMatches = html.match(/<tr[^>]*class="[^"]*searchResultsItem[^"]*"[\s\S]*?<\/tr>/gi) || [];
+      // Fast TR row extraction using regular expression pattern matching
+      const trMatches = html.match(/<tr[^>]*data-id="(\d+)"[\s\S]*?<\/tr>/gi) || [];
 
-      for (const tr of trMatches) {
-        const idMatch = tr.match(/data-id="(\d+)"/i);
-        const yearMatch = tr.match(/<td[^>]*class="[^"]*searchResultsAttributeValue[^"]*"[^>]*>\s*(\d{4})\s*<\/td>/i) || tr.match(/\b(20[0-2][0-9]|19[8-9][0-9])\b/);
-        const priceMatch = tr.match(/<td[^>]*class="[^"]*searchResultsPriceValue[^"]*"[^>]*>[\s\S]*?([\d.]+)\s*TL/i) || tr.match(/([\d\.]+)\s*TL/i);
-        const tagMatch = tr.match(/<td[^>]*class="[^"]*searchResultsTagAttributeValue[^"]*"[^>]*>[\s\S]*?([^\s<]+)[\s\S]*?<\/td>/i);
+      for (const trHtml of trMatches) {
+        const idMatch = trHtml.match(/data-id="(\d+)"/i);
+        if (!idMatch) continue;
+        const dataId = idMatch[1];
 
-        if (!priceMatch || !yearMatch) continue;
-
-        const year = parseInt(yearMatch[1], 10);
+        // Price extraction
+        const priceMatch = trHtml.match(/<td[^>]*class="[^"]*searchResultsPriceValue[^"]*"[^>]*>[\s\S]*?([\d.]+)\s*TL/i) || trHtml.match(/([\d\.]+)\s*TL/i);
+        if (!priceMatch) continue;
         const priceStr = priceMatch[1].replace(/\./g, '').replace(/\D/g, '');
         const price = parseInt(priceStr, 10);
 
-        // Exclude fake prices (1 TL, 111 TL, kapora) and extreme outliers
-        if (isNaN(year) || isNaN(price) || price <= 100000 || price > 150000000 || year < 1980 || year > 2026) {
+        // Attribute cells extraction (0 = Year, 1 = Mileage, 2 = Color)
+        const attrMatches = trHtml.match(/<td[^>]*class="[^"]*searchResultsAttributeValue[^"]*"[^>]*>([\s\S]*?)<\/td>/gi) || [];
+        const attrTexts = attrMatches.map(cell => cell.replace(/<[^>]+>/g, '').trim());
+
+        let year = 0;
+        if (attrTexts[0]) {
+          const parsedYear = parseInt(attrTexts[0].replace(/\D/g, ''), 10);
+          if (!isNaN(parsedYear) && parsedYear >= 1980 && parsedYear <= 2026) {
+            year = parsedYear;
+          }
+        }
+
+        if (price < 50000 || price > 150000000 || year === 0) {
           continue;
         }
 
-        const dataId = idMatch && idMatch[1] ? idMatch[1] : `${makeName}-${year}-${price}-${parsedRowCount}`;
-        const uniqueKey = `shb-${dataId}`;
-
-        let cleanModel = fileName
-          .replace(/fiyatları/gi, '')
-          .replace(/_\d+/g, '')
-          .replace(/sahibinden/gi, '')
-          .replace(/ikinci/gi, '')
-          .replace(/el/gi, '')
-          .replace(/[-_]/g, ' ')
-          .trim();
-
-        if (!cleanModel || cleanModel.length < 2) {
-          cleanModel = 'Genel Model';
-        } else {
-          cleanModel = cleanModel.charAt(0).toUpperCase() + cleanModel.slice(1);
-        }
-
-        // Specific submodel normalization
-        if (makeName === 'Audi') {
-          if (cleanModel.toUpperCase().includes('A6')) cleanModel = 'A6';
-          else if (cleanModel.toUpperCase().includes('A4')) cleanModel = 'A4';
-          else if (cleanModel.toUpperCase().includes('A3')) cleanModel = 'A3';
-          else if (cleanModel.toUpperCase().includes('A5')) cleanModel = 'A5';
-          else if (cleanModel.toUpperCase().includes('Q5')) cleanModel = 'Q5';
-          else if (cleanModel.toUpperCase().includes('Q7')) cleanModel = 'Q7';
-        } else if (makeName === 'BMW') {
-          if (cleanModel.toUpperCase().includes('3 SER') || cleanModel.includes('320')) cleanModel = '3 Serisi';
-          else if (cleanModel.toUpperCase().includes('5 SER') || cleanModel.includes('520')) cleanModel = '5 Serisi';
-        } else if (makeName === 'Citroen') {
-          if (cleanModel.toUpperCase().includes('C4')) cleanModel = 'C4';
-          else if (cleanModel.toUpperCase().includes('C5')) cleanModel = 'C5';
-          else if (cleanModel.toUpperCase().includes('ELYSEE') || cleanModel.toUpperCase().includes('C ELYS')) cleanModel = 'C-Elysée';
-          else if (cleanModel.toUpperCase().includes('C3')) cleanModel = 'C3';
-        } else if (makeName === 'Dacia') {
-          if (cleanModel.toUpperCase().includes('DUSTER')) cleanModel = 'Duster';
-          else if (cleanModel.toUpperCase().includes('SANDERO')) cleanModel = 'Sandero';
-          else if (cleanModel.toUpperCase().includes('LOGAN')) cleanModel = 'Logan';
-          else if (cleanModel.toUpperCase().includes('LODGY')) cleanModel = 'Lodgy';
-        } else if (makeName === 'Chevrolet') {
-          if (cleanModel.toUpperCase().includes('CRUZE')) cleanModel = 'Cruze';
-          else if (cleanModel.toUpperCase().includes('AVEO')) cleanModel = 'Aveo';
-          else if (cleanModel.toUpperCase().includes('CAPTIVA')) cleanModel = 'Captiva';
-        } else if (makeName === 'Alfa Romeo') {
-          if (cleanModel.toUpperCase().includes('GIULIETTA')) cleanModel = 'Giulietta';
-        }
-
-        // Parse real mileage (km)
+        // Section 1.B: Mileage Validations
         let mileageKm: number | null = null;
-        const kmMatch = tr.match(/([\d\.]+)\s*km/i) || tr.match(/<td[^>]*class="[^"]*searchResultsAttributeValue[^"]*"[^>]*>\s*([\d\.]+)\s*<\/td>/i);
-        if (kmMatch && kmMatch[1]) {
-          const parsedKm = parseInt(kmMatch[1].replace(/\./g, '').replace(/\D/g, ''), 10);
-          if (!isNaN(parsedKm) && parsedKm >= 0 && parsedKm < 2000000 && parsedKm !== year) {
+        if (attrTexts[1]) {
+          const parsedKm = parseInt(attrTexts[1].replace(/\./g, '').replace(/\D/g, ''), 10);
+          if (!isNaN(parsedKm) && parsedKm >= 0 && parsedKm <= 2000000 && parsedKm !== year && parsedKm !== price) {
             mileageKm = parsedKm;
           }
         }
 
-        const variantName = tagMatch && tagMatch[1] ? tagMatch[1] : 'Standart';
+        // Title and Variant extraction
+        const titleMatch = trHtml.match(/<td[^>]*class="[^"]*searchResultsTitleValue[^"]*"[^>]*>([\s\S]*?)<\/td>/i);
+        const rawTitle = titleMatch ? titleMatch[1].replace(/<[^>]+>/g, '').trim() : '';
 
-        // Check if listing indicates heavy damage/pert
-        const isDamaged = tr.toLowerCase().includes('ağır hasar') || tr.toLowerCase().includes('pert') || tr.toLowerCase().includes('çekme belgeli');
+        const tagMatch = trHtml.match(/<td[^>]*class="[^"]*searchResultsTagAttributeValue[^"]*"[^>]*>([\s\S]*?)<\/td>/i);
+        const rawVariant = tagMatch ? tagMatch[1].replace(/<[^>]+>/g, '').trim() : fileName;
 
-        if (!listingMap.has(uniqueKey)) {
-          listingMap.set(uniqueKey, {
-            id: uniqueKey,
-            make: makeName,
-            model: cleanModel || 'Genel Model',
-            variant: variantName,
-            year,
-            price,
-            mileageKm,
-            isDamaged,
+        const isDamaged = trHtml.toLowerCase().includes('ağır hasar') || trHtml.toLowerCase().includes('pert');
+
+        // CANONICAL NORMALIZATION LAYER (Section 1.A)
+        const canonical = CanonicalNormalizer.normalize(rawMake, fileName, rawVariant, rawTitle);
+
+        if (!canonical.isValid) {
+          quarantinedList.push({
+            rawListingId: dataId,
+            rawMake,
+            rawModel: fileName,
+            rawVariant,
+            rawTitle,
+            sourceFile: filePath,
+            reason: canonical.quarantineReason || 'CANONICAL_TEST_BAŞARISIZ',
           });
-          parsedRowCount++;
+          continue;
+        }
+
+        const uniqueKey = `SAHIBINDEN_HTML_${dataId}`;
+
+        if (!rawListingMap.has(uniqueKey)) {
+          rawListingMap.set(uniqueKey, {
+            source: 'SAHIBINDEN_HTML',
+            sourceListingId: dataId,
+            sourceFile: filePath,
+            rawMake,
+            rawModel: fileName,
+            rawVariant,
+            rawTitle,
+            canonicalMake: canonical.canonicalMake,
+            canonicalModel: canonical.canonicalModel,
+            canonicalVariant: canonical.canonicalVariant,
+            year,
+            mileageKm,
+            price,
+            isDamaged,
+            parseStatus: 'VALID',
+          });
         }
       }
     } catch (err) {}
   }
 
-  console.log(`✓ Tekilleştirilmiş Toplam İlan Sayısı: ${listingMap.size} adet (Mükerrer ilanlar temizlendi).\n`);
+  console.log(`✓ Bellekte ${rawListingMap.size} geçerli tekil ilan ve ${quarantinedList.length} karantinalı kayıt toplandı.`);
 
-  // Group by: `${make}__${model}__${variant}__${year}`
-  const groupMap = new Map<string, ExtractedListing[]>();
+  // Batch insert into RawVehicleListing
+  const rawListingsArray = Array.from(rawListingMap.values());
 
-  for (const item of listingMap.values()) {
-    if (item.isDamaged) continue; // Exclude heavy damage from clean market snapshots
+  // Wipe old raw listings for idempotent re-ingestion
+  await prisma.rawVehicleListing.deleteMany({});
+  await prisma.quarantinedListing.deleteMany({});
 
-    const key = `${item.make}__${item.model}__${item.variant}__${item.year}`;
+  const chunkSize = 1000;
+  for (let i = 0; i < rawListingsArray.length; i += chunkSize) {
+    const chunk = rawListingsArray.slice(i, i + chunkSize);
+    await prisma.rawVehicleListing.createMany({
+      data: chunk as any,
+    });
+  }
+
+  for (let i = 0; i < quarantinedList.length; i += chunkSize) {
+    const chunk = quarantinedList.slice(i, i + chunkSize);
+    await prisma.quarantinedListing.createMany({
+      data: chunk,
+    });
+  }
+
+  console.log(`✓ RawVehicleListing (${rawListingsArray.length}) ve QuarantinedListing (${quarantinedList.length}) veritabanına yazıldı.\n`);
+
+  // 2. GENERATE VERSIONED MARKET SNAPSHOTS FROM RawVehicleListing (Section 2)
+  console.log(`====================================================================`);
+  console.log(`  SÜRÜMLÜ PİYASA SNAPSHOT'LARI ÜRETİLİYOR (snapshotVersion = "v2.0")`);
+  console.log(`====================================================================\n`);
+
+  const validRawListings = await prisma.rawVehicleListing.findMany({
+    where: { parseStatus: 'VALID', isDamaged: false },
+  });
+
+  const groupMap = new Map<string, typeof validRawListings>();
+
+  for (const item of validRawListings) {
+    const key = `${item.canonicalMake}__${item.canonicalModel}__${item.canonicalVariant || 'STANDART'}__${item.year}`;
     if (!groupMap.has(key)) {
       groupMap.set(key, []);
     }
     groupMap.get(key)!.push(item);
   }
 
-  let snapshotCreated = 0;
+  let snapshotsCreated = 0;
 
   for (const [key, items] of groupMap.entries()) {
-    const [make, model, variant, yearStr] = key.split('__');
+    const [make, model, variantStr, yearStr] = key.split('__');
     const year = parseInt(yearStr, 10);
+    const variant = variantStr === 'STANDART' ? null : variantStr;
 
-    const prices = items.map(i => i.price).sort((a, b) => a - b);
-    const len = prices.length;
-    if (len === 0) continue;
+    const rawPrices = items.map(i => i.price);
+    const cleanedPrices = RobustPricingCalculator.cleanOutliersIQR(rawPrices);
+    const percentiles = RobustPricingCalculator.calculatePercentiles(cleanedPrices);
 
-    const p5 = prices[Math.floor(len * 0.05)] || prices[0];
-    const p35 = prices[Math.floor(len * 0.35)] || prices[0];
-    const p50 = prices[Math.floor(len * 0.50)] || prices[0];
-    const p60 = prices[Math.floor(len * 0.60)] || prices[0];
-    const p95 = prices[Math.floor(len * 0.95)] || prices[len - 1];
+    if (cleanedPrices.length === 0) continue;
 
-    // Mileage regression & distribution stats
-    const validKmItems = items.filter(i => i.mileageKm !== null && i.mileageKm > 0);
+    // Section 3: Robust Mileage Decay Computation
+    const validKmItems = items.filter(i => i.mileageKm !== null && i.mileageKm! > 0);
     const kmSampleCount = validKmItems.length;
 
-    let medianMileage = 100000;
-    let averageMileage = 100000;
-    let kmDecayPer10k = 0.003; // Default 0.3% per 10k km
+    let medianMileage: number | null = null;
+    let averageMileage: number | null = null;
+    let kmDecayPer10k = 0.0025; // Default 0.25% per 10k km
     let mileageAdjustmentSource = 'DEFAULT_FALLBACK';
 
     if (kmSampleCount > 0) {
@@ -198,8 +223,8 @@ async function main() {
       medianMileage = kms[Math.floor(kms.length / 2)];
       averageMileage = Math.round(kms.reduce((sum, val) => sum + val, 0) / kms.length);
 
-      if (kmSampleCount >= 4) {
-        // Robust Linear Regression: slope of price vs (km / 10000)
+      if (kmSampleCount >= 8) {
+        // Robust Regression with >= 8 pairs
         const meanX = validKmItems.reduce((s, item) => s + (item.mileageKm! / 10000), 0) / kmSampleCount;
         const meanY = validKmItems.reduce((s, item) => s + item.price, 0) / kmSampleCount;
 
@@ -213,24 +238,28 @@ async function main() {
         }
 
         if (den > 0) {
-          const slope = num / den; // TL change per 10,000 km
-          if (slope < 0 && p50 > 0) {
-            kmDecayPer10k = Math.min(0.02, Math.abs(slope) / p50);
+          const slope = num / den;
+          if (slope < 0 && percentiles.p50 > 0) {
+            kmDecayPer10k = Math.min(0.015, Math.max(0.001, Math.abs(slope) / percentiles.p50));
             mileageAdjustmentSource = 'LEARNED_FROM_LISTINGS';
           }
         }
+      } else if (kmSampleCount >= 4) {
+        mileageAdjustmentSource = 'LIMITED_SAMPLE';
       }
     }
 
-    const listingIds = items.map(i => i.id);
+    const uniqueListingIds = items.map(i => i.sourceListingId);
 
     const snapshotDataObj = {
-      listingIds,
-      medianMileage,
-      averageMileage,
+      uniqueListingIds,
+      medianMileage: medianMileage || 100000,
+      averageMileage: averageMileage || 100000,
       mileageSampleCount: kmSampleCount,
       kmDecayPer10k,
       mileageAdjustmentSource,
+      iqrLowerBound: Math.min(...cleanedPrices),
+      iqrUpperBound: Math.max(...cleanedPrices),
     };
 
     await prisma.vehicleMarketSnapshot.upsert({
@@ -239,43 +268,62 @@ async function main() {
           make,
           model,
           year,
-          variant,
+          variant: variant || '',
         },
       },
       update: {
-        matchedListingCount: len,
-        weightedP5: p5,
-        weightedP35: p35,
-        weightedP50: p50,
-        weightedP60: p60,
-        weightedP95: p95,
+        canonicalMake: make,
+        canonicalModel: model,
+        canonicalVariant: variant,
+        snapshotVersion: 'v2.0',
+        matchedListingCount: items.length,
+        uniqueListingCount: items.length,
+        weightedP5: percentiles.p5,
+        weightedP35: percentiles.p35,
+        weightedP50: percentiles.p50,
+        weightedP60: percentiles.p60,
+        weightedP95: percentiles.p95,
+        medianMileage,
+        averageMileage,
+        mileageSampleCount: kmSampleCount,
+        mileageAdjustmentSource,
         kmDecayPer10k,
-        confidenceScore: len >= 12 ? 98 : (len >= 6 ? 88 : 70),
+        confidenceScore: items.length >= 12 ? 98 : (items.length >= 6 ? 88 : 72),
+        dataQualityScore: 100.0,
         snapshotDataJson: JSON.stringify(snapshotDataObj),
       },
       create: {
         make,
         model,
-        variant,
+        variant: variant || '',
         year,
-        matchedListingCount: len,
-        weightedP5: p5,
-        weightedP35: p35,
-        weightedP50: p50,
-        weightedP60: p60,
-        weightedP95: p95,
+        canonicalMake: make,
+        canonicalModel: model,
+        canonicalVariant: variant,
+        snapshotVersion: 'v2.0',
+        matchedListingCount: items.length,
+        uniqueListingCount: items.length,
+        weightedP5: percentiles.p5,
+        weightedP35: percentiles.p35,
+        weightedP50: percentiles.p50,
+        weightedP60: percentiles.p60,
+        weightedP95: percentiles.p95,
+        medianMileage,
+        averageMileage,
+        mileageSampleCount: kmSampleCount,
+        mileageAdjustmentSource,
         kmDecayPer10k,
-        confidenceScore: len >= 12 ? 98 : (len >= 6 ? 88 : 70),
+        confidenceScore: items.length >= 12 ? 98 : (items.length >= 6 ? 88 : 72),
+        dataQualityScore: 100.0,
         snapshotDataJson: JSON.stringify(snapshotDataObj),
       },
     });
 
-    snapshotCreated++;
+    snapshotsCreated++;
   }
 
-  console.log(`\n====================================================================`);
-  console.log(`✓ TOPLAM ${snapshotCreated} ADET ANLIK PİYASA SNAPSHOT'I EKLENDİ / GÜNCELLENDİ!`);
-  console.log(`====================================================================\n`);
+  const durationSec = ((Date.now() - startTime) / 1000).toFixed(1);
+  console.log(`✓ TOPLAM ${snapshotsCreated} ADET v2.0 SÜRÜMLÜ CANONICAL PİYASA SNAPSHOT'I ${durationSec} SANİYEDE YENİLENDİ!\n`);
 }
 
 main().finally(() => prisma.$disconnect());
