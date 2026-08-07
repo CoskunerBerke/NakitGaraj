@@ -12,7 +12,7 @@ interface ExtractedListing {
   variant: string;
   year: number;
   price: number;
-  mileageKm: number;
+  mileageKm: number | null;
   city?: string;
   isDamaged: boolean;
 }
@@ -92,6 +92,16 @@ async function main() {
           else if (cleanModel.toUpperCase().includes('5 SER') || cleanModel.includes('520')) cleanModel = '5 Serisi';
         }
 
+        // Parse real mileage (km)
+        let mileageKm: number | null = null;
+        const kmMatch = tr.match(/([\d\.]+)\s*km/i) || tr.match(/<td[^>]*class="[^"]*searchResultsAttributeValue[^"]*"[^>]*>\s*([\d\.]+)\s*<\/td>/i);
+        if (kmMatch && kmMatch[1]) {
+          const parsedKm = parseInt(kmMatch[1].replace(/\./g, '').replace(/\D/g, ''), 10);
+          if (!isNaN(parsedKm) && parsedKm >= 0 && parsedKm < 2000000 && parsedKm !== year) {
+            mileageKm = parsedKm;
+          }
+        }
+
         const variantName = tagMatch && tagMatch[1] ? tagMatch[1] : 'Standart';
 
         // Check if listing indicates heavy damage/pert
@@ -105,7 +115,7 @@ async function main() {
             variant: variantName,
             year,
             price,
-            mileageKm: 50000,
+            mileageKm,
             isDamaged,
           });
           parsedRowCount++;

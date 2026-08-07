@@ -80,13 +80,14 @@ export class EmsalMatcherService {
       };
     }
 
-    // 2. Level 2: Year ±1 (Exact Make, Model, Variant)
-    let snapshotL2 = await this.querySnapshotFromDb({
+    // 2. Level 2: Year ±1 (Exact Make, Model, Variant with Weighted Snapshot Aggregation & Year Decay)
+    let snapshotL2 = await this.queryWeightedSnapshotsFromDb({
       make,
       model,
       variant,
       yearMin: year - 1,
       yearMax: year + 1,
+      userYear: year,
     });
 
     if (snapshotL2 && snapshotL2.matchedListingCount >= 5) {
@@ -98,7 +99,7 @@ export class EmsalMatcherService {
         cleanListings: cleanComps,
         confidenceScore: dynamicScore,
         isLimitedComps: false,
-        explanationNote: `Seviye 2: ${make} ${model} ${variant || ''} (${year - 1}-${year + 1}) grubundaki ${snapshotL2.matchedListingCount} gerçek emsal yıl/km katsayılarıyla düzeltilerek kullanıldı. (Snapshot ID: ${snapshotL2.id.slice(0, 8)})`,
+        explanationNote: `Seviye 2: ${make} ${model} ${variant || ''} (${year - 1}-${year + 1}) grubundaki ${snapshotL2.matchedListingCount} adet gerçek emsal ${snapshotL2.snapshotCount} snapshot birleştirilerek ve yıllık %8 değer kaybı düzeltmesi uygulanarak hesaplandı. (Snapshot ID: ${snapshotL2.id.slice(0, 8)})`,
         snapshotId: snapshotL2.id,
         weightedP35: snapshotL2.weightedP35,
         weightedP50: snapshotL2.weightedP50,
@@ -106,12 +107,13 @@ export class EmsalMatcherService {
       };
     }
 
-    // 3. Level 3: Broader Model + Year range
-    let snapshotL3 = await this.querySnapshotFromDb({
+    // 3. Level 3: Broader Model + Year range (Weighted Snapshot Aggregation)
+    let snapshotL3 = await this.queryWeightedSnapshotsFromDb({
       make,
       model,
       yearMin: year - 2,
       yearMax: year + 2,
+      userYear: year,
     });
 
     if (snapshotL3 && snapshotL3.matchedListingCount >= 3) {
@@ -123,7 +125,7 @@ export class EmsalMatcherService {
         cleanListings: cleanComps,
         confidenceScore: dynamicScore,
         isLimitedComps: false,
-        explanationNote: `Seviye 3: ${make} ${model} genel model grubundaki ${snapshotL3.matchedListingCount} ilan kullanıldı. (Snapshot ID: ${snapshotL3.id.slice(0, 8)})`,
+        explanationNote: `Seviye 3: ${make} ${model} genel model grubundaki ${snapshotL3.matchedListingCount} adet gerçek ilan emsali ağırlıklı ortalamayla hesaplandı. (Snapshot ID: ${snapshotL3.id.slice(0, 8)})`,
         snapshotId: snapshotL3.id,
         weightedP35: snapshotL3.weightedP35,
         weightedP50: snapshotL3.weightedP50,
@@ -142,6 +144,70 @@ export class EmsalMatcherService {
     };
   }
 
+  private async queryWeightedSnapshotsFromDb(filter: {
+    make: string;
+    model: string;
+    variant?: string;
+    yearExact?: number;
+    yearMin?: number;
+    yearMax?: number;
+    userYear: number;
+  }) {
+    const { make, model, variant, yearExact, yearMin, yearMax, userYear } = filter;
+    const whereClause: any = { make: { contains: make } };
+    if (model) whereClause.model = { contains: model };
+    if (variant) whereClause.variant = { contains: variant };
+    if (yearExact) whereClause.year = yearExact;
+    else if (yearMin && yearMax) whereClause.year = { gte: yearMin, lte: yearMax };
+
+    const snapshots = await this.prisma.vehicleMarketSnapshot.findMany({
+      where: whereClause,
+      orderBy: { matchedListingCount: 'desc' },
+      take: 10,
+    });
+
+    if (snapshots.length === 0) return null;
+
+    let totalWeight = 0;
+    let weightedCount = 0;
+    let sumP5 = 0;
+    let sumP35 = 0;
+    let sumP50 = 0;
+    let sumP60 = 0;
+    let sumP95 = 0;
+
+    for (const snap of snapshots) {
+      const yearDiff = Math.abs(snap.year - userYear);
+      const yearFactor = Math.pow(0.92, yearDiff); // 8% depreciation per year difference
+      const weight = (snap.matchedListingCount || 1) * yearFactor;
+
+      totalWeight += weight;
+      weightedCount += snap.matchedListingCount;
+      sumP5 += (snap.weightedP5 || snap.weightedP50 * 0.85) * weight;
+      sumP35 += (snap.weightedP35 || snap.weightedP50 * 0.92) * weight;
+      sumP50 += snap.weightedP50 * weight;
+      sumP60 += (snap.weightedP60 || snap.weightedP50 * 1.02) * weight;
+      sumP95 += (snap.weightedP95 || snap.weightedP50 * 1.15) * weight;
+    }
+
+    if (totalWeight <= 0) return null;
+
+    return {
+      id: snapshots[0].id,
+      make: snapshots[0].make,
+      model: snapshots[0].model,
+      variant: snapshots[0].variant,
+      year: userYear,
+      matchedListingCount: weightedCount,
+      weightedP5: Math.round(sumP5 / totalWeight),
+      weightedP35: Math.round(sumP35 / totalWeight),
+      weightedP50: Math.round(sumP50 / totalWeight),
+      weightedP60: Math.round(sumP60 / totalWeight),
+      weightedP95: Math.round(sumP95 / totalWeight),
+      snapshotCount: snapshots.length,
+    };
+  }
+
   private async querySnapshotFromDb(filter: {
     make: string;
     model: string;
@@ -153,7 +219,7 @@ export class EmsalMatcherService {
     fuelType?: string;
     transmission?: string;
   }) {
-    const { make, model, variant, yearExact, yearMin, yearMax, bodyType, fuelType, transmission } = filter;
+    const { make, model, variant, yearExact, yearMin, yearMax } = filter;
 
     const whereClause: any = {
       make: { contains: make },
@@ -170,9 +236,6 @@ export class EmsalMatcherService {
     } else if (yearMin && yearMax) {
       whereClause.year = { gte: yearMin, lte: yearMax };
     }
-    if (bodyType) whereClause.bodyType = { contains: bodyType };
-    if (fuelType) whereClause.fuelType = { contains: fuelType };
-    if (transmission) whereClause.transmission = { contains: transmission };
 
     return await this.prisma.vehicleMarketSnapshot.findFirst({
       where: whereClause,

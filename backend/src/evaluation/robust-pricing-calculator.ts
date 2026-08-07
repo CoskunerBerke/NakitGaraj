@@ -150,10 +150,8 @@ export class RobustPricingCalculator {
     let p35Market = percentiles.p35;
     let p60Market = percentiles.p60;
 
-    if (p50Market <= 0) {
-      p50Market = 1500000;
-      p35Market = 1350000;
-      p60Market = 1550000;
+    if (p50Market <= 0 || cleanedPrices.length === 0) {
+      throw new Error('Yeterli piyasa verisi bulunamadı');
     }
 
     // 2. KM & Condition Adjustment

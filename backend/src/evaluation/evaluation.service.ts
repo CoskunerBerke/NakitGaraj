@@ -99,6 +99,27 @@ export class EvaluationService {
       isCleanCondition: dto.damageStatus === 'NO',
     });
 
+    if (emsalResult.level === 4 || emsalResult.matchedCount === 0 || !emsalResult.cleanListings || emsalResult.cleanListings.length === 0) {
+      return {
+        status: 'INSUFFICIENT_DATA',
+        confidenceScore: 0,
+        message: 'Yeterli piyasa verisi bulunamadı',
+        vehicle: {
+          year: spec.year,
+          brand: spec.manufacturer.name,
+          model: spec.model.name,
+          variant: spec.variant?.name || '',
+          package: spec.package?.name || '',
+          bodyType: spec.bodyType?.name || '',
+          fuelType: spec.fuelType?.name || '',
+          transmission: spec.transmissionType?.name || '',
+        },
+        results: null,
+        aiAnalysis: ['UYARI: Girdiğiniz araç için veritabanımızda yeterli emsal ilan verisi bulunamamıştır.'],
+        comparableListings: [],
+      };
+    }
+
     const calc = RobustPricingCalculator.computeValuation({
       cleanListings: emsalResult.cleanListings,
       userYear: dto.year,
