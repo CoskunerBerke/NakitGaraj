@@ -605,76 +605,92 @@ export class EvaluationService {
     // Condition factor: mileage adjustment, damage penalty, and package multiplier
     const conditionFactor = (1 + mileageAdjustment - damagePenalty) * gammaDonanim;
 
-    // E. STRATEGIC PRICING: NakitGaraj Alım Fiyatı & Piyasa Değeri
+    // E. STRATEGIC PRICING: YÜZDELİK DİLİM TABANLI (PERCENTILE-BASED) FİYATLANDIRMA
+    // ─────────────────────────────────────────────────────────────────────────────────
+    // dbMarket artık yüzdelik dilim verileri içerir:
+    //   currentMarketAverage = P50 (Medyan - Gerçek Piyasa Merkezi)
+    //   averageListingPrice  = P60 (Konsinye Satış Referansı)
+    //   cleanMarketAverage   = Kırpılmış Ortalama (Trimmed Mean %10)
+    //   minPrice             = P5  (Outlier hariç taban)
+    //   maxPrice             = P95 (Outlier hariç tavan)
+    //   regionalPriceDifferences.nakitAlisReferansi = P35 (Nakit Alış Referansı)
+    // ─────────────────────────────────────────────────────────────────────────────────
     let fairMarketValue = Math.min(Math.round(baseValuationFinal * conditionFactor), sahibindenMaxCap);
     fairMarketValue = this.roundToCleanGalleryPrice(fairMarketValue);
 
-    // DYNAMIC TIERED PROFIT MARGIN MODEL
-    // Araç değeri arttıkça kâr yüzdesi de artar (lüks segmentte daha yüksek marj)
-    // Araç değeri düştükçe kâr yüzdesi düşer ama müşteriye cazip fiyat verilir
-    let cashProfitPct: number;
-    let consProfitPct: number;
-
-    if (fairMarketValue >= 20000000) {
-      // Süper Lüks (20M+): RS6, M5, Porsche 911, G63
-      cashProfitPct = 0.16;
-      consProfitPct = 0.09;
-    } else if (fairMarketValue >= 15000000) {
-      // Ultra-Lüks (15M-20M): A8, S-Class, X7, Cayenne
-      cashProfitPct = 0.15;
-      consProfitPct = 0.08;
-    } else if (fairMarketValue >= 10000000) {
-      // Lüks (10M-15M): Q7, X5, GLE, XC90
-      cashProfitPct = 0.14;
-      consProfitPct = 0.075;
-    } else if (fairMarketValue >= 6000000) {
-      // Üst-Premium (6M-10M): E-Class, 5 Series, A6
-      cashProfitPct = 0.13;
-      consProfitPct = 0.07;
-    } else if (fairMarketValue >= 4000000) {
-      // Premium (4M-6M): C-Class, 3 Series, A4
-      cashProfitPct = 0.12;
-      consProfitPct = 0.065;
-    } else if (fairMarketValue >= 2500000) {
-      // Orta-Premium (2.5M-4M): Golf, Megane, Corolla
-      cashProfitPct = 0.10;
-      consProfitPct = 0.055;
-    } else if (fairMarketValue >= 1500000) {
-      // Orta (1.5M-2.5M): Egea, Sandero, Clio
-      cashProfitPct = 0.09;
-      consProfitPct = 0.05;
-    } else if (fairMarketValue >= 800000) {
-      // Ekonomi (800K-1.5M): Eski modeller
-      cashProfitPct = 0.08;
-      consProfitPct = 0.04;
-    } else {
-      // Alt Segment (<800K): Çok eski/düşük değerli
-      cashProfitPct = 0.07;
-      consProfitPct = 0.035;
+    // Yüzdelik dilim referanslarını veritabanından çek
+    let p35Reference = 0; // Nakit Alış Referansı
+    let p60Reference = 0; // Konsinye Satış Referansı
+    if (dbMarket && dbMarket.regionalPriceDifferences) {
+      try {
+        const regionData = JSON.parse(dbMarket.regionalPriceDifferences as string);
+        p35Reference = regionData.nakitAlisReferansi || 0;
+        p60Reference = regionData.konsinyeReferansi || 0;
+      } catch (e) {}
     }
 
-    // Admin panel ayarlarından override (varsa)
-    try {
-      const fs = require('fs');
-      const path = require('path');
-      const settingsPath = path.join(process.cwd(), 'market-sync-settings.json');
-      if (fs.existsSync(settingsPath)) {
-        const parsed = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-        // Sadece admin override varsa ve > 0 ise uygula
-        if (parsed.cashOfferProfitPercentage && parsed.cashOfferProfitPercentage > 0) {
-          cashProfitPct = parsed.cashOfferProfitPercentage / 100;
-        }
-        if (parsed.consignmentProfitPercentage && parsed.consignmentProfitPercentage > 0) {
-          consProfitPct = parsed.consignmentProfitPercentage / 100;
-        }
+    // Percentile tabanlı Nakit Alış ve Konsinye Satış hesaplaması
+    // P35 doğal olarak piyasanın %15 altında → ek marj düşürmeye gerek yok
+    // P60 doğal olarak piyasanın %10 üstünde → müşteri çekmek için ideal
+    let standardCashOffer: number;
+    let standardConsignmentOffer: number;
+
+    if (p35Reference > 0 && p60Reference > 0) {
+      // ✅ Percentile verisi mevcut → doğrudan kullan
+      // Condition factor'ü P35 ve P60'a da uygula (km/hasar düzeltmesi)
+      standardCashOffer = this.roundToCleanGalleryPrice(
+        Math.round(p35Reference * conditionFactor)
+      );
+      standardConsignmentOffer = this.roundToCleanGalleryPrice(
+        Math.round(p60Reference * conditionFactor)
+      );
+    } else {
+      // ⚠️ Percentile verisi yok (eski veri veya fallback) → dinamik marj ile hesapla
+      let cashProfitPct: number;
+      let consProfitPct: number;
+
+      if (fairMarketValue >= 20000000) {
+        cashProfitPct = 0.16; consProfitPct = 0.09;
+      } else if (fairMarketValue >= 15000000) {
+        cashProfitPct = 0.15; consProfitPct = 0.08;
+      } else if (fairMarketValue >= 10000000) {
+        cashProfitPct = 0.14; consProfitPct = 0.075;
+      } else if (fairMarketValue >= 6000000) {
+        cashProfitPct = 0.13; consProfitPct = 0.07;
+      } else if (fairMarketValue >= 4000000) {
+        cashProfitPct = 0.12; consProfitPct = 0.065;
+      } else if (fairMarketValue >= 2500000) {
+        cashProfitPct = 0.10; consProfitPct = 0.055;
+      } else if (fairMarketValue >= 1500000) {
+        cashProfitPct = 0.09; consProfitPct = 0.05;
+      } else if (fairMarketValue >= 800000) {
+        cashProfitPct = 0.08; consProfitPct = 0.04;
+      } else {
+        cashProfitPct = 0.07; consProfitPct = 0.035;
       }
-    } catch (e) {}
 
-    const maxProfit = Math.max(40000, Math.round(fairMarketValue * cashProfitPct));
-    const minProfit = Math.max(20000, Math.round(fairMarketValue * consProfitPct));
+      // Admin panel ayarlarından override (varsa)
+      try {
+        const fs = require('fs');
+        const path = require('path');
+        const settingsPath = path.join(process.cwd(), 'market-sync-settings.json');
+        if (fs.existsSync(settingsPath)) {
+          const parsed = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+          if (parsed.cashOfferProfitPercentage && parsed.cashOfferProfitPercentage > 0) {
+            cashProfitPct = parsed.cashOfferProfitPercentage / 100;
+          }
+          if (parsed.consignmentProfitPercentage && parsed.consignmentProfitPercentage > 0) {
+            consProfitPct = parsed.consignmentProfitPercentage / 100;
+          }
+        }
+      } catch (e) {}
 
-    const standardCashOffer = this.roundToCleanGalleryPrice(fairMarketValue - maxProfit);
-    const standardConsignmentOffer = this.roundToCleanGalleryPrice(fairMarketValue - minProfit);
+      const maxProfit = Math.max(40000, Math.round(fairMarketValue * cashProfitPct));
+      const minProfit = Math.max(20000, Math.round(fairMarketValue * consProfitPct));
+
+      standardCashOffer = this.roundToCleanGalleryPrice(fairMarketValue - maxProfit);
+      standardConsignmentOffer = this.roundToCleanGalleryPrice(fairMarketValue - minProfit);
+    }
 
     let finalOfferedPrice = standardCashOffer;
     let finalConsignmentPrice = standardConsignmentOffer;
