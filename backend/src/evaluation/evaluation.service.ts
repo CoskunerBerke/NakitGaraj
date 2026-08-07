@@ -14,7 +14,90 @@ export class EvaluationService {
   ) {}
 
   async evaluateVehicle(dto: CreateEvaluationDto, userIp?: string) {
-    // 1. Query matching VehicleSpecification
+    const res = await this.calculateValuationCore(dto);
+    if (res.status === 'INSUFFICIENT_DATA' || res.status === 'DATA_INTEGRITY_ERROR') {
+      return res;
+    }
+
+    // Save Evaluation to DB
+    const evaluation = await this.prisma.vehicleEvaluation.create({
+      data: {
+        vehicleSpecificationId: res.results!.vehicleSpecificationId,
+        licensePlate: dto.licensePlate,
+        mileage: dto.mileage,
+        color: dto.color,
+        damageStatus: dto.damageStatus,
+        damageDetails: dto.damageStatus === 'NO' ? 'Hatasız / Orijinal' : 'Hasarlı',
+        estimatedValue: res.results!.cashOffer,
+        minExpectedValue: res.results!.cashOfferMin,
+        maxExpectedValue: res.results!.consignmentListingPrice,
+        quickSaleValue: res.results!.cashOfferMin,
+        confidenceScore: res.results!.confidenceScore,
+        aiAnalysis: JSON.stringify(res.aiAnalysis),
+        userIp,
+        firstName: dto.firstName,
+        lastName: dto.lastName,
+        phone: dto.phone,
+        sellingTimeline: dto.sellingTimeline,
+        userDesiredPrice: dto.userDesiredPrice,
+        finalOfferedPrice: res.results!.cashOffer,
+        features: dto.features || null,
+      },
+    });
+
+    this.telegramService.sendEvaluationNotification({
+      licensePlate: dto.licensePlate,
+      vehicleName: `${res.vehicle!.year} ${res.vehicle!.brand} ${res.vehicle!.model} (${res.vehicle!.variant || ''})`,
+      brandName: res.vehicle!.brand,
+      modelName: res.vehicle!.model,
+      variantName: res.vehicle!.variant || '',
+      year: res.vehicle!.year,
+      fuel: res.vehicle!.fuelType || 'Benzin',
+      transmission: res.vehicle!.transmission || 'Otomatik',
+      mileage: dto.mileage,
+      color: dto.color,
+      damageStatus: dto.damageStatus,
+      fairMarketValue: res.results!.fairMarketValue,
+      finalOfferedPrice: res.results!.cashOffer,
+      finalConsignmentPrice: res.results!.consignmentListingPrice,
+      userDesiredPrice: dto.userDesiredPrice,
+      sellingTimeline: dto.sellingTimeline,
+      firstName: dto.firstName,
+      lastName: dto.lastName,
+      phone: dto.phone,
+    }).catch((err) => console.error('Telegram notification error:', err));
+
+    return {
+      evaluationId: evaluation.id,
+      vehicle: res.vehicle,
+      results: res.results,
+      aiAnalysis: res.aiAnalysis,
+      comparableListings: res.comparableListings,
+    };
+  }
+
+  async calculateVehicleValuationPreview(dto: CreateEvaluationDto) {
+    const res = await this.calculateValuationCore(dto);
+    if (res.status === 'INSUFFICIENT_DATA' || res.status === 'DATA_INTEGRITY_ERROR') {
+      return {
+        status: res.status,
+        confidenceScore: res.confidenceScore,
+        message: res.message,
+        results: null,
+        comparableListings: [],
+      };
+    }
+
+    return {
+      status: res.status,
+      confidenceScore: res.confidenceScore,
+      message: res.message,
+      results: res.results,
+      comparableListings: res.comparableListings,
+    };
+  }
+
+  private async calculateValuationCore(dto: CreateEvaluationDto) {
     const whereCondition: any = {
       year: dto.year,
       manufacturerId: dto.manufacturerId,
@@ -26,7 +109,7 @@ export class EvaluationService {
     if (dto.fuelTypeId) whereCondition.fuelTypeId = dto.fuelTypeId;
     if (dto.transmissionTypeId) whereCondition.transmissionTypeId = dto.transmissionTypeId;
 
-    let spec = await this.prisma.vehicleSpecification.findFirst({
+    const spec = await this.prisma.vehicleSpecification.findFirst({
       where: whereCondition,
       include: {
         manufacturer: true,
@@ -41,40 +124,21 @@ export class EvaluationService {
       },
     });
 
-    // Fallback if specific package/body filter yielded no spec but variant exists
-    if (!spec && dto.variantId) {
-      spec = await this.prisma.vehicleSpecification.findFirst({
-        where: {
-          year: dto.year,
-          manufacturerId: dto.manufacturerId,
-          modelId: dto.modelId,
-          variantId: dto.variantId,
-        },
-        include: {
-          manufacturer: true,
-          model: true,
-          variant: true,
-          package: true,
-          bodyType: true,
-          fuelType: true,
-          transmissionType: true,
-          driveType: true,
-          marketPrices: true,
-        },
-      });
-    }
-
     if (!spec) {
-      throw new NotFoundException(
-        'Girilen araç özelliklerine uygun piyasa verisi bulunamadı. Lütfen bilgileri kontrol ediniz.',
-      );
+      return {
+        status: 'INSUFFICIENT_DATA',
+        confidenceScore: 0,
+        message: 'Yeterli piyasa verisi bulunamadı',
+        results: null,
+        vehicle: null,
+        aiAnalysis: ['Piyasa verisi eksik (Specification bulunamadı)'],
+        comparableListings: [],
+      };
     }
-
-    const aiAnalysis: string[] = [];
 
     // Damage Penalty
     let damagePenalty = 0;
-    let detailReports: string[] = [];
+    const aiAnalysis: string[] = [];
 
     if (dto.damageStatus === 'YES') {
       damagePenalty = 0.08;
@@ -86,11 +150,12 @@ export class EvaluationService {
       damagePenalty = 0.04;
     }
 
-    // 2. Perform 4-Level Emsal Matching & Robust Pricing Calculation
+    // Match Comparable Listings
     const emsalResult = await this.emsalMatcherService.matchComparableListings({
       make: spec.manufacturer.name,
       model: spec.model.name,
       variant: spec.variant?.name,
+      trim: spec.package?.name,
       year: dto.year,
       mileageKm: dto.mileage,
       bodyType: spec.bodyType?.name,
@@ -120,12 +185,21 @@ export class EvaluationService {
       };
     }
 
+    // Percentile Protections (Requirement 9)
+    const wP5 = emsalResult.weightedP5 || (emsalResult.weightedP50 || 0) * 0.85;
+    const wP35 = emsalResult.weightedP35 || (emsalResult.weightedP50 || 0) * 0.92;
+    const wP50 = emsalResult.weightedP50 || 0;
+    const wP60 = emsalResult.weightedP60 || (emsalResult.weightedP50 || 0) * 1.02;
+    const wP95 = emsalResult.weightedP95 || (emsalResult.weightedP50 || 0) * 1.15;
+
+    const hasPercentileError = !(wP5 <= wP35 && wP35 <= wP50 && wP50 <= wP60 && wP60 <= wP95);
+
     const calc = RobustPricingCalculator.computeValuationFromSnapshot({
-      weightedP5: emsalResult.weightedP5 || (emsalResult.weightedP50 || 0) * 0.85,
-      weightedP35: emsalResult.weightedP35 || (emsalResult.weightedP50 || 0) * 0.92,
-      weightedP50: emsalResult.weightedP50 || 0,
-      weightedP60: emsalResult.weightedP60 || (emsalResult.weightedP50 || 0) * 1.02,
-      weightedP95: emsalResult.weightedP95 || (emsalResult.weightedP50 || 0) * 1.15,
+      weightedP5: wP5,
+      weightedP35: wP35,
+      weightedP50: wP50,
+      weightedP60: wP60,
+      weightedP95: wP95,
       realMatchedListingCount: emsalResult.matchedCount,
       kmDecayPer10k: emsalResult.kmDecayPer10k || 0.0025,
       referenceMedianMileage: emsalResult.referenceMedianMileage || 100000,
@@ -138,14 +212,19 @@ export class EvaluationService {
       baseConfidenceScore: emsalResult.confidenceScore,
     });
 
-    aiAnalysis.push(emsalResult.explanationNote);
-    aiAnalysis.push(`Kilometre Düzeltmesi: Referans Medyan Km: ${(emsalResult.referenceMedianMileage || 100000).toLocaleString('tr-TR')} km | Araç Km: ${dto.mileage.toLocaleString('tr-TR')} km | Fark: ${calc.kmDelta} km | Katsayı: %${((emsalResult.kmDecayPer10k || 0.0025) * 100).toFixed(2)}/10.000km | Düzeltme: ${(calc.mileageAdjustment || 0).toLocaleString('tr-TR')} ₺ (Kaynak: ${emsalResult.mileageAdjustmentSource || 'DEFAULT_FALLBACK'})`);
+    const isFmvTooHigh = calc.fairMarketValue >= 5000000;
+    const isLevel3 = emsalResult.level === 3;
+    const hasLowComps = emsalResult.matchedCount < 8;
+    const hasLowCompsForHighFmv = isFmvTooHigh && emsalResult.matchedCount < 10;
+    const hasLowConfidence = emsalResult.confidenceScore < 70;
+    const isP35TooHigh = calc.adjustedP35 > calc.fairMarketValue;
 
-    if (calc.requiresManualApproval) {
+    // Requirement 9: If adjustedP35 > fairMarketValue, throw DATA_INTEGRITY_ERROR (do not produce price)
+    if (isP35TooHigh) {
       return {
-        status: 'MANUAL_EVALUATION_REQUIRED',
-        confidenceScore: calc.confidenceScore,
-        message: calc.manualApprovalReason || 'Düşük segment araçlarda manuel değerlendirme gereklidir',
+        status: 'DATA_INTEGRITY_ERROR',
+        confidenceScore: 0,
+        message: 'Veri bütünlüğü hatası: Düzeltilmiş P35 değeri tahmini piyasa değerini aşamaz.',
         vehicle: {
           year: spec.year,
           brand: spec.manufacturer.name,
@@ -156,28 +235,22 @@ export class EvaluationService {
           fuelType: spec.fuelType?.name || '',
           transmission: spec.transmissionType?.name || '',
         },
-        results: {
-          fairMarketValue: calc.fairMarketValue,
-          cashOffer: calc.cashOffer,
-          cashOfferMin: calc.cashOfferMin,
-          cashOfferMax: calc.cashOfferMax,
-          consignmentListingPrice: calc.consignmentListingPrice,
-          expectedConsignmentSalePrice: calc.expectedConsignmentSalePrice,
-          consignmentCommission: calc.consignmentCommission,
-          customerConsignmentNet: calc.customerConsignmentNet,
-          estimatedDaysToSell: `${calc.estimatedDaysToSellMin}-${calc.estimatedDaysToSellMax} gün`,
-          confidenceScore: calc.confidenceScore,
-          matchedListingCount: calc.matchedListingCount,
-          matchedLevel: emsalResult.level,
-          pricingExplanation: calc.manualApprovalReason,
-          requiresManualApproval: true,
-          kmDecayPer10k: emsalResult.kmDecayPer10k || 0.0025,
-          referenceMedianMileage: emsalResult.referenceMedianMileage || 100000,
-        },
-        aiAnalysis,
+        results: null,
+        aiAnalysis: ['HATA: Veri bütünlüğü doğrulanamadı.'],
         comparableListings: [],
       };
     }
+
+    const requiresManual =
+      hasPercentileError ||
+      isLevel3 ||
+      hasLowComps ||
+      hasLowCompsForHighFmv ||
+      hasLowConfidence ||
+      calc.requiresManualApproval;
+
+    aiAnalysis.push(emsalResult.explanationNote);
+    aiAnalysis.push(`Kilometre Düzeltmesi: Referans Medyan Km: ${(emsalResult.referenceMedianMileage || 100000).toLocaleString('tr-TR')} km | Araç Km: ${dto.mileage.toLocaleString('tr-TR')} km | Fark: ${calc.kmDelta} km | Katsayı: %${((emsalResult.kmDecayPer10k || 0.0025) * 100).toFixed(2)}/10.000km | Düzeltme: ${(calc.mileageAdjustment || 0).toLocaleString('tr-TR')} ₺ (Kaynak: ${emsalResult.mileageAdjustmentSource || 'DEFAULT_FALLBACK'})`);
 
     if (emsalResult.isLimitedComps) {
       aiAnalysis.push('UYARI: Aracınız için sınırlı sayıda emsal bulunabilmiştir. Fiyat için galerimizden ek teyit almanızı öneririz.');
@@ -187,62 +260,12 @@ export class EvaluationService {
       aiAnalysis.push(`Fiyat beklentiniz (${dto.userDesiredPrice.toLocaleString('tr-TR')} ₺) dikkate alınarak Konsinye İlan fiyatı ${calc.consignmentListingPrice.toLocaleString('tr-TR')} ₺, müşteriye net kalacak tutar ${calc.customerConsignmentNet.toLocaleString('tr-TR')} ₺ ve anında Nakit Alış teklifi ${calc.cashOffer.toLocaleString('tr-TR')} ₺ olarak hesaplanmıştır.`);
     }
 
-    // Save Evaluation to DB
-    const evaluation = await this.prisma.vehicleEvaluation.create({
-      data: {
-        vehicleSpecificationId: spec.id,
-        licensePlate: dto.licensePlate,
-        mileage: dto.mileage,
-        color: dto.color,
-        damageStatus: dto.damageStatus,
-        damageDetails: detailReports.join(', ') || (dto.damageStatus === 'NO' ? 'Hatasız / Orijinal' : 'Hasarlı'),
-        estimatedValue: calc.cashOffer,
-        minExpectedValue: calc.cashOfferMin,
-        maxExpectedValue: calc.consignmentListingPrice,
-        quickSaleValue: calc.cashOfferMin,
-        confidenceScore: calc.confidenceScore,
-        aiAnalysis: JSON.stringify(aiAnalysis),
-        userIp,
-        firstName: dto.firstName,
-        lastName: dto.lastName,
-        phone: dto.phone,
-        sellingTimeline: dto.sellingTimeline,
-        userDesiredPrice: dto.userDesiredPrice,
-        finalOfferedPrice: calc.cashOffer,
-        features: dto.features || null,
-      },
-    });
-
-    this.telegramService.sendEvaluationNotification({
-      licensePlate: dto.licensePlate,
-      vehicleName: `${spec.year} ${spec.manufacturer.name} ${spec.model.name} (${spec.variant?.name || ''})`,
-      brandName: spec.manufacturer.name,
-      modelName: spec.model.name,
-      variantName: spec.variant?.name || '',
-      year: spec.year,
-      fuel: spec.fuelType?.name || 'Benzin',
-      transmission: spec.transmissionType?.name || 'Otomatik',
-      mileage: dto.mileage,
-      color: dto.color,
-      damageStatus: dto.damageStatus,
-      fairMarketValue: calc.fairMarketValue,
-      finalOfferedPrice: calc.cashOffer,
-      finalConsignmentPrice: calc.consignmentListingPrice,
-      userDesiredPrice: dto.userDesiredPrice,
-      sellingTimeline: dto.sellingTimeline,
-      firstName: dto.firstName,
-      lastName: dto.lastName,
-      phone: dto.phone,
-    }).catch((err) => console.error('Telegram notification error:', err));
-
     const comparableListings = await this.getRealComparableListings(emsalResult);
 
-    if (comparableListings.length === 0) {
-      aiAnalysis.push(`Piyasa Emsal Dağılımı: P5: ${emsalResult.weightedP5 || 0} ₺, P35: ${emsalResult.weightedP35 || 0} ₺, P50: ${emsalResult.weightedP50 || 0} ₺, P60: ${emsalResult.weightedP60 || 0} ₺, P95: ${emsalResult.weightedP95 || 0} ₺`);
-    }
-
     return {
-      evaluationId: evaluation.id,
+      status: requiresManual ? 'MANUAL_EVALUATION_REQUIRED' : 'SUCCESS',
+      confidenceScore: calc.confidenceScore,
+      message: requiresManual ? 'Düşük segment veya yüksek riskli araçlarda manuel değerlendirme gereklidir' : 'Başarılı',
       vehicle: {
         year: spec.year,
         brand: spec.manufacturer.name,
@@ -257,6 +280,7 @@ export class EvaluationService {
         originalMSRP: spec.originalMSRP,
       },
       results: {
+        vehicleSpecificationId: spec.id,
         adjustedP35: calc.adjustedP35,
         fairMarketValue: calc.fairMarketValue,
         cashOffer: calc.cashOffer,
@@ -280,6 +304,13 @@ export class EvaluationService {
         minExpectedValue: calc.cashOfferMin,
         maxExpectedValue: calc.consignmentListingPrice,
         quickSaleValue: calc.cashOfferMin,
+        requiresManualApproval: requiresManual,
+        kmDecayPer10k: emsalResult.kmDecayPer10k || 0.0025,
+        referenceMedianMileage: emsalResult.referenceMedianMileage || 100000,
+        snapshotId: emsalResult.snapshotId,
+        contributingSnapshotIds: emsalResult.contributingSnapshotIds || [],
+        weightedP35: emsalResult.weightedP35,
+        weightedP50: emsalResult.weightedP50,
       },
       aiAnalysis,
       comparableListings,
@@ -287,35 +318,86 @@ export class EvaluationService {
   }
 
   private async getRealComparableListings(emsalResult: any) {
-    if (!emsalResult.snapshotId) return [];
+    const contributingIds = emsalResult.contributingSnapshotIds || [emsalResult.snapshotId];
+    const filteredIds = contributingIds.filter(Boolean);
+    if (filteredIds.length === 0) return [];
     try {
-      const snap = await this.prisma.vehicleMarketSnapshot.findUnique({
-        where: { id: emsalResult.snapshotId },
+      const allSnaps = await this.prisma.vehicleMarketSnapshot.findMany({
+        where: { id: { in: filteredIds } },
       });
-      if (!snap || !snap.snapshotDataJson) return [];
-      const parsed = JSON.parse(snap.snapshotDataJson);
-      const listingIds = parsed.uniqueListingIds || [];
-      if (listingIds.length === 0) return [];
+
+      const snapListingArrays = allSnaps
+        .map(s => {
+          try {
+            return JSON.parse(s.snapshotDataJson || '{}').uniqueListingIds || [];
+          } catch (e) {
+            return [];
+          }
+        })
+        .filter(arr => arr.length > 0);
+
+      // Round-robin selection of up to 5 listing IDs
+      const selectedListingIds: string[] = [];
+      let added = true;
+      let index = 0;
+      while (selectedListingIds.length < 5 && added) {
+        added = false;
+        for (const arr of snapListingArrays) {
+          if (selectedListingIds.length >= 5) break;
+          if (index < arr.length) {
+            const lid = arr[index];
+            if (!selectedListingIds.includes(lid)) {
+              selectedListingIds.push(lid);
+              added = true;
+            }
+          }
+        }
+        index++;
+      }
+
+      if (selectedListingIds.length === 0) return [];
 
       const rawListings = await this.prisma.rawVehicleListing.findMany({
-        where: {
-          sourceListingId: { in: listingIds.slice(0, 5) },
-        },
+        where: { sourceListingId: { in: selectedListingIds } },
       });
 
-      return rawListings.map((r, index) => ({
-        id: r.id,
-        year: r.year,
-        mileage: r.mileageKm || 0,
-        price: r.price,
-        province: r.city || 'İstanbul',
-        district: '',
-        listingDate: 'Güncel İlan',
-        photo: '',
-        details: `${r.canonicalVariant || ''} ${r.canonicalTrim || ''} - ${r.canonicalTransmission || ''} - ${r.canonicalFuelType || ''}`,
-        isRepresentativeVisualScenario: false,
-        typeNote: 'Gerçek Piyasa Emsal İlanı',
-      }));
+      // Keep order as in selectedListingIds
+      const listingMap = new Map(rawListings.map(r => [r.sourceListingId, r]));
+      const orderedListings = selectedListingIds
+        .map(id => listingMap.get(id))
+        .filter(Boolean) as typeof rawListings;
+
+      return orderedListings.map((r) => {
+        let location = 'Bilinmiyor';
+        if (r.city && r.city.trim() !== '') {
+          location = r.city;
+        }
+
+        let date = 'Bilinmiyor';
+        if (r.scrapedAt) {
+          try {
+            const d = new Date(r.scrapedAt);
+            const day = String(d.getDate()).padStart(2, '0');
+            const month = String(d.getMonth() + 1).padStart(2, '0');
+            const year = d.getFullYear();
+            date = `${day}.${month}.${year}`;
+          } catch (e) {}
+        }
+
+        return {
+          id: r.id,
+          year: r.year,
+          mileage: r.mileageKm || 0,
+          price: r.price,
+          province: location,
+          district: '',
+          listingDate: date,
+          photo: '',
+          details: `${r.canonicalVariant || ''} ${r.canonicalTrim || ''} - ${r.canonicalTransmission || ''} - ${r.canonicalFuelType || ''}`,
+          isRepresentativeVisualScenario: false,
+          typeNote: 'Gerçek Piyasa Emsal İlanı',
+        };
+      });
     } catch (e) {
       console.error('Error fetching real comparable listings:', e);
       return [];
@@ -325,13 +407,10 @@ export class EvaluationService {
   private roundToCleanGalleryPrice(val: number): number {
     if (!val || val <= 0) return 0;
     if (val >= 2000000) {
-      // 2M+ TL: Round to nearest 50.000 TL (e.g. 2.937.500 TL -> 2.950.000 TL / 3.000.000 TL)
       return Math.round(val / 50000) * 50000;
     } else if (val >= 500000) {
-      // 500k - 2M TL: Round to nearest 10.000 TL (e.g. 930.000 TL, 950.000 TL)
       return Math.round(val / 10000) * 10000;
     } else {
-      // < 500k TL: Round to nearest 5.000 TL
       return Math.round(val / 5000) * 5000;
     }
   }
@@ -381,140 +460,6 @@ export class EvaluationService {
         confidenceScore: `${item.confidenceScore}%`,
       },
       aiAnalysis: item.aiAnalysis ? JSON.parse(item.aiAnalysis as string) : [],
-    };
-  }
-
-  async calculateVehicleValuationPreview(dto: CreateEvaluationDto) {
-    const whereCondition: any = {
-      year: dto.year,
-      manufacturerId: dto.manufacturerId,
-      modelId: dto.modelId,
-    };
-    if (dto.variantId) whereCondition.variantId = dto.variantId;
-    if (dto.packageId) whereCondition.packageId = dto.packageId;
-    if (dto.bodyTypeId) whereCondition.bodyTypeId = dto.bodyTypeId;
-    if (dto.fuelTypeId) whereCondition.fuelTypeId = dto.fuelTypeId;
-    if (dto.transmissionTypeId) whereCondition.transmissionTypeId = dto.transmissionTypeId;
-
-    let spec = await this.prisma.vehicleSpecification.findFirst({
-      where: whereCondition,
-      include: {
-        manufacturer: true,
-        model: true,
-        variant: true,
-        package: true,
-        bodyType: true,
-        fuelType: true,
-        transmissionType: true,
-      },
-    });
-
-    if (!spec && dto.variantId) {
-      spec = await this.prisma.vehicleSpecification.findFirst({
-        where: {
-          year: dto.year,
-          manufacturerId: dto.manufacturerId,
-          modelId: dto.modelId,
-          variantId: dto.variantId,
-        },
-        include: {
-          manufacturer: true,
-          model: true,
-          variant: true,
-          package: true,
-          bodyType: true,
-          fuelType: true,
-          transmissionType: true,
-        },
-      });
-    }
-
-    if (!spec) {
-      return {
-        status: 'INSUFFICIENT_DATA',
-        confidenceScore: 0,
-        message: 'Yeterli piyasa verisi bulunamadı',
-        results: null,
-      };
-    }
-
-    let damagePenalty = 0;
-    if (dto.damageStatus === 'YES') {
-      damagePenalty = 0.08;
-    } else if (dto.damageStatus === 'NO') {
-      damagePenalty = 0;
-    } else {
-      damagePenalty = 0.04;
-    }
-
-    const emsalResult = await this.emsalMatcherService.matchComparableListings({
-      make: spec.manufacturer.name,
-      model: spec.model.name,
-      variant: spec.variant?.name,
-      trim: spec.package?.name,
-      year: dto.year,
-      mileageKm: dto.mileage,
-      bodyType: spec.bodyType?.name,
-      fuelType: spec.fuelType?.name,
-      transmission: spec.transmissionType?.name,
-    });
-
-    if (emsalResult.level === 4 || emsalResult.matchedCount === 0) {
-      return {
-        status: 'INSUFFICIENT_DATA',
-        confidenceScore: 0,
-        message: 'Yeterli piyasa verisi bulunamadı',
-        results: null,
-      };
-    }
-
-    const calc = RobustPricingCalculator.computeValuationFromSnapshot({
-      weightedP5: emsalResult.weightedP5 || (emsalResult.weightedP50 || 0) * 0.85,
-      weightedP35: emsalResult.weightedP35 || (emsalResult.weightedP50 || 0) * 0.92,
-      weightedP50: emsalResult.weightedP50 || 0,
-      weightedP60: emsalResult.weightedP60 || (emsalResult.weightedP50 || 0) * 1.02,
-      weightedP95: emsalResult.weightedP95 || (emsalResult.weightedP50 || 0) * 1.15,
-      realMatchedListingCount: emsalResult.matchedCount,
-      kmDecayPer10k: emsalResult.kmDecayPer10k || 0.0025,
-      referenceMedianMileage: emsalResult.referenceMedianMileage || 100000,
-      mileageAdjustmentSource: emsalResult.mileageAdjustmentSource || 'DEFAULT_FALLBACK',
-      userYear: dto.year,
-      userMileage: dto.mileage,
-      damagePenalty,
-      userDesiredPrice: dto.userDesiredPrice,
-      matchedLevel: emsalResult.level,
-      baseConfidenceScore: emsalResult.confidenceScore,
-    });
-
-    const comparableListings = await this.getRealComparableListings(emsalResult);
-
-    return {
-      status: calc.requiresManualApproval ? 'MANUAL_EVALUATION_REQUIRED' : 'SUCCESS',
-      confidenceScore: calc.confidenceScore,
-      message: 'Başarılı',
-      results: {
-        snapshotId: emsalResult.snapshotId,
-        weightedP35: emsalResult.weightedP35,
-        weightedP50: emsalResult.weightedP50,
-        adjustedP35: calc.adjustedP35,
-        fairMarketValue: calc.fairMarketValue,
-        cashOffer: calc.cashOffer,
-        cashOfferMin: calc.cashOfferMin,
-        cashOfferMax: calc.cashOfferMax,
-        consignmentListingPrice: calc.consignmentListingPrice,
-        expectedConsignmentSalePrice: calc.expectedConsignmentSalePrice,
-        consignmentCommission: calc.consignmentCommission,
-        customerConsignmentNet: calc.customerConsignmentNet,
-        estimatedDaysToSell: `${calc.estimatedDaysToSellMin}-${calc.estimatedDaysToSellMax} gün`,
-        confidenceScore: calc.confidenceScore,
-        matchedListingCount: calc.matchedListingCount,
-        matchedLevel: emsalResult.level,
-        pricingExplanation: emsalResult.explanationNote,
-        requiresManualApproval: calc.requiresManualApproval,
-        kmDecayPer10k: emsalResult.kmDecayPer10k || 0.0025,
-        referenceMedianMileage: emsalResult.referenceMedianMileage || 100000,
-      },
-      comparableListings,
     };
   }
 }

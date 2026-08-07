@@ -39,7 +39,7 @@ export class ConsignmentService {
         sellingTimeline: 'hemen',
         userDesiredPrice: 0,
       });
-      evalId = evResult.evaluationId || null;
+      evalId = (evResult && 'evaluationId' in evResult) ? (evResult as any).evaluationId : null;
     }
 
     const consignment = await this.prisma.consignmentApplication.create({

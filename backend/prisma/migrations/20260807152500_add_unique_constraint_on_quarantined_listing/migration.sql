@@ -1,3 +1,11 @@
+-- Clean up duplicate QuarantinedListing records before applying the unique index constraint
+DELETE FROM "QuarantinedListing"
+WHERE id NOT IN (
+    SELECT MIN(id)
+    FROM "QuarantinedListing"
+    GROUP BY "source", "rawListingId", "reason"
+);
+
 -- RedefineTable
 PRAGMA foreign_keys=OFF;
 CREATE TABLE "new_QuarantinedListing" (

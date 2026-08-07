@@ -6,7 +6,20 @@ import { CanonicalNormalizer } from '../evaluation/canonical-normalizer';
 import { RobustPricingCalculator } from '../evaluation/robust-pricing-calculator';
 
 const prisma = new PrismaClient();
-const DESKTOP_DIR = 'C:\\Users\\berke\\OneDrive\\Masaüstü\\sahibindne ilan';
+function getAndValidateHtmlSourceDir(): string {
+  const dir = process.env.SAHIBINDEN_HTML_DIR || 'C:\\Users\\berke\\OneDrive\\Masaüstü\\sahibindne ilan';
+  if (!fs.existsSync(dir)) {
+    throw new Error('HTML_SOURCE_DIRECTORY_NOT_FOUND');
+  }
+  try {
+    fs.accessSync(dir, fs.constants.R_OK);
+  } catch (err) {
+    throw new Error('HTML_SOURCE_DIRECTORY_NOT_ACCESSIBLE');
+  }
+  return dir;
+}
+
+const DESKTOP_DIR = getAndValidateHtmlSourceDir();
 
 function scanHtmlFilesRecursively(dir: string, fileList: string[] = []): string[] {
   if (!fs.existsSync(dir)) return fileList;
@@ -16,9 +29,13 @@ function scanHtmlFilesRecursively(dir: string, fileList: string[] = []): string[
     const filePath = path.join(dir, file);
     const stat = fs.statSync(filePath);
     if (stat.isDirectory()) {
+      if (file.toLowerCase().endsWith('_files')) continue;
       scanHtmlFilesRecursively(filePath, fileList);
-    } else if (file.toLowerCase().endsWith('.html')) {
-      fileList.push(filePath);
+    } else {
+      const lower = file.toLowerCase();
+      if (lower.endsWith('.html') || lower.endsWith('.htm')) {
+        fileList.push(filePath);
+      }
     }
   }
   return fileList;
@@ -93,6 +110,9 @@ async function main() {
 
   const startTime = Date.now();
   const allHtmlPaths = scanHtmlFilesRecursively(DESKTOP_DIR);
+  if (allHtmlPaths.length === 0) {
+    throw new Error('NO_HTML_FILES_FOUND');
+  }
   console.log(`✓ Toplam ${allHtmlPaths.length} adet HTML dosyası özyinelemeli (recursive) olarak tarandı.\n`);
 
   const rawListingMap = new Map<string, RawListingData>();
@@ -208,24 +228,38 @@ async function main() {
   const existingRaw = await prisma.rawVehicleListing.findMany();
   const existingRawMap = new Map(existingRaw.map(r => [r.sourceListingId, r]));
 
-  const toCreateRaw: any[] = [];
-  const toUpdateRaw: any[] = [];
+  // Combine HTML parsed listings and existing DB listings to ensure we re-normalize ALL of them
+  const listingsToProcess = new Map<string, any>();
 
-  // Stage 2: Combine in-memory items (including ones parsed as quarantined)
-  // We want to re-normalize and update ALL raw listing records.
-  // Note: quarantinedList contains items that failed CanonicalNormalizer validation.
-  // We will upsert BOTH valid rawListingMap items and quarantinedList items into RawVehicleListing table.
-  const allParsedItemsMap = new Map<string, any>();
-
-  // Add valid items
-  for (const item of rawListingMap.values()) {
-    allParsedItemsMap.set(item.sourceListingId, item);
+  // Add all existing DB listings
+  for (const dbItem of existingRaw) {
+    listingsToProcess.set(dbItem.sourceListingId, {
+      source: dbItem.source,
+      sourceListingId: dbItem.sourceListingId,
+      sourceFile: dbItem.sourceFile,
+      rawMake: dbItem.rawMake,
+      rawModel: dbItem.rawModel,
+      rawVariant: dbItem.rawVariant,
+      rawTitle: dbItem.rawTitle,
+      year: dbItem.year,
+      price: dbItem.price,
+      mileageKm: dbItem.mileageKm,
+      isDamaged: dbItem.isDamaged,
+      dbId: dbItem.id
+    });
   }
 
-  // Add quarantined items from this run to raw listing updates (with parseStatus = 'QUARANTINED')
+  // Overwrite or add newly parsed items from HTML (since they are fresher)
+  for (const item of rawListingMap.values()) {
+    listingsToProcess.set(item.sourceListingId, {
+      ...item,
+      dbId: existingRawMap.get(item.sourceListingId)?.id
+    });
+  }
+
+  // Also add parsed quarantined items from HTML
   for (const qItem of quarantinedList) {
-    // Convert quarantined item to RawVehicleListing format
-    allParsedItemsMap.set(qItem.rawListingId, {
+    listingsToProcess.set(qItem.rawListingId, {
       source: 'SAHIBINDEN_HTML',
       sourceListingId: qItem.rawListingId,
       sourceFile: qItem.sourceFile,
@@ -233,33 +267,154 @@ async function main() {
       rawModel: qItem.rawModel,
       rawVariant: qItem.rawVariant,
       rawTitle: qItem.rawTitle,
-      canonicalMake: qItem.canonicalMake || '',
-      canonicalModel: qItem.canonicalModel || '',
-      canonicalVariant: qItem.canonicalVariant || '',
-      canonicalTrim: qItem.canonicalTrim || '',
-      canonicalBodyType: qItem.canonicalBodyType || '',
-      canonicalFuelType: qItem.canonicalFuelType || '',
-      canonicalTransmission: qItem.canonicalTransmission || '',
       year: qItem.year || 0,
-      mileageKm: qItem.mileageKm || null,
       price: qItem.price || 0,
+      mileageKm: qItem.mileageKm || null,
       isDamaged: qItem.isDamaged || false,
-      parseStatus: 'QUARANTINED',
-      parseWarnings: qItem.reason,
+      dbId: existingRawMap.get(qItem.rawListingId)?.id
     });
   }
 
-  // Stage 3: Distribute to Create vs Update arrays
-  for (const item of allParsedItemsMap.values()) {
-    const existing = existingRawMap.get(item.sourceListingId);
-    if (existing) {
-      // REQUIREMENT 3: Update all fields and lastSeenAt on match, even if price/mileage is unchanged.
+  // Pre-fetch all specifications to resolve metadata and ambiguity
+  console.log(`✓ Emsal teknik özellikleri (VehicleSpecification) yükleniyor...`);
+  const specs = await prisma.vehicleSpecification.findMany({
+    include: {
+      manufacturer: true,
+      model: true,
+      variant: true,
+      bodyType: true,
+      fuelType: true,
+      transmissionType: true,
+      package: true,
+    }
+  });
+
+  // Group specs by make + model + variant + year
+  const specGroups = new Map<string, typeof specs>();
+  for (const s of specs) {
+    const variantName = s.variant?.name ? s.variant.name.trim().toLowerCase() : '';
+    const key = `${s.manufacturer.name.trim().toLowerCase()}__${s.model.name.trim().toLowerCase()}__${variantName}__${s.year}`;
+    if (!specGroups.has(key)) {
+      specGroups.set(key, []);
+    }
+    specGroups.get(key)!.push(s);
+  }
+
+  let ambiguousSpecCount = 0;
+  const toCreateRaw: any[] = [];
+  const toUpdateRaw: any[] = [];
+  const quarantinedListingsToUpsert: any[] = [];
+
+  // Run normalization, pricing validations and spec metadata resolution on ALL listings
+  for (const item of listingsToProcess.values()) {
+    let parseStatus: 'VALID' | 'QUARANTINED' = 'VALID';
+    let parseWarnings: string | null = null;
+    let canonicalMake = '';
+    let canonicalModel = '';
+    let canonicalVariant = '';
+
+    if (item.year === 0) {
+      parseStatus = 'QUARANTINED';
+      parseWarnings = 'INVALID_YEAR';
+    } else if (item.price < 50000 || item.price > 150000000) {
+      parseStatus = 'QUARANTINED';
+      parseWarnings = 'INVALID_PRICE';
+    } else {
+      const canonical = CanonicalNormalizer.normalize(item.rawMake, item.rawModel, item.rawVariant, item.rawTitle);
+      if (!canonical.isValid) {
+        parseStatus = 'QUARANTINED';
+        parseWarnings = canonical.quarantineReason || 'CANONICAL_TEST_BAŞARISIZ';
+      } else {
+        canonicalMake = canonical.canonicalMake;
+        canonicalModel = canonical.canonicalModel;
+        canonicalVariant = canonical.canonicalVariant || '';
+      }
+    }
+
+    let canonicalTrim = '';
+    let canonicalBodyType = '';
+    let canonicalFuelType = '';
+    let canonicalTransmission = '';
+
+    if (parseStatus === 'VALID') {
+      const lookupVariant = canonicalVariant ? canonicalVariant.trim().toLowerCase() : '';
+      const specKey = `${canonicalMake.trim().toLowerCase()}__${canonicalModel.trim().toLowerCase()}__${lookupVariant}__${item.year}`;
+      const group = specGroups.get(specKey);
+      let spec: any = null;
+      let isAmbiguous = false;
+
+      if (group && group.length > 0) {
+        if (group.length === 1) {
+          spec = group[0];
+        } else {
+          const first = group[0];
+          const hasDifferentCombos = group.some(s => 
+            (s.package?.name || '') !== (first.package?.name || '') ||
+            (s.bodyType?.name || '') !== (first.bodyType?.name || '') ||
+            (s.fuelType?.name || '') !== (first.fuelType?.name || '') ||
+            (s.transmissionType?.name || '') !== (first.transmissionType?.name || '')
+          );
+
+          if (hasDifferentCombos) {
+            isAmbiguous = true;
+            ambiguousSpecCount++;
+          } else {
+            spec = first;
+          }
+        }
+      }
+
+      if (spec && !isAmbiguous) {
+        canonicalTrim = spec.package?.name || '';
+        canonicalBodyType = spec.bodyType?.name || '';
+        canonicalFuelType = spec.fuelType?.name || '';
+        canonicalTransmission = spec.transmissionType?.name || '';
+      }
+    }
+
+    const processedItem = {
+      source: item.source,
+      sourceListingId: item.sourceListingId,
+      sourceFile: item.sourceFile,
+      rawMake: item.rawMake,
+      rawModel: item.rawModel,
+      rawVariant: item.rawVariant,
+      rawTitle: item.rawTitle,
+      canonicalMake,
+      canonicalModel,
+      canonicalVariant,
+      canonicalTrim,
+      canonicalBodyType,
+      canonicalFuelType,
+      canonicalTransmission,
+      year: item.year,
+      mileageKm: item.mileageKm,
+      price: item.price,
+      isDamaged: item.isDamaged,
+      parseStatus,
+      parseWarnings,
+      lastSeenAt: new Date(),
+    };
+
+    if (item.dbId) {
       toUpdateRaw.push({
-        id: existing.id,
-        ...item,
+        id: item.dbId,
+        ...processedItem,
       });
     } else {
-      toCreateRaw.push(item);
+      toCreateRaw.push(processedItem);
+    }
+
+    if (parseStatus === 'QUARANTINED') {
+      quarantinedListingsToUpsert.push({
+        rawListingId: item.sourceListingId,
+        rawMake: item.rawMake,
+        rawModel: item.rawModel,
+        rawVariant: item.rawVariant,
+        rawTitle: item.rawTitle,
+        sourceFile: item.sourceFile,
+        reason: parseWarnings,
+      });
     }
   }
 
@@ -272,7 +427,7 @@ async function main() {
     });
   }
 
-  // Execute updates sequentially or via transaction
+  // Execute updates sequentially
   console.log(`✓ Mevcut ilanların güncelleme ve yeniden normalizasyon işlemleri yapılıyor (${toUpdateRaw.length} adet)...`);
   for (const item of toUpdateRaw) {
     await prisma.rawVehicleListing.update({
@@ -301,24 +456,21 @@ async function main() {
     });
   }
 
-  // Stage 4: Write QuarantinedListing entries for quarantined items
-  // REQUIREMENT 3: Upsert into QuarantinedListing idempotently. Do not create duplicates. No deleteMany.
-  const quarantinedEntriesToWrite = Array.from(allParsedItemsMap.values()).filter(item => item.parseStatus === 'QUARANTINED');
-  console.log(`✓ Karantina tablosu güncelleniyor (${quarantinedEntriesToWrite.length} adet)...`);
-
-  for (const item of quarantinedEntriesToWrite) {
-    const reason = item.parseWarnings || 'CANONICAL_TEST_BAŞARISIZ';
+  // Upsert into QuarantinedListing idempotently
+  console.log(`✓ Karantina tablosu güncelleniyor (${quarantinedListingsToUpsert.length} adet)...`);
+  for (const item of quarantinedListingsToUpsert) {
+    const reason = item.reason || 'CANONICAL_TEST_BAŞARISIZ';
     await prisma.quarantinedListing.upsert({
       where: {
         source_rawListingId_reason: {
           source: 'SAHIBINDEN_HTML',
-          rawListingId: item.sourceListingId,
+          rawListingId: item.rawListingId,
           reason,
         }
       },
       create: {
         source: 'SAHIBINDEN_HTML',
-        rawListingId: item.sourceListingId,
+        rawListingId: item.rawListingId,
         rawMake: item.rawMake,
         rawModel: item.rawModel,
         rawVariant: item.rawVariant,
@@ -336,9 +488,10 @@ async function main() {
     });
   }
 
-  console.log(`✓ RawVehicleListing ve QuarantinedListing başarıyla güncellendi.\n`);
+  console.log(`✓ RawVehicleListing ve QuarantinedListing başarıyla güncellendi.`);
+  console.log(`✓ Toplam ${ambiguousSpecCount} adet belirsiz (ambiguous) teknik özellik tespit edildi.\n`);
 
-  // Requirement 7: Atomic Snapshot Replacement
+  // Stage 5: Atomic Snapshot Replacement
   console.log(`====================================================================`);
   console.log(`  SÜRÜMLÜ PİYASA SNAPSHOT'LARI ÜRETİLİYOR (v2.0_temp)`);
   console.log(`====================================================================\n`);
@@ -353,7 +506,6 @@ async function main() {
   });
 
   const groupMap = new Map<string, typeof validRawListings>();
-
   for (const item of validRawListings) {
     const key = `${item.canonicalMake}__${item.canonicalModel}__${item.canonicalVariant || ''}__${item.year}`;
     if (!groupMap.has(key)) {
@@ -363,31 +515,8 @@ async function main() {
   }
 
   console.log(`✓ Emsal teknik özellikleri (VehicleSpecification) önbelleğe alınıyor...`);
-  const distinctMakes = Array.from(new Set(validRawListings.map(l => l.canonicalMake)));
-  const specs = await prisma.vehicleSpecification.findMany({
-    where: {
-      manufacturer: { name: { in: distinctMakes } },
-    },
-    include: {
-      manufacturer: true,
-      model: true,
-      variant: true,
-      bodyType: true,
-      fuelType: true,
-      transmissionType: true,
-      package: true,
-    }
-  });
-
-  const specMap = new Map<string, typeof specs[0]>();
-  for (const s of specs) {
-    const variantName = s.variant?.name ? s.variant.name.trim().toLowerCase() : '';
-    const key = `${s.manufacturer.name.trim().toLowerCase()}__${s.model.name.trim().toLowerCase()}__${variantName}__${s.year}`;
-    if (!specMap.has(key)) {
-      specMap.set(key, s);
-    }
-  }
-  console.log(`✓ Toplam ${specMap.size} teknik özellik eşleştirme için hazır.\n`);
+  // Re-use specGroups for lookup during snapshot processing
+  console.log(`✓ Toplam ${specGroups.size} teknik özellik grubu eşleştirme için hazır.\n`);
 
   let snapshotsCreated = 0;
 
@@ -441,17 +570,36 @@ async function main() {
       }
     }
 
-    // Lookup specification from in-memory pre-fetched map
-    // REQUIREMENT 2: Use make + model + variant + year key.
     const lookupVariant = variant ? variant.trim().toLowerCase() : '';
     const specKey = `${make.trim().toLowerCase()}__${model.trim().toLowerCase()}__${lookupVariant}__${year}`;
-    const spec = specMap.get(specKey);
+    const group = specGroups.get(specKey);
+    let spec: any = null;
+    let isAmbiguous = false;
 
-    // REQUIREMENT 2: If specification cannot be determined, leave the metadata empty.
-    const canonicalBodyType = spec ? (spec.bodyType?.name || '') : '';
-    const canonicalFuelType = spec ? (spec.fuelType?.name || '') : '';
-    const canonicalTransmission = spec ? (spec.transmissionType?.name || '') : '';
-    const canonicalTrim = spec ? (spec.package?.name || '') : '';
+    if (group && group.length > 0) {
+      if (group.length === 1) {
+        spec = group[0];
+      } else {
+        const first = group[0];
+        const hasDifferentCombos = group.some(s => 
+          (s.package?.name || '') !== (first.package?.name || '') ||
+          (s.bodyType?.name || '') !== (first.bodyType?.name || '') ||
+          (s.fuelType?.name || '') !== (first.fuelType?.name || '') ||
+          (s.transmissionType?.name || '') !== (first.transmissionType?.name || '')
+        );
+
+        if (hasDifferentCombos) {
+          isAmbiguous = true;
+        } else {
+          spec = first;
+        }
+      }
+    }
+
+    const canonicalBodyType = (spec && !isAmbiguous) ? (spec.bodyType?.name || '') : '';
+    const canonicalFuelType = (spec && !isAmbiguous) ? (spec.fuelType?.name || '') : '';
+    const canonicalTransmission = (spec && !isAmbiguous) ? (spec.transmissionType?.name || '') : '';
+    const canonicalTrim = (spec && !isAmbiguous) ? (spec.package?.name || '') : '';
 
     // Requirement 11: Dynamic dataQualityScore
     const dataQualityScore = calculateDataQualityScore({

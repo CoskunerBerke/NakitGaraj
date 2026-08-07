@@ -251,8 +251,9 @@ model RawVehicleListing {
   price                   Float
   city                    String?
   isDamaged               Boolean  @default(false)
-  parseStatus             String   @default("VALID") // "VALID", "QUARANTINED"
+  parseStatus             String   @default("VALID") // "VALID", "INCOMPLETE_ATTRIBUTES", "MISSING_PRICE"
   parseWarnings           String?
+  missingFields           String?
   scrapedAt               DateTime?
   importedAt              DateTime @default(now())
   lastSeenAt              DateTime @default(now())

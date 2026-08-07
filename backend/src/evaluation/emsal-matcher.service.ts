@@ -35,6 +35,7 @@ export interface EmsalMatchResult {
   referenceMedianMileage?: number;
   mileageAdjustmentSource?: string;
   yearAdjustmentSource?: string;
+  contributingSnapshotIds?: string[];
 }
 
 @Injectable()
@@ -59,79 +60,71 @@ export class EmsalMatcherService {
     const { make, model, variant, trim, year, mileageKm, bodyType, fuelType, transmission } = params;
 
     // 1. Level 1: Exact Make, Model, Variant, Trim, Year, BodyType, FuelType, Transmission (Exact String Equality)
-    let snapshotRes = await this.querySnapshotFromDb({
-      make,
-      model,
-      variant,
-      yearExact: year,
-    });
+    const paramVariant = (variant || '').trim();
+    const paramTrim = (trim || '').trim();
+    const paramBody = (bodyType || '').trim();
+    const paramFuel = (fuelType || '').trim();
+    const paramTrans = (transmission || '').trim();
 
-    if (snapshotRes && snapshotRes.snapshot && snapshotRes.snapshot.matchedListingCount >= 5) {
-      const snapshot = snapshotRes.snapshot;
-      const hasFullMetadata = snapshotRes.hasFullMetadata;
+    const hasAllRequiredMetadataForL1 =
+      make.trim() !== '' &&
+      model.trim() !== '';
 
-      // REQUIREMENT 1: Level 1 must require strict equality on: Make, Model, Variant, Trim, Year, BodyType, FuelType, Transmission.
-      // If a technical field is present in user inputs, check exact match.
-      // Also, if variant, trim, bodyType, fuelType, or transmission is missing from user params or database snapshot, do NOT allow Level 1.
-      const paramVariant = (variant || '').trim();
-      const snapVariant = (snapshot.canonicalVariant || '').trim();
-      const paramTrim = (trim || '').trim();
-      const snapTrim = (snapshot.canonicalTrim || '').trim();
-      const paramBody = (bodyType || '').trim();
-      const snapBody = (snapshot.canonicalBodyType || '').trim();
-      const paramFuel = (fuelType || '').trim();
-      const snapFuel = (snapshot.canonicalFuelType || '').trim();
-      const paramTrans = (transmission || '').trim();
-      const snapTrans = (snapshot.canonicalTransmission || '').trim();
+    if (hasAllRequiredMetadataForL1) {
+      const whereL1: any = {
+        canonicalMake: { equals: make.trim() },
+        canonicalModel: { equals: model.trim() },
+        canonicalTrim: { equals: paramTrim },
+        year: year,
+        snapshotVersion: 'v2.0',
+        isActive: true,
+      };
 
-      const hasRequiredMetadata =
-        paramVariant !== '' && snapVariant !== '' &&
-        paramBody !== '' && snapBody !== '' &&
-        paramFuel !== '' && snapFuel !== '' &&
-        paramTrans !== '' && snapTrans !== '';
+      if (paramBody !== '') {
+        whereL1.canonicalBodyType = { equals: paramBody };
+      }
+      if (paramFuel !== '') {
+        whereL1.canonicalFuelType = { equals: paramFuel };
+      }
+      if (paramTrans !== '') {
+        whereL1.canonicalTransmission = { equals: paramTrans };
+      }
 
-      const isExactMatch =
-        make.trim().toLowerCase() === snapshot.canonicalMake.trim().toLowerCase() &&
-        model.trim().toLowerCase() === snapshot.canonicalModel.trim().toLowerCase() &&
-        paramVariant.toLowerCase() === snapVariant.toLowerCase() &&
-        paramTrim.toLowerCase() === snapTrim.toLowerCase() &&
-        paramBody.toLowerCase() === snapBody.toLowerCase() &&
-        paramFuel.toLowerCase() === snapFuel.toLowerCase() &&
-        paramTrans.toLowerCase() === snapTrans.toLowerCase();
+      const snapshotL1 = await this.prisma.vehicleMarketSnapshot.findFirst({
+        where: whereL1
+      });
 
-      if (hasRequiredMetadata && isExactMatch && hasFullMetadata) {
+      if (snapshotL1 && snapshotL1.matchedListingCount >= 1) {
         let referenceMedianMileage: number | undefined;
         let mileageAdjustmentSource: string | undefined;
 
-        if (snapshot.snapshotDataJson) {
+        if (snapshotL1.snapshotDataJson) {
           try {
-            const parsed = JSON.parse(snapshot.snapshotDataJson);
+            const parsed = JSON.parse(snapshotL1.snapshotDataJson);
             referenceMedianMileage = parsed.medianMileage;
             mileageAdjustmentSource = parsed.mileageAdjustmentSource;
           } catch (e) {}
         }
 
-        const cleanComps = this.convertSnapshotToCleanListings(snapshot, mileageKm);
-
-        // Section 4 Level 1: Check full metadata presence
+        const cleanComps = this.convertSnapshotToCleanListings(snapshotL1, mileageKm);
         const baseScore = 95;
-        const dynamicScore = Math.min(99, Math.max(83, baseScore + Math.floor(snapshot.matchedListingCount / 12)));
-        const levelAssigned = 1;
+        const dynamicScore = Math.min(99, Math.max(83, baseScore + Math.floor(snapshotL1.matchedListingCount / 12)));
 
         return {
-          level: levelAssigned,
-          matchedCount: snapshot.matchedListingCount,
+          level: 1,
+          matchedCount: snapshotL1.matchedListingCount,
           cleanListings: cleanComps,
           confidenceScore: dynamicScore,
           isLimitedComps: false,
-          explanationNote: `Seviye ${levelAssigned}: ${make} ${model} ${variant || ''} (${year}) veritabanındaki ${snapshot.matchedListingCount} adet gerçek Sahibinden ilan emsaliyle tam eşleşti (%99 Güven). (Snapshot ID: ${snapshot.id.slice(0, 8)})`,
-          snapshotId: snapshot.id,
-          weightedP5: snapshot.weightedP5,
-          weightedP35: snapshot.weightedP35,
-          weightedP50: snapshot.weightedP50,
-          weightedP60: snapshot.weightedP60,
-          weightedP95: snapshot.weightedP95,
-          kmDecayPer10k: snapshot.kmDecayPer10k || 0.0025,
+          explanationNote: `Seviye 1: ${make} ${model} ${variant || ''} (${year}) veritabanındaki ${snapshotL1.matchedListingCount} adet gerçek Sahibinden ilan emsaliyle tam eşleşti (%99 Güven). (Snapshot ID: ${snapshotL1.id.slice(0, 8)})`,
+          snapshotId: snapshotL1.id,
+          contributingSnapshotIds: [snapshotL1.id],
+          weightedP5: snapshotL1.weightedP5,
+          weightedP35: snapshotL1.weightedP35,
+          weightedP50: snapshotL1.weightedP50,
+          weightedP60: snapshotL1.weightedP60,
+          weightedP95: snapshotL1.weightedP95,
+          kmDecayPer10k: snapshotL1.kmDecayPer10k || 0.0025,
           referenceMedianMileage: referenceMedianMileage || 100000,
           mileageAdjustmentSource: mileageAdjustmentSource || 'DEFAULT_FALLBACK',
           yearAdjustmentSource: 'NOT_APPLICABLE_EXACT_YEAR',
@@ -160,6 +153,7 @@ export class EmsalMatcherService {
         isLimitedComps: false,
         explanationNote: `Seviye 2: ${make} ${model} ${variant || ''} (${year - 1}-${year + 1}) grubundaki ${snapshotL2.matchedListingCount} adet gerçek emsal ${snapshotL2.snapshotCount} snapshot birleştirilerek ve yıllık %${(snapshotL2.yearAdjustmentRate * 100).toFixed(1)} fiyat normalizasyonu (${snapshotL2.yearAdjustmentSource}) uygulanarak hesaplandı. (Snapshot ID: ${snapshotL2.id.slice(0, 8)})`,
         snapshotId: snapshotL2.id,
+        contributingSnapshotIds: (snapshotL2 as any).contributingSnapshotIds || [snapshotL2.id],
         weightedP5: snapshotL2.weightedP5,
         weightedP35: snapshotL2.weightedP35,
         weightedP50: snapshotL2.weightedP50,
@@ -192,6 +186,7 @@ export class EmsalMatcherService {
         isLimitedComps: false,
         explanationNote: `Seviye 3: ${make} ${model} genel model grubundaki ${snapshotL3.matchedListingCount} adet gerçek ilan emsali ağırlıklı ortalamayla hesaplandı. (Snapshot ID: ${snapshotL3.id.slice(0, 8)})`,
         snapshotId: snapshotL3.id,
+        contributingSnapshotIds: (snapshotL3 as any).contributingSnapshotIds || [snapshotL3.id],
         weightedP5: snapshotL3.weightedP5,
         weightedP35: snapshotL3.weightedP35,
         weightedP50: snapshotL3.weightedP50,
@@ -212,6 +207,7 @@ export class EmsalMatcherService {
       confidenceScore: 0,
       isLimitedComps: true,
       explanationNote: `Seviye 4: Yetersiz Veri! ${make} ${model} (${year}) için veritabanında henüz Sahibinden ilan kaydı bulunamadı.`,
+      contributingSnapshotIds: [],
     };
   }
 
@@ -325,6 +321,7 @@ export class EmsalMatcherService {
       kmDecayPer10k,
       yearAdjustmentRate,
       yearAdjustmentSource,
+      contributingSnapshotIds: snapshots.map(s => s.id),
     };
   }
 

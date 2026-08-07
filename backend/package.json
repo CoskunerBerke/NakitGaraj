@@ -17,7 +17,10 @@
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:debug": "node --inspect-brk -r tsconfig-paths/register -r ts-node/register node_modules/.bin/jest --runInBand",
-    "test:e2e": "jest --config ./test/jest-e2e.json"
+    "test:e2e": "jest --config ./test/jest-e2e.json",
+    "inspect:sahibinden-html": "ts-node src/scripts/inspect_sahibinden_html.ts",
+    "dry-run:html-parser": "ts-node src/scripts/dry_run_html_parser.ts",
+    "import:sahibinden-html": "ts-node src/scripts/import_unique_sahibinden_listings.ts"
   },
   "dependencies": {
     "@napi-rs/canvas": "^1.0.3",
