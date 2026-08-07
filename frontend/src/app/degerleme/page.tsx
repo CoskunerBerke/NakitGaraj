@@ -621,24 +621,19 @@ export default function ValuationWizard() {
                 )}
               </div>
 
-              {/* Popüler Markalar Hızlı Seçim */}
+              {/* Yüklü Markalar Hızlı Seçim */}
               <div className="flex flex-wrap gap-2 pt-1">
-                {[
-                  'Audi', 'BMW', 'Mercedes-Benz', 'Volkswagen', 'Fiat', 'Renault', 'Ford', 'Peugeot', 'Toyota', 'Hyundai', 'TOGG', 'Tesla', 'Opel', 'Citroen', 'Skoda'
-                ].map((bName) => {
-                  const bObj = brands.find((b) => b.name.toLowerCase() === bName.toLowerCase());
-                  const isSelected = bObj && selectedBrand === bObj.id;
+                {brands.map((bObj) => {
+                  const isSelected = selectedBrand === bObj.id;
                   return (
                     <button
-                      key={bName}
+                      key={bObj.id}
                       type="button"
                       onClick={() => {
-                        if (bObj) {
-                          setSelectedBrand(bObj.id);
-                          setSelectedYear('');
-                          setSelectedModel('');
-                          resetSubordinateOptions();
-                        }
+                        setSelectedBrand(bObj.id);
+                        setSelectedYear('');
+                        setSelectedModel('');
+                        resetSubordinateOptions();
                       }}
                       className={`px-3 py-1.5 rounded-xl border text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
                         isSelected
@@ -646,7 +641,7 @@ export default function ValuationWizard() {
                           : 'bg-white dark:bg-zinc-800 border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 hover:border-brand-orange/40 hover:text-brand-orange'
                       }`}
                     >
-                      {bName}
+                      {bObj.name}
                     </button>
                   );
                 })}
