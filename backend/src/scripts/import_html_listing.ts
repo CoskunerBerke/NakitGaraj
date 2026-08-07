@@ -21,7 +21,7 @@ interface ExtractedListing {
 function detectMakeAndModel(filename: string, modelTagText: string, titleText: string, folderName: string): { make: string; model: string } {
   const combined = `${folderName} ${filename} ${modelTagText} ${titleText}`.toUpperCase();
 
-  let make = 'Audi';
+  let make = (folderName && folderName !== 'sahibindne ilan' && folderName !== 'Desktop') ? folderName : 'Audi';
 
   if (combined.includes('ALFA ROMEO') || combined.includes('ALFAROMEO') || folderName.toUpperCase().includes('ALFA')) {
     make = 'Alfa Romeo';
@@ -29,6 +29,22 @@ function detectMakeAndModel(filename: string, modelTagText: string, titleText: s
     make = 'BMW';
   } else if (combined.includes('AUDI') || folderName.toUpperCase().includes('AUDI')) {
     make = 'Audi';
+  } else if (combined.includes('ASTON MARTIN') || folderName.toUpperCase().includes('ASTON')) {
+    make = 'Aston Martin';
+  } else if (combined.includes('BENTLEY') || folderName.toUpperCase().includes('BENTLEY')) {
+    make = 'Bentley';
+  } else if (combined.includes('BAJAJ') || folderName.toUpperCase().includes('BAJAJ')) {
+    make = 'Bajaj';
+  } else if (combined.includes('ABARTH') || folderName.toUpperCase().includes('ABARTH')) {
+    make = 'Abarth';
+  } else if (combined.includes('ANADOL') || folderName.toUpperCase().includes('ANADOL')) {
+    make = 'Anadol';
+  } else if (combined.includes('ALPINE') || folderName.toUpperCase().includes('ALPINE')) {
+    make = 'Alpine';
+  } else if (combined.includes('AION') || folderName.toUpperCase().includes('AION')) {
+    make = 'Aion';
+  } else if (combined.includes('ARORA') || folderName.toUpperCase().includes('ARORA')) {
+    make = 'Arora';
   } else if (combined.includes('MERCEDES')) {
     make = 'Mercedes-Benz';
   } else if (combined.includes('VOLKSWAGEN') || combined.includes('VW')) {
