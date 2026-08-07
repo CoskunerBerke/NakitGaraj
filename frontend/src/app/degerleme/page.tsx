@@ -364,12 +364,12 @@ export default function ValuationWizard() {
   useEffect(() => {
     fetch(`${API_BASE}/years`)
       .then((res) => res.json())
-      .then((data) => setYears(data))
+      .then((data) => setYears(Array.isArray(data) ? data : []))
       .catch(console.error);
 
     fetch(`${API_BASE}/brands`)
       .then((res) => res.json())
-      .then((data) => setBrands(data))
+      .then((data) => setBrands(Array.isArray(data) ? data : []))
       .catch(console.error);
   }, []);
 
@@ -622,50 +622,57 @@ export default function ValuationWizard() {
               </div>
 
               {/* Yüklü Markalar Hızlı Seçim */}
-              <div className="flex flex-wrap gap-2 pt-1">
-                {brands.map((bObj) => {
-                  const isSelected = selectedBrand === bObj.id;
-                  return (
-                    <button
-                      key={bObj.id}
-                      type="button"
-                      onClick={() => {
-                        setSelectedBrand(bObj.id);
+              {(() => {
+                const safeBrands = Array.isArray(brands) ? brands : [];
+                return (
+                  <>
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      {safeBrands.map((bObj) => {
+                        const isSelected = selectedBrand === bObj.id;
+                        return (
+                          <button
+                            key={bObj.id}
+                            type="button"
+                            onClick={() => {
+                              setSelectedBrand(bObj.id);
+                              setSelectedYear('');
+                              setSelectedModel('');
+                              resetSubordinateOptions();
+                            }}
+                            className={`px-3 py-1.5 rounded-xl border text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                              isSelected
+                                ? 'bg-brand-orange text-white border-brand-orange shadow-md shadow-brand-orange/20 scale-105'
+                                : 'bg-white dark:bg-zinc-800 border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 hover:border-brand-orange/40 hover:text-brand-orange'
+                            }`}
+                          >
+                            {bObj.name}
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {/* Brand Select Dropdown */}
+                    <select
+                      suppressHydrationWarning
+                      value={selectedBrand}
+                      onChange={(e) => {
+                        setSelectedBrand(e.target.value);
                         setSelectedYear('');
                         setSelectedModel('');
                         resetSubordinateOptions();
                       }}
-                      className={`px-3 py-1.5 rounded-xl border text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
-                        isSelected
-                          ? 'bg-brand-orange text-white border-brand-orange shadow-md shadow-brand-orange/20 scale-105'
-                          : 'bg-white dark:bg-zinc-800 border-zinc-200 dark:border-zinc-700 text-zinc-700 dark:text-zinc-300 hover:border-brand-orange/40 hover:text-brand-orange'
-                      }`}
+                      className="glass-input rounded-xl p-3.5 text-sm w-full font-semibold mt-1"
                     >
-                      {bObj.name}
-                    </button>
-                  );
-                })}
-              </div>
-
-              {/* Brand Select Dropdown */}
-              <select
-                suppressHydrationWarning
-                value={selectedBrand}
-                onChange={(e) => {
-                  setSelectedBrand(e.target.value);
-                  setSelectedYear('');
-                  setSelectedModel('');
-                  resetSubordinateOptions();
-                }}
-                className="glass-input rounded-xl p-3.5 text-sm w-full font-semibold mt-1"
-              >
-                <option value="">-- Tüm Markalar ({brands.length} Marka Listelendi) --</option>
-                {brands.map((b) => (
-                  <option key={b.id} value={b.id}>
-                    {b.name}
-                  </option>
-                ))}
-              </select>
+                      <option value="">-- Tüm Markalar ({safeBrands.length} Marka Listelendi) --</option>
+                      {safeBrands.map((b) => (
+                        <option key={b.id} value={b.id}>
+                          {b.name}
+                        </option>
+                      ))}
+                    </select>
+                  </>
+                );
+              })()}
             </div>
 
             {/* STEP 2 & STEP 3 GRID */}

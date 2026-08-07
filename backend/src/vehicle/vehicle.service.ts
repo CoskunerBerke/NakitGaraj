@@ -9,69 +9,68 @@ export class VehicleService {
     private cache: CacheService,
   ) {}
 
+  private async withRetry<T>(fn: () => Promise<T>, retries = 5, delay = 150): Promise<T> {
+    for (let i = 0; i < retries; i++) {
+      try {
+        return await fn();
+      } catch (err: any) {
+        if (i === retries - 1) throw err;
+        if (err?.code === 'P1008' || err?.message?.includes('timed out') || err?.message?.includes('locked')) {
+          await new Promise((r) => setTimeout(r, delay * (i + 1)));
+        } else {
+          throw err;
+        }
+      }
+    }
+    throw new Error('Database operation timed out');
+  }
+
   async getBrands() {
-    const brands = await this.prisma.manufacturer.findMany({
-      where: {
-        specifications: {
-          some: {
-            marketPrices: {
-              some: {
-                regionalPriceDifferences: {
-                  contains: 'nakitAlisReferansi',
-                },
-              },
-            },
+    const DESKTOP_DIR = 'C:\\Users\\berke\\OneDrive\\Masaüstü\\sahibindne ilan';
+    let validNames: string[] = [];
+    try {
+      const fs = require('fs');
+      const path = require('path');
+      if (fs.existsSync(DESKTOP_DIR)) {
+        validNames = fs.readdirSync(DESKTOP_DIR).filter((d: string) => {
+          const p = path.join(DESKTOP_DIR, d);
+          return fs.statSync(p).isDirectory() && fs.readdirSync(p).some((f: string) => f.toLowerCase().endsWith('.html'));
+        });
+      }
+    } catch (e) {}
+
+    return this.withRetry(() =>
+      this.prisma.manufacturer.findMany({
+        where: validNames.length > 0 ? {
+          name: {
+            in: validNames,
           },
-        },
-      },
-      orderBy: { name: 'asc' },
-    });
-    return brands;
+        } : undefined,
+        orderBy: { name: 'asc' },
+      }),
+    );
   }
 
   async getModels(brandId: string) {
-    const models = await this.prisma.model.findMany({
-      where: {
-        manufacturerId: brandId,
-        specifications: {
-          some: {
-            marketPrices: {
-              some: {
-                regionalPriceDifferences: {
-                  contains: 'nakitAlisReferansi',
-                },
-              },
-            },
-          },
-        },
-      },
-      orderBy: { name: 'asc' },
-    });
-    return models;
+    return this.withRetry(() =>
+      this.prisma.model.findMany({
+        where: { manufacturerId: brandId },
+        orderBy: { name: 'asc' },
+      }),
+    );
   }
 
   async getVariants(modelId: string) {
-    const cacheKey = `variants_real_imported_${modelId}`;
+    const cacheKey = `variants_${modelId}`;
     const cached = await this.cache.get<any[]>(cacheKey);
     if (cached) return cached;
 
-    const variants = await this.prisma.variant.findMany({
-      where: {
-        modelId,
-        specifications: {
-          some: {
-            marketPrices: {
-              some: {
-                regionalPriceDifferences: {
-                  contains: 'nakitAlisReferansi',
-                },
-              },
-            },
-          },
-        },
-      },
-      orderBy: { name: 'asc' },
-    });
+    const variants = await this.withRetry(() =>
+      this.prisma.variant.findMany({
+        where: { modelId },
+        orderBy: { name: 'asc' },
+      }),
+    );
     await this.cache.set(cacheKey, variants, 3600);
     return variants;
   }
