@@ -1677,14 +1677,16 @@ export default function ValuationWizard() {
                       fill="transparent"
                       strokeDasharray="251.2"
                       strokeDashoffset={
-                        251.2 - (251.2 * Number(valuationResult.results.confidenceScore.replace('%', ''))) / 100
+                        251.2 - (251.2 * (typeof valuationResult.results.confidenceScore === 'number' ? valuationResult.results.confidenceScore : Number(String(valuationResult.results.confidenceScore || '90').replace('%', '')))) / 100
                       }
                       strokeLinecap="round"
                     />
                   </svg>
                   <div className="absolute flex flex-col items-center justify-center">
                     <span className="text-3xl font-black text-zinc-900 dark:text-white leading-none">
-                      {valuationResult.results.confidenceScore}
+                      {typeof valuationResult.results.confidenceScore === 'number'
+                        ? `%${valuationResult.results.confidenceScore}`
+                        : (String(valuationResult.results.confidenceScore).includes('%') ? valuationResult.results.confidenceScore : `%${valuationResult.results.confidenceScore}`)}
                     </span>
                     <span className="text-[10px] text-zinc-500 uppercase tracking-widest font-bold mt-1">
                       {t('wiz.step3.confidence')}
