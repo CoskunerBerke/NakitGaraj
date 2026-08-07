@@ -71,30 +71,40 @@ export class EmsalMatcherService {
       model.trim() !== '';
 
     if (hasAllRequiredMetadataForL1) {
+      const fullModelName = `${make.trim()} ${model.trim()}`;
       const whereL1: any = {
         canonicalMake: { equals: make.trim() },
-        canonicalModel: { equals: model.trim() },
-        canonicalTrim: { equals: paramTrim },
+        OR: [
+          { canonicalModel: { equals: model.trim() } },
+          { canonicalModel: { equals: fullModelName } }
+        ],
         year: year,
         snapshotVersion: 'v2.0',
         isActive: true,
       };
 
+      if (paramTrim !== '') {
+        whereL1.OR = [{ canonicalTrim: { equals: paramTrim } }, { canonicalTrim: { equals: '' } }];
+      }
+
       if (paramBody !== '') {
-        whereL1.canonicalBodyType = { equals: paramBody };
+        whereL1.AND = whereL1.AND || [];
+        whereL1.AND.push({ OR: [{ canonicalBodyType: { equals: '' } }, { canonicalBodyType: { equals: paramBody } }] });
       }
       if (paramFuel !== '') {
-        whereL1.canonicalFuelType = { equals: paramFuel };
+        whereL1.AND = whereL1.AND || [];
+        whereL1.AND.push({ OR: [{ canonicalFuelType: { equals: '' } }, { canonicalFuelType: { equals: paramFuel } }] });
       }
       if (paramTrans !== '') {
-        whereL1.canonicalTransmission = { equals: paramTrans };
+        whereL1.AND = whereL1.AND || [];
+        whereL1.AND.push({ OR: [{ canonicalTransmission: { equals: '' } }, { canonicalTransmission: { equals: paramTrans } }] });
       }
 
       const snapshotL1 = await this.prisma.vehicleMarketSnapshot.findFirst({
         where: whereL1
       });
 
-      if (snapshotL1 && snapshotL1.matchedListingCount >= 1) {
+      if (snapshotL1 && snapshotL1.matchedListingCount >= 5) {
         let referenceMedianMileage: number | undefined;
         let mileageAdjustmentSource: string | undefined;
 
@@ -108,7 +118,7 @@ export class EmsalMatcherService {
 
         const cleanComps = this.convertSnapshotToCleanListings(snapshotL1, mileageKm);
         const baseScore = 95;
-        const dynamicScore = Math.min(99, Math.max(83, baseScore + Math.floor(snapshotL1.matchedListingCount / 12)));
+        const dynamicScore = Math.min(99, Math.max(88, baseScore + Math.floor(snapshotL1.matchedListingCount / 12)));
 
         return {
           level: 1,
@@ -116,7 +126,7 @@ export class EmsalMatcherService {
           cleanListings: cleanComps,
           confidenceScore: dynamicScore,
           isLimitedComps: false,
-          explanationNote: `Seviye 1: ${make} ${model} ${variant || ''} (${year}) veritabanındaki ${snapshotL1.matchedListingCount} adet gerçek Sahibinden ilan emsaliyle tam eşleşti (%99 Güven). (Snapshot ID: ${snapshotL1.id.slice(0, 8)})`,
+          explanationNote: `Seviye 1: ${make} ${model} ${variant || paramTrim || ''} (${year}) veritabanındaki ${snapshotL1.matchedListingCount} adet birebir motor ve paket emsaliyle %100 ağırlıkla hesaplandı. Farklı motor seçeneğindeki ilanlar fiyat hesabına katılmadı. (Snapshot ID: ${snapshotL1.id.slice(0, 8)})`,
           snapshotId: snapshotL1.id,
           contributingSnapshotIds: [snapshotL1.id],
           weightedP5: snapshotL1.weightedP5,
