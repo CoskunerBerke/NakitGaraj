@@ -637,7 +637,6 @@ export class EvaluationService {
 
     if (p35Reference > 0 && p60Reference > 0) {
       // ✅ Percentile verisi mevcut → doğrudan kullan
-      // Condition factor'ü P35 ve P60'a da uygula (km/hasar düzeltmesi)
       standardCashOffer = this.roundToCleanGalleryPrice(
         Math.round(p35Reference * conditionFactor)
       );
@@ -645,51 +644,14 @@ export class EvaluationService {
         Math.round(p60Reference * conditionFactor)
       );
     } else {
-      // ⚠️ Percentile verisi yok (eski veri veya fallback) → dinamik marj ile hesapla
-      let cashProfitPct: number;
-      let consProfitPct: number;
+      // ⚠️ Realistic Turkish Auto Gallery Margins:
+      // Nakit Alış: Piyasa Değerinin ~%90 - %92'si (Galerici %8-%10 makul peşin alış marjı)
+      // Konsinye Satış: Piyasa Değerinin ~%96 - %98'i (Galerici %2-%4 komisyon vitrin marjı)
+      const cashRate = 0.91; // %91 (Nakit alış)
+      const consRate = 0.97; // %97 (Konsinye satış)
 
-      if (fairMarketValue >= 20000000) {
-        cashProfitPct = 0.16; consProfitPct = 0.09;
-      } else if (fairMarketValue >= 15000000) {
-        cashProfitPct = 0.15; consProfitPct = 0.08;
-      } else if (fairMarketValue >= 10000000) {
-        cashProfitPct = 0.14; consProfitPct = 0.075;
-      } else if (fairMarketValue >= 6000000) {
-        cashProfitPct = 0.13; consProfitPct = 0.07;
-      } else if (fairMarketValue >= 4000000) {
-        cashProfitPct = 0.12; consProfitPct = 0.065;
-      } else if (fairMarketValue >= 2500000) {
-        cashProfitPct = 0.10; consProfitPct = 0.055;
-      } else if (fairMarketValue >= 1500000) {
-        cashProfitPct = 0.09; consProfitPct = 0.05;
-      } else if (fairMarketValue >= 800000) {
-        cashProfitPct = 0.08; consProfitPct = 0.04;
-      } else {
-        cashProfitPct = 0.07; consProfitPct = 0.035;
-      }
-
-      // Admin panel ayarlarından override (varsa)
-      try {
-        const fs = require('fs');
-        const path = require('path');
-        const settingsPath = path.join(process.cwd(), 'market-sync-settings.json');
-        if (fs.existsSync(settingsPath)) {
-          const parsed = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
-          if (parsed.cashOfferProfitPercentage && parsed.cashOfferProfitPercentage > 0) {
-            cashProfitPct = parsed.cashOfferProfitPercentage / 100;
-          }
-          if (parsed.consignmentProfitPercentage && parsed.consignmentProfitPercentage > 0) {
-            consProfitPct = parsed.consignmentProfitPercentage / 100;
-          }
-        }
-      } catch (e) {}
-
-      const maxProfit = Math.max(40000, Math.round(fairMarketValue * cashProfitPct));
-      const minProfit = Math.max(20000, Math.round(fairMarketValue * consProfitPct));
-
-      standardCashOffer = this.roundToCleanGalleryPrice(fairMarketValue - maxProfit);
-      standardConsignmentOffer = this.roundToCleanGalleryPrice(fairMarketValue - minProfit);
+      standardCashOffer = this.roundToCleanGalleryPrice(Math.round(fairMarketValue * cashRate));
+      standardConsignmentOffer = this.roundToCleanGalleryPrice(Math.round(fairMarketValue * consRate));
     }
 
     let finalOfferedPrice = standardCashOffer;
@@ -697,37 +659,31 @@ export class EvaluationService {
 
     const userDesiredPrice = dto.userDesiredPrice;
 
+    // DİNAMİK MÜŞTERİ BEKLENTİSİ & GALERİ MARJI HESAPLAMASI
     if (userDesiredPrice > 0) {
       if (userDesiredPrice < 200000) {
-        // A. Troll / Geçersiz Rakam:
+        // A. Troll / Geçersiz Rakam
         finalOfferedPrice = standardCashOffer;
         finalConsignmentPrice = standardConsignmentOffer;
         aiAnalysis.push(
-          `Girdiğiniz fiyat beklentisi (${userDesiredPrice.toLocaleString('tr-TR')} ₺) araç piyasasının çok altındadır. Galeri standart yapay zeka teklifimiz sunulmuştur.`
+          `Girdiğiniz fiyat beklentisi (${userDesiredPrice.toLocaleString('tr-TR')} ₺) araç piyasasının çok altındadır. Galeri standart teklifimiz sunulmuştur.`
         );
       } 
-      else if (userDesiredPrice <= standardCashOffer) {
-        // B. Müşteri teklifimizden düşük istiyor
-        finalOfferedPrice = this.roundToCleanGalleryPrice(userDesiredPrice);
-        finalConsignmentPrice = this.roundToCleanGalleryPrice(Math.min(userDesiredPrice + 50000, standardConsignmentOffer));
-      } 
-      else if (userDesiredPrice <= standardConsignmentOffer) {
-        // C. Müşteri makul bir fiyat istiyor
-        finalOfferedPrice = standardCashOffer;
-        finalConsignmentPrice = this.roundToCleanGalleryPrice(userDesiredPrice);
-      } 
       else {
-        // D. Müşteri tavan konsinye üstünde fiyat istiyor
-        finalOfferedPrice = standardCashOffer;
-        finalConsignmentPrice = standardConsignmentOffer;
+        // B. Gerçekçi Müşteri Beklentisi:
+        // Müşterinin istediği fiyat konsinye satış olarak vitrine konulur!
+        finalConsignmentPrice = this.roundToCleanGalleryPrice(userDesiredPrice);
+        // Hızlı Nakit Alış teklifi ise bu rakamın %92'si (Galerici %8 peşin alış marjı) olarak verilir!
+        finalOfferedPrice = this.roundToCleanGalleryPrice(Math.round(userDesiredPrice * 0.92));
+        
         aiAnalysis.push(
-          `Girdiğiniz fiyat beklentisi (${userDesiredPrice.toLocaleString('tr-TR')} ₺), Sahibinden.com piyasa satış ortalamasının (${fairMarketValue.toLocaleString('tr-TR')} ₺) üzerindedir. Dükkanımızda alıcı bulabilmesi ve minimum kâr marjımız korunabilmesi için tavan konsinye satış fiyatımız ${standardConsignmentOffer.toLocaleString('tr-TR')} ₺ olarak belirlenmiştir.`
+          `Fiyat beklentiniz (${userDesiredPrice.toLocaleString('tr-TR')} ₺) dikkate alınarak Konsinye Satış fiyatınız birebir ${finalConsignmentPrice.toLocaleString('tr-TR')} ₺ olarak belirlenmiştir. Anında 30 dakikada peşin Nakit Alış teklifimiz ise ${finalOfferedPrice.toLocaleString('tr-TR')} ₺'dir.`
         );
       }
     }
 
-    // STRICT SAFETY: Konsinye Fiyatı asla (Piyasa - minProfit) tavanını geçemez!
-    finalConsignmentPrice = this.roundToCleanGalleryPrice(Math.min(finalConsignmentPrice, standardConsignmentOffer));
+    // STRICT SAFETY: Ensure consignment offer is never lower than cash offer
+    finalConsignmentPrice = Math.max(finalConsignmentPrice, finalOfferedPrice + 50000);
 
     const estimatedValue = finalOfferedPrice;
     const minExpectedValue = this.roundToCleanGalleryPrice(standardCashOffer * 0.96);
