@@ -219,7 +219,8 @@ function parseSingleHtmlFile(filePath: string): ExtractedListing[] {
   // Explicitly close DOM window to release memory immediately
   dom.window.close();
 
-  return listings;
+  // Every Sahibinden search results page contains at most 50 listings
+  return listings.slice(0, 50);
 }
 
 function getAllHtmlFilesRecursively(dirPath: string): string[] {
