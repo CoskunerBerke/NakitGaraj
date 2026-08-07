@@ -56,9 +56,9 @@ export class EmsalMatcherService {
     transmission?: string;
     isCleanCondition?: boolean;
   }): Promise<EmsalMatchResult> {
-    const { make, model, variant, year, mileageKm, bodyType, fuelType, transmission } = params;
+    const { make, model, variant, trim, year, mileageKm, bodyType, fuelType, transmission } = params;
 
-    // 1. Level 1: Exact Make, Model, Variant, Year (Exact String Equality)
+    // 1. Level 1: Exact Make, Model, Variant, Trim, Year, BodyType, FuelType, Transmission (Exact String Equality)
     let snapshotRes = await this.querySnapshotFromDb({
       make,
       model,
@@ -70,42 +70,73 @@ export class EmsalMatcherService {
       const snapshot = snapshotRes.snapshot;
       const hasFullMetadata = snapshotRes.hasFullMetadata;
 
-      let referenceMedianMileage: number | undefined;
-      let mileageAdjustmentSource: string | undefined;
+      // REQUIREMENT 1: Level 1 must require strict equality on: Make, Model, Variant, Trim, Year, BodyType, FuelType, Transmission.
+      // If a technical field is present in user inputs, check exact match.
+      // Also, if variant, trim, bodyType, fuelType, or transmission is missing from user params or database snapshot, do NOT allow Level 1.
+      const paramVariant = (variant || '').trim();
+      const snapVariant = (snapshot.canonicalVariant || '').trim();
+      const paramTrim = (trim || '').trim();
+      const snapTrim = (snapshot.canonicalTrim || '').trim();
+      const paramBody = (bodyType || '').trim();
+      const snapBody = (snapshot.canonicalBodyType || '').trim();
+      const paramFuel = (fuelType || '').trim();
+      const snapFuel = (snapshot.canonicalFuelType || '').trim();
+      const paramTrans = (transmission || '').trim();
+      const snapTrans = (snapshot.canonicalTransmission || '').trim();
 
-      if (snapshot.snapshotDataJson) {
-        try {
-          const parsed = JSON.parse(snapshot.snapshotDataJson);
-          referenceMedianMileage = parsed.medianMileage;
-          mileageAdjustmentSource = parsed.mileageAdjustmentSource;
-        } catch (e) {}
+      const hasRequiredMetadata =
+        paramVariant !== '' && snapVariant !== '' &&
+        paramBody !== '' && snapBody !== '' &&
+        paramFuel !== '' && snapFuel !== '' &&
+        paramTrans !== '' && snapTrans !== '';
+
+      const isExactMatch =
+        make.trim().toLowerCase() === snapshot.canonicalMake.trim().toLowerCase() &&
+        model.trim().toLowerCase() === snapshot.canonicalModel.trim().toLowerCase() &&
+        paramVariant.toLowerCase() === snapVariant.toLowerCase() &&
+        paramTrim.toLowerCase() === snapTrim.toLowerCase() &&
+        paramBody.toLowerCase() === snapBody.toLowerCase() &&
+        paramFuel.toLowerCase() === snapFuel.toLowerCase() &&
+        paramTrans.toLowerCase() === snapTrans.toLowerCase();
+
+      if (hasRequiredMetadata && isExactMatch && hasFullMetadata) {
+        let referenceMedianMileage: number | undefined;
+        let mileageAdjustmentSource: string | undefined;
+
+        if (snapshot.snapshotDataJson) {
+          try {
+            const parsed = JSON.parse(snapshot.snapshotDataJson);
+            referenceMedianMileage = parsed.medianMileage;
+            mileageAdjustmentSource = parsed.mileageAdjustmentSource;
+          } catch (e) {}
+        }
+
+        const cleanComps = this.convertSnapshotToCleanListings(snapshot, mileageKm);
+
+        // Section 4 Level 1: Check full metadata presence
+        const baseScore = 95;
+        const dynamicScore = Math.min(99, Math.max(83, baseScore + Math.floor(snapshot.matchedListingCount / 12)));
+        const levelAssigned = 1;
+
+        return {
+          level: levelAssigned,
+          matchedCount: snapshot.matchedListingCount,
+          cleanListings: cleanComps,
+          confidenceScore: dynamicScore,
+          isLimitedComps: false,
+          explanationNote: `Seviye ${levelAssigned}: ${make} ${model} ${variant || ''} (${year}) veritabanındaki ${snapshot.matchedListingCount} adet gerçek Sahibinden ilan emsaliyle tam eşleşti (%99 Güven). (Snapshot ID: ${snapshot.id.slice(0, 8)})`,
+          snapshotId: snapshot.id,
+          weightedP5: snapshot.weightedP5,
+          weightedP35: snapshot.weightedP35,
+          weightedP50: snapshot.weightedP50,
+          weightedP60: snapshot.weightedP60,
+          weightedP95: snapshot.weightedP95,
+          kmDecayPer10k: snapshot.kmDecayPer10k || 0.0025,
+          referenceMedianMileage: referenceMedianMileage || 100000,
+          mileageAdjustmentSource: mileageAdjustmentSource || 'DEFAULT_FALLBACK',
+          yearAdjustmentSource: 'NOT_APPLICABLE_EXACT_YEAR',
+        };
       }
-
-      const cleanComps = this.convertSnapshotToCleanListings(snapshot, mileageKm);
-
-      // Section 4 Level 1: Check full metadata presence
-      const baseScore = hasFullMetadata ? 95 : 88;
-      const dynamicScore = Math.min(hasFullMetadata ? 99 : 92, Math.max(83, baseScore + Math.floor(snapshot.matchedListingCount / 12)));
-      const levelAssigned = hasFullMetadata ? 1 : 2;
-
-      return {
-        level: levelAssigned,
-        matchedCount: snapshot.matchedListingCount,
-        cleanListings: cleanComps,
-        confidenceScore: dynamicScore,
-        isLimitedComps: false,
-        explanationNote: `Seviye ${levelAssigned}: ${make} ${model} ${variant || ''} (${year}) veritabanındaki ${snapshot.matchedListingCount} adet gerçek Sahibinden ilan emsaliyle ${hasFullMetadata ? 'tam eşleşti (%99 Güven)' : 'kısmi metadata emsaliyle eşleşti (%92 Güven)'}. (Snapshot ID: ${snapshot.id.slice(0, 8)})`,
-        snapshotId: snapshot.id,
-        weightedP5: snapshot.weightedP5,
-        weightedP35: snapshot.weightedP35,
-        weightedP50: snapshot.weightedP50,
-        weightedP60: snapshot.weightedP60,
-        weightedP95: snapshot.weightedP95,
-        kmDecayPer10k: snapshot.kmDecayPer10k || 0.0025,
-        referenceMedianMileage: referenceMedianMileage || 100000,
-        mileageAdjustmentSource: mileageAdjustmentSource || 'DEFAULT_FALLBACK',
-        yearAdjustmentSource: 'NOT_APPLICABLE_EXACT_YEAR',
-      };
     }
 
     // 2. Level 2: Year ±1 (Exact Make, Model, Variant with Price Normalization & Weighted Aggregation)

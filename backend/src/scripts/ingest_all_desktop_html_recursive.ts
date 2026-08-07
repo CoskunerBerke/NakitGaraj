@@ -99,12 +99,11 @@ async function main() {
   const quarantinedList: any[] = [];
 
   for (const filePath of allHtmlPaths) {
+    const relativePath = path.relative(DESKTOP_DIR, filePath);
+    const pathParts = relativePath.split(path.sep);
+    const rawMake = pathParts[0] || 'Genel';
+    const fileName = path.basename(filePath, '.html');
     try {
-      const relativePath = path.relative(DESKTOP_DIR, filePath);
-      const pathParts = relativePath.split(path.sep);
-      const rawMake = pathParts[0] || 'Genel';
-      const fileName = path.basename(filePath, '.html');
-
       const html = fs.readFileSync(filePath, 'utf8');
 
       // Slice table or tbody block to keep Cheerio loading sub-second per file
@@ -187,74 +186,153 @@ async function main() {
           });
         }
       });
-    } catch (err) {}
+    } catch (err: any) {
+      console.error(`HTML Dosyası Ayrıştırılırken Hata Oluştu [${filePath}]:`, err.message || err);
+      // REQUIREMENT 3: Log parser error and save to quarantinedList
+      quarantinedList.push({
+        rawListingId: `ERROR_${path.basename(filePath, '.html')}`,
+        rawMake,
+        rawModel: fileName,
+        rawVariant: 'PARSER_ERROR',
+        rawTitle: `Dosya ayrıştırma hatası: ${filePath}`,
+        sourceFile: filePath,
+        reason: `PARSER_EXCEPTION: ${err.message || String(err)}`,
+      });
+    }
   }
 
   console.log(`✓ Bellekte ${rawListingMap.size} geçerli tekil ilan ve ${quarantinedList.length} karantinalı kayıt toplandı.`);
 
-  // Requirement 6: Non-destructive raw listing writing (use upsert/compare in memory, don't use deleteMany)
-  console.log(`✓ Veritabanı ile karşılaştırma yapılıyor...`);
-  const existingRaw = await prisma.rawVehicleListing.findMany({
-    select: { id: true, sourceListingId: true, price: true, mileageKm: true }
-  });
+  // Stage 1: Load all existing raw listings from DB
+  console.log(`✓ Veritabanındaki mevcut ham ilanlar yükleniyor...`);
+  const existingRaw = await prisma.rawVehicleListing.findMany();
   const existingRawMap = new Map(existingRaw.map(r => [r.sourceListingId, r]));
 
   const toCreateRaw: any[] = [];
   const toUpdateRaw: any[] = [];
 
+  // Stage 2: Combine in-memory items (including ones parsed as quarantined)
+  // We want to re-normalize and update ALL raw listing records.
+  // Note: quarantinedList contains items that failed CanonicalNormalizer validation.
+  // We will upsert BOTH valid rawListingMap items and quarantinedList items into RawVehicleListing table.
+  const allParsedItemsMap = new Map<string, any>();
+
+  // Add valid items
   for (const item of rawListingMap.values()) {
+    allParsedItemsMap.set(item.sourceListingId, item);
+  }
+
+  // Add quarantined items from this run to raw listing updates (with parseStatus = 'QUARANTINED')
+  for (const qItem of quarantinedList) {
+    // Convert quarantined item to RawVehicleListing format
+    allParsedItemsMap.set(qItem.rawListingId, {
+      source: 'SAHIBINDEN_HTML',
+      sourceListingId: qItem.rawListingId,
+      sourceFile: qItem.sourceFile,
+      rawMake: qItem.rawMake,
+      rawModel: qItem.rawModel,
+      rawVariant: qItem.rawVariant,
+      rawTitle: qItem.rawTitle,
+      canonicalMake: qItem.canonicalMake || '',
+      canonicalModel: qItem.canonicalModel || '',
+      canonicalVariant: qItem.canonicalVariant || '',
+      canonicalTrim: qItem.canonicalTrim || '',
+      canonicalBodyType: qItem.canonicalBodyType || '',
+      canonicalFuelType: qItem.canonicalFuelType || '',
+      canonicalTransmission: qItem.canonicalTransmission || '',
+      year: qItem.year || 0,
+      mileageKm: qItem.mileageKm || null,
+      price: qItem.price || 0,
+      isDamaged: qItem.isDamaged || false,
+      parseStatus: 'QUARANTINED',
+      parseWarnings: qItem.reason,
+    });
+  }
+
+  // Stage 3: Distribute to Create vs Update arrays
+  for (const item of allParsedItemsMap.values()) {
     const existing = existingRawMap.get(item.sourceListingId);
     if (existing) {
-      if (existing.price !== item.price || existing.mileageKm !== item.mileageKm) {
-        toUpdateRaw.push({
-          id: existing.id,
-          price: item.price,
-          mileageKm: item.mileageKm,
-        });
-      }
+      // REQUIREMENT 3: Update all fields and lastSeenAt on match, even if price/mileage is unchanged.
+      toUpdateRaw.push({
+        id: existing.id,
+        ...item,
+      });
     } else {
       toCreateRaw.push(item);
     }
   }
 
-  // Create new raw listings in chunks
+  // Execute creates in chunks
   const chunkSize = 1000;
   for (let i = 0; i < toCreateRaw.length; i += chunkSize) {
     const chunk = toCreateRaw.slice(i, i + chunkSize);
     await prisma.rawVehicleListing.createMany({
-      data: chunk as any,
+      data: chunk,
     });
   }
 
-  // Update existing raw listings (update lastSeenAt and latest price/mileage)
-  console.log(`✓ Mevcut ilanların güncelleme işlemleri yapılıyor (${toUpdateRaw.length} adet)...`);
-  for (let i = 0; i < toUpdateRaw.length; i += chunkSize) {
-    const chunk = toUpdateRaw.slice(i, i + chunkSize);
-    await prisma.$transaction(
-      chunk.map(item =>
-        prisma.rawVehicleListing.update({
-          where: { id: item.id },
-          data: {
-            price: item.price,
-            mileageKm: item.mileageKm,
-            lastSeenAt: new Date(),
-          }
-        })
-      )
-    );
+  // Execute updates sequentially or via transaction
+  console.log(`✓ Mevcut ilanların güncelleme ve yeniden normalizasyon işlemleri yapılıyor (${toUpdateRaw.length} adet)...`);
+  for (const item of toUpdateRaw) {
+    await prisma.rawVehicleListing.update({
+      where: { id: item.id },
+      data: {
+        sourceFile: item.sourceFile,
+        rawMake: item.rawMake,
+        rawModel: item.rawModel,
+        rawVariant: item.rawVariant,
+        rawTitle: item.rawTitle,
+        canonicalMake: item.canonicalMake,
+        canonicalModel: item.canonicalModel,
+        canonicalVariant: item.canonicalVariant,
+        canonicalTrim: item.canonicalTrim,
+        canonicalBodyType: item.canonicalBodyType,
+        canonicalFuelType: item.canonicalFuelType,
+        canonicalTransmission: item.canonicalTransmission,
+        year: item.year,
+        mileageKm: item.mileageKm,
+        price: item.price,
+        isDamaged: item.isDamaged,
+        parseStatus: item.parseStatus,
+        parseWarnings: item.parseWarnings,
+        lastSeenAt: new Date(),
+      },
+    });
   }
 
-  // Update quarantined listings
-  const existingQuarantined = await prisma.quarantinedListing.findMany({
-    select: { rawListingId: true }
-  });
-  const existingQuarSet = new Set(existingQuarantined.map(q => q.rawListingId).filter(Boolean));
+  // Stage 4: Write QuarantinedListing entries for quarantined items
+  // REQUIREMENT 3: Upsert into QuarantinedListing idempotently. Do not create duplicates. No deleteMany.
+  const quarantinedEntriesToWrite = Array.from(allParsedItemsMap.values()).filter(item => item.parseStatus === 'QUARANTINED');
+  console.log(`✓ Karantina tablosu güncelleniyor (${quarantinedEntriesToWrite.length} adet)...`);
 
-  const toCreateQuar = quarantinedList.filter(q => !existingQuarSet.has(q.rawListingId));
-  for (let i = 0; i < toCreateQuar.length; i += chunkSize) {
-    const chunk = toCreateQuar.slice(i, i + chunkSize);
-    await prisma.quarantinedListing.createMany({
-      data: chunk,
+  for (const item of quarantinedEntriesToWrite) {
+    const reason = item.parseWarnings || 'CANONICAL_TEST_BAŞARISIZ';
+    await prisma.quarantinedListing.upsert({
+      where: {
+        source_rawListingId_reason: {
+          source: 'SAHIBINDEN_HTML',
+          rawListingId: item.sourceListingId,
+          reason,
+        }
+      },
+      create: {
+        source: 'SAHIBINDEN_HTML',
+        rawListingId: item.sourceListingId,
+        rawMake: item.rawMake,
+        rawModel: item.rawModel,
+        rawVariant: item.rawVariant,
+        rawTitle: item.rawTitle,
+        sourceFile: item.sourceFile,
+        reason,
+      },
+      update: {
+        rawMake: item.rawMake,
+        rawModel: item.rawModel,
+        rawVariant: item.rawVariant,
+        rawTitle: item.rawTitle,
+        sourceFile: item.sourceFile,
+      }
     });
   }
 
@@ -293,15 +371,18 @@ async function main() {
     include: {
       manufacturer: true,
       model: true,
+      variant: true,
       bodyType: true,
       fuelType: true,
       transmissionType: true,
+      package: true,
     }
   });
 
   const specMap = new Map<string, typeof specs[0]>();
   for (const s of specs) {
-    const key = `${s.manufacturer.name.trim()}__${s.model.name.trim()}__${s.year}`;
+    const variantName = s.variant?.name ? s.variant.name.trim().toLowerCase() : '';
+    const key = `${s.manufacturer.name.trim().toLowerCase()}__${s.model.name.trim().toLowerCase()}__${variantName}__${s.year}`;
     if (!specMap.has(key)) {
       specMap.set(key, s);
     }
@@ -361,12 +442,16 @@ async function main() {
     }
 
     // Lookup specification from in-memory pre-fetched map
-    const specKey = `${make.trim()}__${model.trim()}__${year}`;
+    // REQUIREMENT 2: Use make + model + variant + year key.
+    const lookupVariant = variant ? variant.trim().toLowerCase() : '';
+    const specKey = `${make.trim().toLowerCase()}__${model.trim().toLowerCase()}__${lookupVariant}__${year}`;
     const spec = specMap.get(specKey);
 
-    const canonicalBodyType = spec?.bodyType?.name || '';
-    const canonicalFuelType = spec?.fuelType?.name || '';
-    const canonicalTransmission = spec?.transmissionType?.name || '';
+    // REQUIREMENT 2: If specification cannot be determined, leave the metadata empty.
+    const canonicalBodyType = spec ? (spec.bodyType?.name || '') : '';
+    const canonicalFuelType = spec ? (spec.fuelType?.name || '') : '';
+    const canonicalTransmission = spec ? (spec.transmissionType?.name || '') : '';
+    const canonicalTrim = spec ? (spec.package?.name || '') : '';
 
     // Requirement 11: Dynamic dataQualityScore
     const dataQualityScore = calculateDataQualityScore({
@@ -399,7 +484,7 @@ async function main() {
           canonicalMake: make,
           canonicalModel: model,
           canonicalVariant: variant || '',
-          canonicalTrim: '',
+          canonicalTrim,
           year,
           canonicalBodyType,
           canonicalFuelType,
@@ -411,13 +496,14 @@ async function main() {
         make,
         model,
         variant: variant || '',
+        trim: canonicalTrim,
         bodyType: canonicalBodyType,
         fuelType: canonicalFuelType,
         transmission: canonicalTransmission,
         canonicalMake: make,
         canonicalModel: model,
         canonicalVariant: variant || '',
-        canonicalTrim: '',
+        canonicalTrim,
         canonicalBodyType,
         canonicalFuelType,
         canonicalTransmission,
@@ -443,6 +529,7 @@ async function main() {
         make,
         model,
         variant: variant || '',
+        trim: canonicalTrim,
         year,
         bodyType: canonicalBodyType,
         fuelType: canonicalFuelType,
@@ -450,7 +537,7 @@ async function main() {
         canonicalMake: make,
         canonicalModel: model,
         canonicalVariant: variant || '',
-        canonicalTrim: '',
+        canonicalTrim,
         canonicalBodyType,
         canonicalFuelType,
         canonicalTransmission,

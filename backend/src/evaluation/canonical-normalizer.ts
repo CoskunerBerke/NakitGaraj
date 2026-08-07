@@ -52,6 +52,22 @@ export class CanonicalNormalizer {
     return cleaned.replace(/[-_]/g, ' ').replace(/\s+/g, ' ').trim();
   }
 
+  static cleanTurkishChars(str: string): string {
+    return str
+      .replace(/İ/g, 'I')
+      .replace(/ı/g, 'i')
+      .replace(/Ö/g, 'O')
+      .replace(/ö/g, 'o')
+      .replace(/Ü/g, 'U')
+      .replace(/ü/g, 'u')
+      .replace(/Ş/g, 'S')
+      .replace(/ş/g, 's')
+      .replace(/Ç/g, 'C')
+      .replace(/ç/g, 'c')
+      .replace(/Ğ/g, 'G')
+      .replace(/ğ/g, 'g');
+  }
+
   /**
    * Determines if a string is numeric-only (e.g. "156", "159", "206") which are models/numbers, not variants
    */
@@ -71,7 +87,10 @@ export class CanonicalNormalizer {
     let canonicalMake = cleanMakeRaw;
 
     // Brand normalization
-    const upperMake = cleanMakeRaw.toUpperCase();
+    const upperMake = this.cleanTurkishChars(cleanMakeRaw.toUpperCase());
+    const upperModel = this.cleanTurkishChars(cleanModelRaw.toUpperCase());
+    const upperTitle = this.cleanTurkishChars(cleanTitleRaw.toUpperCase());
+    const upperVariant = this.cleanTurkishChars(cleanVariantRaw.toUpperCase());
     if (upperMake.includes('ALFA')) canonicalMake = 'Alfa Romeo';
     else if (upperMake.includes('AUDI')) canonicalMake = 'Audi';
     else if (upperMake.includes('BMW')) canonicalMake = 'BMW';
@@ -109,8 +128,6 @@ export class CanonicalNormalizer {
 
     // Model normalization
     let canonicalModel = cleanModelRaw;
-    const upperModel = cleanModelRaw.toUpperCase();
-    const upperTitle = cleanTitleRaw.toUpperCase();
 
     // Check specific brand/model extraction mappings (Requirement 3 & 4)
     if (canonicalMake === 'DS Automobiles') {
@@ -237,10 +254,19 @@ export class CanonicalNormalizer {
       else if (upperModel.includes('CAPTIVA')) canonicalModel = 'Captiva';
       else if (upperModel.includes('SPARK')) canonicalModel = 'Spark';
     } else if (canonicalMake === 'Alfa Romeo') {
-      if (upperModel.includes('GIULIETTA')) canonicalModel = 'Giulietta';
-      else if (upperModel.includes('156') || cleanVariantRaw === '156') canonicalModel = '156';
-      else if (upperModel.includes('159') || cleanVariantRaw === '159') canonicalModel = '159';
-      else if (upperModel.includes('MITO')) canonicalModel = 'MiTo';
+      const matchText = `${upperModel} ${upperTitle} ${upperVariant}`;
+      if (matchText.includes('GIULIETTA')) canonicalModel = 'Giulietta';
+      else if (matchText.includes('156')) canonicalModel = '156';
+      else if (matchText.includes('159')) canonicalModel = '159';
+      else if (matchText.includes('GIULIA')) canonicalModel = 'Giulia';
+      else if (matchText.includes('STELVIO')) canonicalModel = 'Stelvio';
+      else if (matchText.includes('TONALE')) canonicalModel = 'Tonale';
+      else if (matchText.includes('147')) canonicalModel = '147';
+      else if (matchText.includes('MITO')) canonicalModel = 'MiTo';
+    } else if (canonicalMake === 'Arora') {
+      if (upperModel.includes('S1') || upperTitle.includes('S1') || upperVariant.includes('S1')) {
+        canonicalModel = 'S1';
+      }
     } else if (canonicalMake === 'Peugeot') {
       if (cleanModelRaw.includes('206')) canonicalModel = '206';
       else if (cleanModelRaw.includes('207')) canonicalModel = '207';

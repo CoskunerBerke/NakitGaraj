@@ -262,7 +262,8 @@ model RawVehicleListing {
 
 model QuarantinedListing {
   id            String   @id @default(uuid())
-  rawListingId  String?
+  source        String   @default("SAHIBINDEN_HTML")
+  rawListingId  String
   rawMake       String?
   rawModel      String?
   rawVariant    String?
@@ -270,6 +271,8 @@ model QuarantinedListing {
   sourceFile    String?
   reason        String
   quarantinedAt DateTime @default(now())
+
+  @@unique([source, rawListingId, reason])
 }
 
 model VehicleMarketSnapshot {
