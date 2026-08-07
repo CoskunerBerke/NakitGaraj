@@ -103,6 +103,34 @@ async function main() {
     driveMap[d] = res.id;
   }
 
+  // Helper function to retry DB writes on SQLite locks
+  async function withRetry<T>(fn: () => Promise<T>, retries = 5, delay = 200): Promise<T> {
+    for (let i = 0; i < retries; i++) {
+      try {
+        return await fn();
+      } catch (err: any) {
+        if (i === retries - 1) throw err;
+        if (err?.code === 'P1008' || err?.message?.includes('timed out') || err?.message?.includes('locked')) {
+          await new Promise((r) => setTimeout(r, delay * (i + 1)));
+        } else {
+          throw err;
+        }
+      }
+    }
+    throw new Error('Transaction failed after retries');
+  }
+
+  // Check if real Sahibinden data already exists in database
+  const realSpecsCount = await prisma.vehicleSpecification.count();
+  if (realSpecsCount > 1000) {
+    console.log(`\n====================================================================`);
+    console.log(`✓ VERİTABANINDA ${realSpecsCount} ADET GERÇEK SAHİBİNDEN ARAÇ BİLGİSİ MEVCUT`);
+    console.log(`✓ Admin kullanıcısı, roller ve temel tanımlar başarıyla güncellendi.`);
+    console.log(`✓ Yapay/Mock seed atlandı, gerçek veriler korundu.`);
+    console.log(`====================================================================\n`);
+    return;
+  }
+
   // 5. Vehicle Database Seeding (Manufacturers, Models, Variants, Packages)
   // =====================================================================
   // basePrice = 2026 Türkiye'de SIFIR (0 km) araç ÖTV+KDV dahil liste fiyatı (TL)
