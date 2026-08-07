@@ -8,24 +8,32 @@ import { VehicleService } from '../vehicle/vehicle.service';
 
 const prisma = new PrismaClient();
 function getAndValidateHtmlSourceDir(): string {
-  const dir = process.env.SAHIBINDEN_HTML_DIR || 'C:\\Users\\berke\\OneDrive\\Masaüstü\\sahibindne ilan';
+  const envDir = process.env.SAHIBINDEN_HTML_DIR;
+  const dir = envDir && envDir.trim() !== '' ? envDir : path.resolve(process.cwd(), 'data/sahibinden_html');
   if (!fs.existsSync(dir)) {
-    throw new Error('HTML_SOURCE_DIRECTORY_NOT_FOUND');
+    console.warn(`[WARNING] HTML Source Directory does not exist: ${dir}`);
+    return dir;
   }
-  try {
-    fs.accessSync(dir, fs.constants.R_OK);
-  } catch (err) {
-    throw new Error('HTML_SOURCE_DIRECTORY_NOT_ACCESSIBLE');
-  }
-  return dir;
+  return fs.realpathSync(dir);
 }
 
-const DESKTOP_DIR = path.resolve(getAndValidateHtmlSourceDir());
+const DESKTOP_DIR = getAndValidateHtmlSourceDir();
+
+function isPathUnderRoot(targetPath: string, rootDir: string): boolean {
+  try {
+    if (!fs.existsSync(rootDir)) return false;
+    const realRoot = fs.realpathSync(rootDir);
+    const realTarget = fs.existsSync(targetPath) ? fs.realpathSync(targetPath) : path.resolve(targetPath);
+    const rel = path.relative(realRoot, realTarget);
+    return !rel.startsWith('..') && !path.isAbsolute(rel) && rel !== '';
+  } catch (err) {
+    return false;
+  }
+}
 
 function scanHtmlFilesRecursively(dir: string, fileList: string[] = []): string[] {
   const resolvedDir = path.resolve(dir);
-  // Path Traversal Security Guard: Enforce that all resolved directories remain strictly under DESKTOP_DIR
-  if (!resolvedDir.toLowerCase().startsWith(DESKTOP_DIR.toLowerCase())) {
+  if (!isPathUnderRoot(resolvedDir, DESKTOP_DIR) && resolvedDir !== DESKTOP_DIR) {
     console.warn(`[SECURITY WARNING] Blocked path traversal attempt outside root: ${resolvedDir}`);
     return fileList;
   }
@@ -35,9 +43,7 @@ function scanHtmlFilesRecursively(dir: string, fileList: string[] = []): string[
 
   for (const file of files) {
     const filePath = path.resolve(resolvedDir, file);
-
-    // Enforce canonical path containment
-    if (!filePath.toLowerCase().startsWith(DESKTOP_DIR.toLowerCase())) {
+    if (!isPathUnderRoot(filePath, DESKTOP_DIR)) {
       console.warn(`[SECURITY WARNING] Path containment violation blocked: ${filePath}`);
       continue;
     }

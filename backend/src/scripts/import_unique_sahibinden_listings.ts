@@ -6,8 +6,8 @@ import * as cheerio from 'cheerio';
 
 import { VehicleService } from '../vehicle/vehicle.service';
 
-const prisma = new PrismaClient();
-const SOURCE_DIR = process.env.SAHIBINDEN_HTML_DIR || 'C:\\Users\\berke\\OneDrive\\Masaüstü\\sahibindne ilan';
+const envSourceDir = process.env.SAHIBINDEN_HTML_DIR;
+const SOURCE_DIR = envSourceDir && envSourceDir.trim() !== '' ? envSourceDir : path.resolve(process.cwd(), 'data/sahibinden_html');
 const MANIFEST_PATH = path.join(__dirname, '../../data/import-state/sahibinden-import-manifest.json');
 
 const MULTI_WORD_MAKES = [

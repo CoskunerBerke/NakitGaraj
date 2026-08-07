@@ -2,7 +2,7 @@ import { Injectable, BadRequestException } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import csv from 'csv-parser';
 import { Readable } from 'stream';
-import * as xlsx from 'xlsx';
+import * as ExcelJS from 'exceljs';
 
 @Injectable()
 export class ImportService {
@@ -30,10 +30,31 @@ export class ImportService {
 
   async importExcel(buffer: Buffer) {
     try {
-      const workbook = xlsx.read(buffer, { type: 'buffer' });
-      const sheetName = workbook.SheetNames[0];
-      const sheet = workbook.Sheets[sheetName];
-      const rows = xlsx.utils.sheet_to_json(sheet);
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(buffer);
+      const worksheet = workbook.worksheets[0];
+      if (!worksheet) {
+        return await this.processImportRows([]);
+      }
+      const rows: any[] = [];
+      const headerRow = worksheet.getRow(1);
+      const headers: string[] = [];
+      headerRow.eachCell((cell, colNumber) => {
+        headers[colNumber] = cell.text;
+      });
+
+      worksheet.eachRow((row, rowNumber) => {
+        if (rowNumber === 1) return;
+        const rowData: any = {};
+        row.eachCell((cell, colNumber) => {
+          const header = headers[colNumber];
+          if (header) {
+            rowData[header] = cell.text;
+          }
+        });
+        rows.push(rowData);
+      });
+
       return await this.processImportRows(rows);
     } catch (err: any) {
       throw new BadRequestException(`Excel Okuma Hatası: ${err.message}`);

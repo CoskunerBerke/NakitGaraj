@@ -1,0 +1,115 @@
+name: NakitGaraj Security & Application Hardening CI
+
+on:
+  push:
+    branches:
+      - 'security/**'
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  backend-security-ci:
+    name: Backend Hardening, Audit & Security Tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install Backend Dependencies
+        cwd: backend
+        run: npm ci
+
+      - name: Prisma Validate & Generate
+        cwd: backend
+        run: |
+          npx prisma validate
+          npx prisma generate
+
+      - name: Backend Production Security Audit Check (Fail on High/Critical)
+        cwd: backend
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Build Backend Application
+        cwd: backend
+        run: npm run build
+
+      - name: Initialize Isolated Test Database
+        cwd: backend
+        run: |
+          npx ts-node -e "import { setupIsolatedTestDb } from './src/test/setup_test_db'; setupIsolatedTestDb().then(() => process.exit(0)).catch(e => { console.error(e); process.exit(1); })"
+        env:
+          DATABASE_URL: "file:./prisma/test_security.db"
+
+      - name: Run Supertest Security Penetration Test Suite (36 Tests)
+        cwd: backend
+        run: npx jest src/test/security_penetration_test_suite.spec.ts --runInBand
+        env:
+          DATABASE_URL: "file:./prisma/test_security.db"
+
+  frontend-security-ci:
+    name: Frontend Hardening, Audit & Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Frontend Dependencies
+        cwd: frontend
+        run: npm ci
+
+      - name: Frontend Production Security Audit Check (Fail on High/Critical)
+        cwd: frontend
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Build Frontend Application
+        cwd: frontend
+        run: npm run build
+
+  acceptance-and-invariants-ci:
+    name: Valuation Invariants & Idempotency Tests
+    needs: [backend-security-ci, frontend-security-ci]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Root Dependencies
+        cwd: backend
+        run: npm ci
+
+      - name: Initialize Test Database & Seed Fixtures
+        cwd: backend
+        run: |
+          npx prisma generate
+          npx ts-node -e "import { setupIsolatedTestDb } from './src/test/setup_test_db'; setupIsolatedTestDb().then(() => process.exit(0)).catch(e => { console.error(e); process.exit(1); })"
+        env:
+          DATABASE_URL: "file:./prisma/test_security.db"
+
+      - name: Run Incremental Import Idempotency Test
+        run: node test_idempotency_and_cleanup.js
+        env:
+          NODE_PATH: "backend/node_modules"
+          DATABASE_URL: "file:./backend/prisma/test_security.db"
