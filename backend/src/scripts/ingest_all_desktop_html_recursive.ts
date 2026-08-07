@@ -4,6 +4,7 @@ import * as path from 'path';
 import * as cheerio from 'cheerio';
 import { CanonicalNormalizer } from '../evaluation/canonical-normalizer';
 import { RobustPricingCalculator } from '../evaluation/robust-pricing-calculator';
+import { VehicleService } from '../vehicle/vehicle.service';
 
 const prisma = new PrismaClient();
 function getAndValidateHtmlSourceDir(): string {
@@ -19,14 +20,28 @@ function getAndValidateHtmlSourceDir(): string {
   return dir;
 }
 
-const DESKTOP_DIR = getAndValidateHtmlSourceDir();
+const DESKTOP_DIR = path.resolve(getAndValidateHtmlSourceDir());
 
 function scanHtmlFilesRecursively(dir: string, fileList: string[] = []): string[] {
-  if (!fs.existsSync(dir)) return fileList;
-  const files = fs.readdirSync(dir);
+  const resolvedDir = path.resolve(dir);
+  // Path Traversal Security Guard: Enforce that all resolved directories remain strictly under DESKTOP_DIR
+  if (!resolvedDir.toLowerCase().startsWith(DESKTOP_DIR.toLowerCase())) {
+    console.warn(`[SECURITY WARNING] Blocked path traversal attempt outside root: ${resolvedDir}`);
+    return fileList;
+  }
+
+  if (!fs.existsSync(resolvedDir)) return fileList;
+  const files = fs.readdirSync(resolvedDir);
 
   for (const file of files) {
-    const filePath = path.join(dir, file);
+    const filePath = path.resolve(resolvedDir, file);
+
+    // Enforce canonical path containment
+    if (!filePath.toLowerCase().startsWith(DESKTOP_DIR.toLowerCase())) {
+      console.warn(`[SECURITY WARNING] Path containment violation blocked: ${filePath}`);
+      continue;
+    }
+
     const stat = fs.statSync(filePath);
     if (stat.isDirectory()) {
       if (file.toLowerCase().endsWith('_files')) continue;
@@ -490,6 +505,14 @@ async function main() {
 
   console.log(`✓ RawVehicleListing ve QuarantinedListing başarıyla güncellendi.`);
   console.log(`✓ Toplam ${ambiguousSpecCount} adet belirsiz (ambiguous) teknik özellik tespit edildi.\n`);
+
+  // Incremental Spec Upsert & Targeted Cache Invalidation
+  const affectedListings = [...toCreateRaw, ...toUpdateRaw];
+  if (affectedListings.length > 0) {
+    const vehicleService = new VehicleService(prisma as any, {} as any);
+    const specUpsertRes = await vehicleService.upsertVehicleSpecificationsForRawListings(affectedListings);
+    console.log(`✓ Incremental import: ${specUpsertRes.upsertedSpecsCount} yeni VehicleSpecification kaydı eklendi, ${specUpsertRes.clearedCacheCount} adet araç grubu önbelleği hemen temizlendi.`);
+  }
 
   // Stage 5: Atomic Snapshot Replacement
   console.log(`====================================================================`);

@@ -83,6 +83,195 @@ export class VehicleService {
     return years;
   }
 
+  private static vehicleDataCache = new Map<string, { data: any; timestamp: number }>();
+
+  /**
+   * Target Invalidation for vehicleDataCache
+   * Immediately clears cache entries for specific (manufacturerId, year, modelId)
+   */
+  public static clearVehicleDataCacheForGroup(manufacturerId: string, year: number, modelId: string) {
+    let clearedCount = 0;
+    const prefix = `${year}:${manufacturerId}:${modelId}:`;
+
+    for (const key of VehicleService.vehicleDataCache.keys()) {
+      if (key.startsWith(prefix)) {
+        VehicleService.vehicleDataCache.delete(key);
+        clearedCount++;
+      }
+    }
+
+    if (clearedCount > 0) {
+      console.log(`[CACHE INVALIDATION] Cleared ${clearedCount} vehicleDataCache entries for group: ${year}:${manufacturerId}:${modelId}`);
+    }
+    return clearedCount;
+  }
+
+  public clearVehicleDataCacheForGroupInstance(manufacturerId: string, year: number, modelId: string) {
+    return VehicleService.clearVehicleDataCacheForGroup(manufacturerId, year, modelId);
+  }
+
+  /**
+   * Upsert VehicleSpecification (and underlying Variant & Package) during incremental import.
+   * Ensures new engines and trims are immediately written to VehicleSpecification DB table.
+   * Also triggers targeted cache invalidation for (manufacturerId, year, modelId).
+   */
+  async upsertVehicleSpecificationsForRawListings(rawItems: {
+    year: number;
+    canonicalMake?: string | null;
+    rawMake?: string | null;
+    canonicalModel?: string | null;
+    rawModel?: string | null;
+    canonicalVariant?: string | null;
+    rawVariant?: string | null;
+    canonicalTrim?: string | null;
+  }[]) {
+    if (!rawItems || rawItems.length === 0) return { upsertedSpecsCount: 0, clearedCacheCount: 0 };
+
+    // Group items by (make, model, year) to minimize DB lookups
+    const grouped = new Map<string, {
+      make: string;
+      model: string;
+      year: number;
+      variantsAndTrims: Set<string>;
+    }>();
+
+    for (const item of rawItems) {
+      const make = (item.canonicalMake || item.rawMake || '').trim();
+      const model = (item.canonicalModel || item.rawModel || '').trim();
+      const year = Number(item.year);
+      const v = (item.canonicalVariant || item.rawVariant || '').replace(/\(\s*\d+\s*HP\s*\)/gi, '').trim();
+      const t = (item.canonicalTrim || '').trim();
+
+      if (!make || !model || !year || isNaN(year)) continue;
+
+      const groupKey = `${make.toLowerCase()}:${model.toLowerCase()}:${year}`;
+      if (!grouped.has(groupKey)) {
+        grouped.set(groupKey, {
+          make,
+          model,
+          year,
+          variantsAndTrims: new Set(),
+        });
+      }
+      const vtPair = `${v || 'Standart'}|||${t || 'Standart'}`;
+      grouped.get(groupKey)!.variantsAndTrims.add(vtPair);
+    }
+
+    let upsertedSpecsCount = 0;
+    let clearedCacheCount = 0;
+
+    const HARDWARE_TRIMS_SET = new Set([
+      'm sport', 'sport line', 'modern line', 'luxury line', 'premium',
+      'standart', 'executive', 'advantage', 'comfort', 'comfortline', 'highline',
+      'trendline', 'ambition', 'attraction', 'ambiente', 's line', 'joy', 'touch',
+      'icon', 'titanium', 'style', 'dynamic', 'pop', 'popstar', 'lounge', 'urban',
+      'easy', 'street', 'mirror', 'first edition m sport', 'first edition'
+    ]);
+
+    for (const group of grouped.values()) {
+      const manufacturers = await this.prisma.manufacturer.findMany();
+      const manufacturer = manufacturers.find(
+        (m) => m.name.toLocaleLowerCase('tr-TR') === group.make.toLocaleLowerCase('tr-TR')
+      );
+      if (!manufacturer) continue;
+
+      const cleanModelSearch = group.model.replace(/serisi/i, '').trim().toLocaleLowerCase('tr-TR');
+      const models = await this.prisma.model.findMany({
+        where: { manufacturerId: manufacturer.id },
+      });
+      const model = models.find(
+        (m) => m.name.toLocaleLowerCase('tr-TR').includes(cleanModelSearch)
+      );
+      if (!model) continue;
+
+      // Get default body, fuel, transmission, drive
+      const defaultBody = await this.prisma.bodyType.findFirst();
+      const defaultFuel = await this.prisma.fuelType.findFirst();
+      const defaultTrans = await this.prisma.transmissionType.findFirst();
+      const defaultDrive = await this.prisma.driveType.findFirst();
+
+      if (!defaultBody || !defaultFuel || !defaultTrans || !defaultDrive) continue;
+
+      for (const vtPair of group.variantsAndTrims) {
+        const [rawEng, rawTrim] = vtPair.split('|||');
+
+        let engineName = rawEng.trim();
+        if (!engineName || HARDWARE_TRIMS_SET.has(engineName.toLocaleLowerCase('tr-TR'))) {
+          engineName = 'Standart';
+        }
+
+        let trimName = rawTrim.trim();
+        if (!trimName) trimName = 'Standart';
+
+        // 1. Variant
+        let variant = await this.prisma.variant.findFirst({
+          where: { modelId: model.id, name: engineName },
+        });
+        if (!variant) {
+          variant = await this.prisma.variant.create({
+            data: {
+              modelId: model.id,
+              name: engineName,
+              engineSize: 1600,
+              horsepower: 0,
+              torque: 0,
+            },
+          });
+          console.log(`[INCREMENTAL SPEC UPSERT] Created Variant "${engineName}" for model "${model.name}"`);
+        }
+
+        // 2. Package
+        let pkg = await this.prisma.package.findFirst({
+          where: { variantId: variant.id, name: trimName },
+        });
+        if (!pkg) {
+          pkg = await this.prisma.package.create({
+            data: {
+              variantId: variant.id,
+              name: trimName,
+            },
+          });
+          console.log(`[INCREMENTAL SPEC UPSERT] Created Package "${trimName}" for variant "${engineName}"`);
+        }
+
+        // 3. VehicleSpecification
+        const specExists = await this.prisma.vehicleSpecification.findFirst({
+          where: {
+            year: group.year,
+            manufacturerId: manufacturer.id,
+            modelId: model.id,
+            variantId: variant.id,
+            packageId: pkg.id,
+          },
+        });
+
+        if (!specExists) {
+          await this.prisma.vehicleSpecification.create({
+            data: {
+              year: group.year,
+              manufacturerId: manufacturer.id,
+              modelId: model.id,
+              variantId: variant.id,
+              packageId: pkg.id,
+              bodyTypeId: defaultBody.id,
+              fuelTypeId: defaultFuel.id,
+              transmissionTypeId: defaultTrans.id,
+              driveTypeId: defaultDrive.id,
+            },
+          });
+          upsertedSpecsCount++;
+          console.log(`[INCREMENTAL SPEC UPSERT] Created VehicleSpecification for ${group.year} ${group.make} ${model.name} (${engineName} - ${trimName})`);
+        }
+      }
+
+      // Immediately clear cache for this group if any new specs were added or to ensure fresh data
+      const cleared = VehicleService.clearVehicleDataCacheForGroup(manufacturer.id, group.year, model.id);
+      clearedCacheCount += cleared;
+    }
+
+    return { upsertedSpecsCount, clearedCacheCount };
+  }
+
   async getVehicleData(query: {
     year: number;
     manufacturerId: string;
@@ -93,97 +282,160 @@ export class VehicleService {
     fuelTypeId?: string;
     transmissionTypeId?: string;
   }) {
+    const startTime = Date.now();
+    const cacheKey = `${query.year}:${query.manufacturerId}:${query.modelId}:${query.variantId || ''}:${query.packageId || ''}:${query.bodyTypeId || ''}:${query.fuelTypeId || ''}:${query.transmissionTypeId || ''}`;
+
+    const cached = VehicleService.vehicleDataCache.get(cacheKey);
+    if (cached && (Date.now() - cached.timestamp < 300000)) {
+      console.log(`[PERF] getVehicleData CACHE HIT (${Date.now() - startTime} ms) key=${cacheKey}`);
+      return cached.data;
+    }
+
     const baseWhere = {
       year: Number(query.year),
       manufacturerId: query.manufacturerId,
       modelId: query.modelId,
     };
 
-    // Ensure database specifications are generated/cached
-    const existingSpecsCount = await this.prisma.vehicleSpecification.count({
+    const prismaStartTime = Date.now();
+    const specs = await this.prisma.vehicleSpecification.findMany({
       where: baseWhere,
+      select: {
+        variantId: true,
+        variant: { select: { id: true, name: true, engineSize: true, horsepower: true } },
+        packageId: true,
+        package: { select: { id: true, name: true } },
+        bodyTypeId: true,
+        bodyType: { select: { id: true, name: true } },
+        fuelTypeId: true,
+        fuelType: { select: { id: true, name: true } },
+        transmissionTypeId: true,
+        transmissionType: { select: { id: true, name: true } },
+      },
     });
-    if (existingSpecsCount === 0) {
-      await this.generateSpecsForModel(
-        Number(query.year),
-        query.manufacturerId,
-        query.modelId,
-      );
-    }
+    const prismaQueryTime = Date.now() - prismaStartTime;
 
-    const getSpecsWithFilters = async (filters: any) => {
-      return this.prisma.vehicleSpecification.findMany({
-        where: {
-          ...baseWhere,
-          ...filters,
-        },
-        include: {
-          variant: true,
-          package: true,
-          bodyType: true,
-          fuelType: true,
-          transmissionType: true,
-        },
-      });
+    const HARDWARE_TRIMS_SET = new Set([
+      'm sport', 'sport line', 'modern line', 'luxury line', 'premium',
+      'standart', 'executive', 'advantage', 'comfort', 'comfortline', 'highline',
+      'trendline', 'ambition', 'attraction', 'ambiente', 's line', 'joy', 'touch',
+      'icon', 'titanium', 'style', 'dynamic', 'pop', 'popstar', 'lounge', 'urban',
+      'easy', 'street', 'mirror', 'first edition m sport', 'first edition'
+    ]);
+
+    const isValidName = (val?: string | null): boolean => {
+      if (!val) return false;
+      const clean = val.trim();
+      if (clean === '' || clean === '-' || clean === '--' || clean.toLowerCase() === 'null' || clean.toLowerCase() === 'undefined') {
+        return false;
+      }
+      return true;
     };
 
-    // 1. Variants depend only on Year, Brand, Model (always fully editable)
-    const variantSpecs = await getSpecsWithFilters({});
+    // 1. Unique Variants (Engines)
+    const variantsMap = new Map<string, any>();
+    const normalizedVariantNames = new Set<string>();
 
-    // 2. Packages depend on Variant
-    const packageFilters: any = {};
-    if (query.variantId) packageFilters.variantId = query.variantId;
-    const packageSpecs = await getSpecsWithFilters(packageFilters);
-
-    // 3. Body Types depend on Variant and Package
-    const bodyFilters: any = { ...packageFilters };
-    if (query.packageId) bodyFilters.packageId = query.packageId;
-    const bodySpecs = await getSpecsWithFilters(bodyFilters);
-
-    // 4. Fuel Types depend on Variant, Package, and Body Type
-    const fuelFilters: any = { ...bodyFilters };
-    if (query.bodyTypeId) fuelFilters.bodyTypeId = query.bodyTypeId;
-    const fuelSpecs = await getSpecsWithFilters(fuelFilters);
-
-    // 5. Transmission Types depend on Variant, Package, Body Type, and Fuel Type
-    const transFilters: any = { ...fuelFilters };
-    if (query.fuelTypeId) transFilters.fuelTypeId = query.fuelTypeId;
-    const transSpecs = await getSpecsWithFilters(transFilters);
-
-    const variantsMap = new Map();
-    for (const spec of variantSpecs) {
-      if (spec.variant) variantsMap.set(spec.variant.id, spec.variant);
-    }
-
-    const packagesMap = new Map();
-    for (const spec of packageSpecs) {
-      if (spec.package) packagesMap.set(spec.package.id, spec.package);
-    }
-
-    const bodiesMap = new Map();
-    for (const spec of bodySpecs) {
-      if (spec.bodyType) bodiesMap.set(spec.bodyType.id, spec.bodyType);
-    }
-
-    const fuelsMap = new Map();
-    for (const spec of fuelSpecs) {
-      if (spec.fuelType) fuelsMap.set(spec.fuelType.id, spec.fuelType);
-    }
-
-    const transmissionsMap = new Map();
-    for (const spec of transSpecs) {
-      if (spec.transmissionType) {
-        transmissionsMap.set(spec.transmissionType.id, spec.transmissionType);
+    for (const spec of specs) {
+      if (spec.variant && isValidName(spec.variant.name)) {
+        const cleanName = spec.variant.name.replace(/\(\s*\d+\s*HP\s*\)/gi, '').trim();
+        const normKey = cleanName.toLocaleLowerCase('tr-TR');
+        if (!HARDWARE_TRIMS_SET.has(normKey) && !normalizedVariantNames.has(normKey)) {
+          normalizedVariantNames.add(normKey);
+          variantsMap.set(spec.variant.id, { ...spec.variant, name: cleanName });
+        }
       }
     }
 
-    const uniqueVariants = Array.from(variantsMap.values());
-    const uniquePackages = Array.from(packagesMap.values());
-    const uniqueBodies = Array.from(bodiesMap.values());
-    const uniqueFuels = Array.from(fuelsMap.values());
-    const uniqueTransmissions = Array.from(transmissionsMap.values());
+    // 2. Packages (Donanım Paketleri) - Deduplicated and filtered
+    const packagesMap = new Map<string, any>();
+    const normalizedPackageNames = new Set<string>();
 
-    return {
+    for (const spec of specs) {
+      if (query.variantId && spec.variantId !== query.variantId) continue;
+      if (spec.package && isValidName(spec.package.name)) {
+        const cleanName = spec.package.name.trim();
+        const normKey = cleanName.toLocaleLowerCase('tr-TR');
+        if (!normalizedPackageNames.has(normKey)) {
+          normalizedPackageNames.add(normKey);
+          packagesMap.set(spec.package.id, { ...spec.package, name: cleanName });
+        }
+      }
+    }
+
+    // 3. Body Types (Kasa Tipleri)
+    const bodiesMap = new Map<string, any>();
+    const normalizedBodyNames = new Set<string>();
+
+    for (const spec of specs) {
+      if (query.variantId && spec.variantId !== query.variantId) continue;
+      if (query.packageId && spec.packageId !== query.packageId) continue;
+
+      if (spec.bodyType) {
+        if (!isValidName(spec.bodyType.name)) {
+          console.warn(`[WARN] INVALID_EMPTY_BODY_TYPE_LABEL for bodyTypeId: ${spec.bodyTypeId}`);
+          continue;
+        }
+        const cleanName = spec.bodyType.name.trim();
+        const normKey = cleanName.toLocaleLowerCase('tr-TR');
+        if (!normalizedBodyNames.has(normKey)) {
+          normalizedBodyNames.add(normKey);
+          bodiesMap.set(spec.bodyType.id, { ...spec.bodyType, name: cleanName });
+        }
+      }
+    }
+
+    // 4. Fuel Types (Yakıt Tipleri)
+    const fuelsMap = new Map<string, any>();
+    const normalizedFuelNames = new Set<string>();
+
+    for (const spec of specs) {
+      if (query.variantId && spec.variantId !== query.variantId) continue;
+      if (query.packageId && spec.packageId !== query.packageId) continue;
+      if (query.bodyTypeId && spec.bodyTypeId !== query.bodyTypeId) continue;
+
+      if (spec.fuelType) {
+        if (!isValidName(spec.fuelType.name)) {
+          console.warn(`[WARN] INVALID_EMPTY_FUEL_TYPE_LABEL for fuelTypeId: ${spec.fuelTypeId}`);
+          continue;
+        }
+        const cleanName = spec.fuelType.name.trim();
+        const normKey = cleanName.toLocaleLowerCase('tr-TR');
+        if (!normalizedFuelNames.has(normKey)) {
+          normalizedFuelNames.add(normKey);
+          fuelsMap.set(spec.fuelType.id, { ...spec.fuelType, name: cleanName });
+        }
+      }
+    }
+
+    // 5. Transmissions
+    const transmissionsMap = new Map<string, any>();
+    const normalizedTransNames = new Set<string>();
+
+    for (const spec of specs) {
+      if (query.variantId && spec.variantId !== query.variantId) continue;
+      if (query.packageId && spec.packageId !== query.packageId) continue;
+      if (query.bodyTypeId && spec.bodyTypeId !== query.bodyTypeId) continue;
+      if (query.fuelTypeId && spec.fuelTypeId !== query.fuelTypeId) continue;
+
+      if (spec.transmissionType && isValidName(spec.transmissionType.name)) {
+        const cleanName = spec.transmissionType.name.trim();
+        const normKey = cleanName.toLocaleLowerCase('tr-TR');
+        if (!normalizedTransNames.has(normKey)) {
+          normalizedTransNames.add(normKey);
+          transmissionsMap.set(spec.transmissionType.id, { ...spec.transmissionType, name: cleanName });
+        }
+      }
+    }
+
+    const uniqueVariants = Array.from(variantsMap.values()).sort((a, b) => a.name.localeCompare(b.name, 'tr-TR'));
+    const uniquePackages = Array.from(packagesMap.values()).sort((a, b) => a.name.localeCompare(b.name, 'tr-TR'));
+    const uniqueBodies = Array.from(bodiesMap.values()).sort((a, b) => a.name.localeCompare(b.name, 'tr-TR'));
+    const uniqueFuels = Array.from(fuelsMap.values()).sort((a, b) => a.name.localeCompare(b.name, 'tr-TR'));
+    const uniqueTransmissions = Array.from(transmissionsMap.values()).sort((a, b) => a.name.localeCompare(b.name, 'tr-TR'));
+
+    const jsonStartTime = Date.now();
+    const result = {
       variants: uniqueVariants,
       packages: uniquePackages,
       bodyTypes: uniqueBodies,
@@ -197,6 +449,23 @@ export class VehicleService {
         transmissionTypeId: uniqueTransmissions.length === 1 ? uniqueTransmissions[0].id : null,
       },
     };
+    const jsonConversionTime = Date.now() - jsonStartTime;
+    const totalTime = Date.now() - startTime;
+
+    console.log(`
+--- VEHICLE DATA API PERFORMANCE METRICS ---
+Cache Status: MISS
+Prisma Query Time: ${prismaQueryTime} ms
+JSON Conversion Time: ${jsonConversionTime} ms
+Total API Response Time: ${totalTime} ms
+Returned Variants Count: ${uniqueVariants.length}
+Returned Packages Count: ${uniquePackages.length}
+Returned Body Types Count: ${uniqueBodies.length}
+Returned Fuel Types Count: ${uniqueFuels.length}
+=============================================`);
+
+    VehicleService.vehicleDataCache.set(cacheKey, { data: result, timestamp: Date.now() });
+    return result;
   }
 
   private async generateSpecsForModel(

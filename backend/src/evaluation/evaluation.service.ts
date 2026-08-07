@@ -68,6 +68,7 @@ export class EvaluationService {
     }).catch((err) => console.error('Telegram notification error:', err));
 
     return {
+      status: 'SUCCESS',
       evaluationId: evaluation.id,
       vehicle: res.vehicle,
       results: res.results,
@@ -98,6 +99,23 @@ export class EvaluationService {
   }
 
   private async calculateValuationCore(dto: CreateEvaluationDto) {
+    // 1. Relational Validation: Verify modelId actually belongs to manufacturerId
+    const targetModel = await this.prisma.model.findFirst({
+      where: { id: dto.modelId, manufacturerId: dto.manufacturerId },
+    });
+
+    if (!targetModel) {
+      return {
+        status: 'DATA_INTEGRITY_ERROR',
+        confidenceScore: 0,
+        message: 'Seçilen model belirtilen markaya ait değildir (İlişkisel Veri Hatası).',
+        results: null,
+        vehicle: null,
+        aiAnalysis: ['Geçersiz marka/model kombinasyonu gönderildi.'],
+        comparableListings: [],
+      };
+    }
+
     const whereCondition: any = {
       year: dto.year,
       manufacturerId: dto.manufacturerId,
@@ -257,7 +275,7 @@ export class EvaluationService {
     }
 
     if (dto.userDesiredPrice && dto.userDesiredPrice > 0) {
-      aiAnalysis.push(`Fiyat beklentiniz (${dto.userDesiredPrice.toLocaleString('tr-TR')} ₺) dikkate alınarak Konsinye İlan fiyatı ${calc.consignmentListingPrice.toLocaleString('tr-TR')} ₺, müşteriye net kalacak tutar ${calc.customerConsignmentNet.toLocaleString('tr-TR')} ₺ ve anında Nakit Alış teklifi ${calc.cashOffer.toLocaleString('tr-TR')} ₺ olarak hesaplanmıştır.`);
+      aiAnalysis.push(`Elinize geçmesini istediğiniz net tutar (${dto.userDesiredPrice.toLocaleString('tr-TR')} ₺) dikkate alınarak, Önerilen Halka Açık İlan Fiyatı ${calc.recommendedPublicListingPrice.toLocaleString('tr-TR')} ₺, Beklenen Satış Fiyatı ${calc.expectedSalePrice.toLocaleString('tr-TR')} ₺ ve Satış Sonrası Garantili Net Tutarınız ${calc.agreedCustomerNet.toLocaleString('tr-TR')} ₺ olarak hesaplanmıştır.`);
     }
 
     const comparableListings = await this.getRealComparableListings(emsalResult);
@@ -283,13 +301,23 @@ export class EvaluationService {
         vehicleSpecificationId: spec.id,
         adjustedP35: calc.adjustedP35,
         fairMarketValue: calc.fairMarketValue,
+        recommendedPublicListingPrice: calc.recommendedPublicListingPrice,
+        expectedSalePrice: calc.expectedSalePrice,
+        customerDesiredNet: calc.customerDesiredNet,
+        aiRecommendedCustomerNet: calc.aiRecommendedCustomerNet,
+        proposedCustomerNet: calc.proposedCustomerNet,
+        agreedCustomerNet: calc.agreedCustomerNet,
+        baseCommission: calc.baseCommission,
+        performanceMargin: calc.performanceMargin,
+        expectedCompanyGrossMargin: calc.expectedCompanyGrossMargin,
+
         cashOffer: calc.cashOffer,
         cashOfferMin: calc.cashOfferMin,
         cashOfferMax: calc.cashOfferMax,
-        consignmentListingPrice: calc.consignmentListingPrice,
-        expectedConsignmentSalePrice: calc.expectedConsignmentSalePrice,
-        consignmentCommission: calc.consignmentCommission,
-        customerConsignmentNet: calc.customerConsignmentNet,
+        consignmentListingPrice: calc.recommendedPublicListingPrice,
+        expectedConsignmentSalePrice: calc.expectedSalePrice,
+        consignmentCommission: calc.baseCommission,
+        customerConsignmentNet: calc.agreedCustomerNet,
         estimatedDaysToSell: `${calc.estimatedDaysToSellMin}-${calc.estimatedDaysToSellMax} gün`,
         confidenceScore: calc.confidenceScore,
         matchedListingCount: calc.matchedListingCount,
@@ -298,11 +326,11 @@ export class EvaluationService {
         // Backward Compatibility Aliases:
         estimatedValue: calc.cashOffer,
         finalOfferedPrice: calc.cashOffer,
-        finalConsignmentPrice: calc.consignmentListingPrice,
+        finalConsignmentPrice: calc.recommendedPublicListingPrice,
         userDesiredPrice: dto.userDesiredPrice,
-        fairMarketRange: `${calc.cashOfferMin.toLocaleString('tr-TR')} ₺ - ${calc.consignmentListingPrice.toLocaleString('tr-TR')} ₺`,
+        fairMarketRange: `${calc.cashOfferMin.toLocaleString('tr-TR')} ₺ - ${calc.recommendedPublicListingPrice.toLocaleString('tr-TR')} ₺`,
         minExpectedValue: calc.cashOfferMin,
-        maxExpectedValue: calc.consignmentListingPrice,
+        maxExpectedValue: calc.recommendedPublicListingPrice,
         quickSaleValue: calc.cashOfferMin,
         requiresManualApproval: requiresManual,
         kmDecayPer10k: emsalResult.kmDecayPer10k || 0.0025,

@@ -4,6 +4,8 @@ import * as path from 'path';
 import * as crypto from 'crypto';
 import * as cheerio from 'cheerio';
 
+import { VehicleService } from '../vehicle/vehicle.service';
+
 const prisma = new PrismaClient();
 const SOURCE_DIR = process.env.SAHIBINDEN_HTML_DIR || 'C:\\Users\\berke\\OneDrive\\Masaüstü\\sahibindne ilan';
 const MANIFEST_PATH = path.join(__dirname, '../../data/import-state/sahibinden-import-manifest.json');
@@ -37,7 +39,22 @@ interface ImportManifest {
   files: Record<string, ManifestFileEntry>;
 }
 
-function parseHeaderMakeModelSubModel(text: string, fallbackFolder: string): { make: string; model: string; subModel: string | null } {
+const KNOWN_BMW_ENGINES = [
+  '316i', '318i', '320i', '325i', '328i', '330i', '335i', '340i', 'M340i',
+  '316d', '318d', '320d', '325d', '330d', '335d', '318i Sedan', '320i Sedan',
+  '320d Sedan', '330i Sedan', '330d Sedan', '116i', '118i', '120i', '116d',
+  '118d', '120d', '520i', '525i', '528i', '530i', '520d', '525d', '530d', '535d'
+];
+
+const KNOWN_HARDWARE_TRIMS = [
+  'M Sport', 'Sport Line', 'Modern Line', 'Luxury Line', 'Premium',
+  'Standart', 'Executive', 'Advantage', 'Comfort', 'Comfortline', 'Highline',
+  'Trendline', 'Ambition', 'Attraction', 'Ambiente', 'S Line', 'Joy', 'Touch',
+  'Icon', 'Titanium', 'Style', 'Dynamic', 'Pop', 'Popstar', 'Lounge', 'Urban',
+  'Easy', 'Street', 'Mirror', 'First Edition M Sport', 'First Edition'
+];
+
+function parseHeaderMakeModelSubModel(text: string, fallbackFolder: string): { make: string; model: string; subModel: string | null; engineVariant?: string | null; trimPackage?: string | null } {
   let clean = text
     .replace(/\.html?/gi, '')
     .replace(/\s*-\s*\d+$/g, '')
@@ -77,18 +94,59 @@ function parseHeaderMakeModelSubModel(text: string, fallbackFolder: string): { m
   }
 
   if (words.length === 0) {
-    return { make, model: 'Genel', subModel: null };
+    return { make, model: 'Genel', subModel: null, engineVariant: null, trimPackage: null };
   }
 
   let model = words[0];
   words.shift();
 
-  let subModel: string | null = null;
-  if (words.length > 0) {
-    subModel = words.join(' ');
+  // If model is e.g. "3" and next is "Serisi" -> "3 Serisi"
+  if (model === '3' && words.length > 0 && words[0].toLowerCase() === 'serisi') {
+    model = '3 Serisi';
+    words.shift();
+  } else if (model === '5' && words.length > 0 && words[0].toLowerCase() === 'serisi') {
+    model = '5 Serisi';
+    words.shift();
+  } else if (model === '1' && words.length > 0 && words[0].toLowerCase() === 'serisi') {
+    model = '1 Serisi';
+    words.shift();
+  } else if (model === '4' && words.length > 0 && words[0].toLowerCase() === 'serisi') {
+    model = '4 Serisi';
+    words.shift();
   }
 
-  return { make, model, subModel };
+  const remaining = words.join(' ').trim();
+  let engineVariant: string | null = null;
+  let trimPackage: string | null = null;
+
+  // Extract known engine code from remaining string
+  for (const eng of KNOWN_BMW_ENGINES) {
+    const engRegex = new RegExp(`\\b${eng}\\b`, 'i');
+    if (engRegex.test(remaining)) {
+      engineVariant = eng;
+      break;
+    }
+  }
+
+  // Extract known hardware trim from remaining string
+  for (const tr of KNOWN_HARDWARE_TRIMS) {
+    const trRegex = new RegExp(`\\b${tr}\\b`, 'i');
+    if (trRegex.test(remaining)) {
+      trimPackage = tr;
+      break;
+    }
+  }
+
+  let subModel: string | null = null;
+  if (engineVariant && trimPackage) {
+    subModel = `${engineVariant} ${trimPackage}`;
+  } else if (engineVariant) {
+    subModel = engineVariant;
+  } else if (remaining.length > 0) {
+    subModel = remaining;
+  }
+
+  return { make, model, subModel, engineVariant, trimPackage };
 }
 
 function scanHtmlFilesRecursively(dir: string, fileList: string[] = []): string[] {
@@ -206,6 +264,8 @@ async function runImport() {
     console.warn(`⚠️ RAPOR: Manifestte kayıtlı olan ancak klasörde bulunamayan ${missingManifestKeys.length} adet dosya tespit edildi (MISSING_SOURCE_FILE). Eski ilanlar veritabanından silinmeyecektir.`);
   }
 
+  const CURRENT_PARSER_VERSION = 'v1.1';
+
   // Check current files vs manifest
   for (const [relP, absP] of currentFilesMap.entries()) {
     const stat = fs.statSync(absP);
@@ -214,7 +274,7 @@ async function runImport() {
 
     if (!existingEntry) {
       newFilePaths.push(absP);
-    } else if (existingEntry.sha256ContentHash !== currentHash) {
+    } else if (existingEntry.sha256ContentHash !== currentHash || existingEntry.parserVersion !== CURRENT_PARSER_VERSION) {
       changedFilePaths.push(absP);
     } else {
       unchangedFilePaths.push(absP);
@@ -387,11 +447,39 @@ async function runImport() {
         priceTl = tds[yearIdx + 3] ? parseInt(tds[yearIdx + 3].replace(/\./g, '').replace(/\D/g, ''), 10) || null : null;
       }
 
-      const compositeKey = `${dataId}__${rowMake}__${rowModel}__${rowSubModel || ''}__${engineVariant || ''}__${year || 0}__${mileageKm || 0}__${color || ''}__${priceTl || 0}`.toLowerCase();
+      let rowEngineVariant = headerInfo.engineVariant || null;
+      let rowTrimPackage = headerInfo.trimPackage || null;
+
+      if (!rowEngineVariant && engineVariant) {
+        for (const eng of KNOWN_BMW_ENGINES) {
+          if (new RegExp(`\\b${eng}\\b`, 'i').test(engineVariant)) {
+            rowEngineVariant = eng;
+            break;
+          }
+        }
+      }
+
+      if (!rowTrimPackage && engineVariant) {
+        for (const tr of KNOWN_HARDWARE_TRIMS) {
+          if (new RegExp(`\\b${tr}\\b`, 'i').test(engineVariant)) {
+            rowTrimPackage = tr;
+            break;
+          }
+        }
+      }
+
+      if (!rowEngineVariant) {
+        rowEngineVariant = engineVariant;
+      }
+      if (!rowTrimPackage && engineVariant && engineVariant !== rowEngineVariant) {
+        rowTrimPackage = engineVariant;
+      }
+
+      const compositeKey = `${dataId}__${rowMake}__${rowModel}__${rowSubModel || ''}__${rowEngineVariant || ''}__${year || 0}__${mileageKm || 0}__${color || ''}__${priceTl || 0}`.toLowerCase();
       const listingIdKey = dataId || `HASH_${compositeKey}`;
 
       const missingList: string[] = [];
-      if (!engineVariant) missingList.push('engineVariant');
+      if (!rowEngineVariant) missingList.push('engineVariant');
       if (!priceTl || priceTl <= 0) missingList.push('price');
       if (!rowMake || rowMake === 'Bilinmeyen') missingList.push('make');
       if (!rowModel || rowModel === 'Genel') missingList.push('model');
@@ -419,6 +507,9 @@ async function runImport() {
         updatedExistingListingCount++;
         recordsToUpdate.push({
           id: existingInDb.id,
+          rawVariant: rowEngineVariant,
+          canonicalVariant: rowEngineVariant,
+          canonicalTrim: rowTrimPackage,
           price: priceTl || 0,
           mileageKm: mileageKm,
           parseStatus,
@@ -439,11 +530,11 @@ async function runImport() {
           sourceFile: fileName,
           rawMake: rowMake,
           rawModel: rowModel,
-          rawVariant: engineVariant,
+          rawVariant: rowEngineVariant,
           canonicalMake: rowMake,
           canonicalModel: rowModel,
-          canonicalVariant: rowSubModel,
-          canonicalTrim: engineVariant,
+          canonicalVariant: rowEngineVariant,
+          canonicalTrim: rowTrimPackage,
           year: year || 2000,
           mileageKm: mileageKm,
           price: priceTl || 0,
@@ -463,13 +554,31 @@ async function runImport() {
       fileSize: stat.size,
       modifiedTime: stat.mtime.toISOString(),
       sha256ContentHash: hash,
-      parserVersion: 'v1.0',
+      parserVersion: CURRENT_PARSER_VERSION,
       importedAt: new Date().toISOString(),
       detectedMake: headerInfo.make,
       detectedModel: headerInfo.model,
       detectedSubModel: headerInfo.subModel,
       listingRowCount: fileRowCount,
     };
+  }
+
+  // Update existing records
+  if (recordsToUpdate.length > 0) {
+    console.log(`✓ ${recordsToUpdate.length} adet mevcut kayıt güncelleniyor...`);
+    for (const rec of recordsToUpdate) {
+      await prisma.rawVehicleListing.update({
+        where: { id: rec.id },
+        data: {
+          rawVariant: rec.rawVariant,
+          canonicalVariant: rec.canonicalVariant,
+          canonicalTrim: rec.canonicalTrim,
+          price: rec.price,
+          mileageKm: rec.mileageKm,
+          parseStatus: rec.parseStatus,
+        }
+      });
+    }
   }
 
   // Insert new records in chunks
@@ -479,6 +588,14 @@ async function runImport() {
       const chunk = recordsToInsert.slice(i, i + chunkSize);
       await prisma.rawVehicleListing.createMany({ data: chunk });
     }
+  }
+
+  // Synchronize new specs and invalidate targeted cache
+  const allAffected = [...recordsToInsert, ...recordsToUpdate];
+  if (allAffected.length > 0) {
+    const vehicleService = new VehicleService(prisma as any, {} as any);
+    const specUpsertRes = await vehicleService.upsertVehicleSpecificationsForRawListings(allAffected);
+    console.log(`✓ ${specUpsertRes.upsertedSpecsCount} adet yeni VehicleSpecification eklendi, ${specUpsertRes.clearedCacheCount} adet araç grubu önbelleği temizlendi.`);
   }
 
   // Save updated manifest JSON
