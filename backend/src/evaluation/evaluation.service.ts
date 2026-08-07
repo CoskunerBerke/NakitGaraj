@@ -232,7 +232,7 @@ export class EvaluationService {
       const mileageVar = Math.round(spec.year === 2026 ? 8000 + i * 2000 : (2026 - spec.year) * 15000 * (1 + priceOffsets[i] * 0.5));
 
       listings.push({
-        id: `listing-${i + 1}`,
+        id: `visual-comp-${i + 1}`,
         year: spec.year,
         mileage: mileageVar,
         price: targetPrice,
@@ -241,6 +241,8 @@ export class EvaluationService {
         listingDate: `${3 + i * 2} gün önce`,
         photo: `/cars/mock-car-${i + 1}.jpg`,
         details: `${spec.variant.name} ${spec.package?.name || ''} - ${spec.transmissionType.name} - ${spec.fuelType.name}`,
+        isRepresentativeVisualScenario: true,
+        typeNote: 'Temsili Vitrin Görsel Emsali (Gerçek piyasa hesaplamasına etki etmez)',
       });
     }
 

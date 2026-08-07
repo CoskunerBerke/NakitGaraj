@@ -25,6 +25,10 @@ export interface EmsalMatchResult {
   confidenceScore: number;
   isLimitedComps: boolean;
   explanationNote: string;
+  snapshotId?: string;
+  weightedP35?: number;
+  weightedP50?: number;
+  weightedP60?: number;
 }
 
 @Injectable()
@@ -32,7 +36,7 @@ export class EmsalMatcherService {
   constructor(private prisma: PrismaService) {}
 
   /**
-   * Performs 4-Level Emsal Matching against DB listing records & snapshots
+   * Performs strict 4-Level Emsal Matching against real VehicleMarketSnapshot DB records
    */
   async matchComparableListings(params: {
     make: string;
@@ -46,155 +50,157 @@ export class EmsalMatcherService {
     transmission?: string;
     isCleanCondition?: boolean;
   }): Promise<EmsalMatchResult> {
-    const { make, model, variant, year, mileageKm, isCleanCondition = true } = params;
+    const { make, model, variant, year, mileageKm, bodyType, fuelType, transmission } = params;
 
-    // 1. Level 1 Matching: Exact Make, Model, Variant, Year, and close Mileage (±40.000 km)
-    let compsL1 = await this.queryListingsFromDb({
+    // 1. Level 1: Exact Make, Model, Variant, Year
+    let snapshot = await this.querySnapshotFromDb({
       make,
       model,
       variant,
       yearExact: year,
-      mileageMin: Math.max(0, mileageKm - 40000),
-      mileageMax: mileageKm + 40000,
-      isCleanOnly: isCleanCondition,
+      bodyType,
+      fuelType,
+      transmission,
     });
 
-    if (compsL1.length >= 8) {
+    if (snapshot && snapshot.matchedListingCount >= 5) {
+      const cleanComps = this.convertSnapshotToCleanListings(snapshot, mileageKm);
+      const dynamicScore = Math.min(99, Math.max(83, 85 + Math.floor(snapshot.matchedListingCount / 12)));
       return {
         level: 1,
-        matchedCount: compsL1.length,
-        cleanListings: compsL1,
-        confidenceScore: compsL1.length >= 12 ? 98 : 92,
+        matchedCount: snapshot.matchedListingCount,
+        cleanListings: cleanComps,
+        confidenceScore: dynamicScore,
         isLimitedComps: false,
-        explanationNote: `Seviye 1: ${make} ${model} (${year}) birebir tam donanım ve yakın km emsalleri kullanılmıştır.`,
+        explanationNote: `Seviye 1: ${make} ${model} ${variant || ''} (${year}) veritabanındaki ${snapshot.matchedListingCount} adet gerçek Sahibinden ilan emsaliyle eşleşti. (Snapshot ID: ${snapshot.id.slice(0, 8)})`,
+        snapshotId: snapshot.id,
+        weightedP35: snapshot.weightedP35,
+        weightedP50: snapshot.weightedP50,
+        weightedP60: snapshot.weightedP60,
       };
     }
 
-    // 2. Level 2 Matching: Year ±1 (Year & KM decay adjustments applied)
-    let compsL2 = await this.queryListingsFromDb({
+    // 2. Level 2: Year ±1 (Exact Make, Model, Variant)
+    let snapshotL2 = await this.querySnapshotFromDb({
       make,
       model,
       variant,
       yearMin: year - 1,
       yearMax: year + 1,
-      mileageMin: Math.max(0, mileageKm - 60000),
-      mileageMax: mileageKm + 60000,
-      isCleanOnly: isCleanCondition,
     });
 
-    if (compsL2.length >= 8) {
+    if (snapshotL2 && snapshotL2.matchedListingCount >= 5) {
+      const cleanComps = this.convertSnapshotToCleanListings(snapshotL2, mileageKm);
+      const dynamicScore = Math.min(88, Math.max(76, 78 + Math.floor(snapshotL2.matchedListingCount / 20)));
       return {
         level: 2,
-        matchedCount: compsL2.length,
-        cleanListings: compsL2,
-        confidenceScore: 88,
+        matchedCount: snapshotL2.matchedListingCount,
+        cleanListings: cleanComps,
+        confidenceScore: dynamicScore,
         isLimitedComps: false,
-        explanationNote: `Seviye 2: ${make} ${model} (${year - 1}-${year + 1}) teknik emsalleri yıl/km katsayılarıyla düzeltilerek hesaplanmıştır.`,
+        explanationNote: `Seviye 2: ${make} ${model} ${variant || ''} (${year - 1}-${year + 1}) grubundaki ${snapshotL2.matchedListingCount} gerçek emsal yıl/km katsayılarıyla düzeltilerek kullanıldı. (Snapshot ID: ${snapshotL2.id.slice(0, 8)})`,
+        snapshotId: snapshotL2.id,
+        weightedP35: snapshotL2.weightedP35,
+        weightedP50: snapshotL2.weightedP50,
+        weightedP60: snapshotL2.weightedP60,
       };
     }
 
-    // 3. Level 3 Matching: Same Model + Year range, broader package
-    let compsL3 = await this.queryListingsFromDb({
+    // 3. Level 3: Broader Model + Year range
+    let snapshotL3 = await this.querySnapshotFromDb({
       make,
       model,
       yearMin: year - 2,
       yearMax: year + 2,
-      isCleanOnly: isCleanCondition,
     });
 
-    if (compsL3.length >= 6) {
+    if (snapshotL3 && snapshotL3.matchedListingCount >= 3) {
+      const cleanComps = this.convertSnapshotToCleanListings(snapshotL3, mileageKm);
+      const dynamicScore = Math.min(78, Math.max(62, 65 + Math.floor(snapshotL3.matchedListingCount / 25)));
       return {
         level: 3,
-        matchedCount: compsL3.length,
-        cleanListings: compsL3,
-        confidenceScore: 78,
+        matchedCount: snapshotL3.matchedListingCount,
+        cleanListings: cleanComps,
+        confidenceScore: dynamicScore,
         isLimitedComps: false,
-        explanationNote: `Seviye 3: ${make} ${model} genel paket emsalleri donanım farkı ayarlanarak kullanılmıştır.`,
+        explanationNote: `Seviye 3: ${make} ${model} genel model grubundaki ${snapshotL3.matchedListingCount} ilan kullanıldı. (Snapshot ID: ${snapshotL3.id.slice(0, 8)})`,
+        snapshotId: snapshotL3.id,
+        weightedP35: snapshotL3.weightedP35,
+        weightedP50: snapshotL3.weightedP50,
+        weightedP60: snapshotL3.weightedP60,
       };
     }
 
-    // 4. Level 4 Matching: Broader model fallback (Limited Comps Warning)
-    let compsL4 = await this.queryListingsFromDb({
-      make,
-      isCleanOnly: isCleanCondition,
-    });
-
-    const finalCount = compsL4.length > 0 ? compsL4.length : 1;
+    // 4. Level 4 Fallback: No real DB listings found for this vehicle
     return {
       level: 4,
-      matchedCount: finalCount,
-      cleanListings: compsL4,
-      confidenceScore: Math.max(50, Math.min(65, finalCount * 5)),
+      matchedCount: 0,
+      cleanListings: [],
+      confidenceScore: 0,
       isLimitedComps: true,
-      explanationNote: `Seviye 4: Sınırlı sayıda emsal ilan tespit edilmiştir. Değerleme geniş gruptan hesaplanmış ve ekstra risk marjı eklenmiştir.`,
+      explanationNote: `Seviye 4: Yetersiz Veri! ${make} ${model} (${year}) için veritabanında henüz Sahibinden ilan kaydı bulunamadı.`,
     };
   }
 
-  /**
-   * Helper to query specification and market prices from DB
-   */
-  private async queryListingsFromDb(filter: {
+  private async querySnapshotFromDb(filter: {
     make: string;
-    model?: string;
+    model: string;
     variant?: string;
     yearExact?: number;
     yearMin?: number;
     yearMax?: number;
-    mileageMin?: number;
-    mileageMax?: number;
-    isCleanOnly?: boolean;
-  }): Promise<CleanListingItem[]> {
-    const { make, model, variant, yearExact, yearMin, yearMax } = filter;
+    bodyType?: string;
+    fuelType?: string;
+    transmission?: string;
+  }) {
+    const { make, model, variant, yearExact, yearMin, yearMax, bodyType, fuelType, transmission } = filter;
 
-    const mfg = await this.prisma.manufacturer.findFirst({
-      where: { name: { equals: make } },
-    });
-    if (!mfg) return [];
+    const whereClause: any = {
+      make: { contains: make },
+    };
 
-    const modelRecord = model ? await this.prisma.model.findFirst({
-      where: { manufacturerId: mfg.id, name: { equals: model } },
-    }) : null;
-
-    const specs = await this.prisma.vehicleSpecification.findMany({
-      where: {
-        manufacturerId: mfg.id,
-        modelId: modelRecord ? modelRecord.id : undefined,
-        year: yearExact ? yearExact : (yearMin && yearMax ? { gte: yearMin, lte: yearMax } : undefined),
-        variant: variant ? { name: { contains: variant } } : undefined,
-      },
-      include: {
-        marketPrices: true,
-        variant: true,
-        bodyType: true,
-        fuelType: true,
-        transmissionType: true,
-      },
-    });
-
-    const listings: CleanListingItem[] = [];
-
-    for (const spec of specs) {
-      if (spec.marketPrices && spec.marketPrices.length > 0) {
-        const mp = spec.marketPrices[0];
-        const count = Math.max(1, (mp.currentMarketAverage ? 5 : 1));
-        for (let i = 0; i < count; i++) {
-          listings.push({
-            id: `db-spec-${spec.id}-${i}`,
-            make,
-            model: model || mfg.name,
-            variant: spec.variant?.name || variant || '',
-            year: spec.year,
-            mileageKm: 50000 + i * 15000,
-            price: mp.currentMarketAverage,
-            bodyType: spec.bodyType?.name,
-            fuelType: spec.fuelType?.name,
-            transmission: spec.transmissionType?.name,
-            isDamaged: false,
-          });
-        }
-      }
+    if (model) {
+      whereClause.model = { contains: model };
     }
+    if (variant) {
+      whereClause.variant = { contains: variant };
+    }
+    if (yearExact) {
+      whereClause.year = yearExact;
+    } else if (yearMin && yearMax) {
+      whereClause.year = { gte: yearMin, lte: yearMax };
+    }
+    if (bodyType) whereClause.bodyType = { contains: bodyType };
+    if (fuelType) whereClause.fuelType = { contains: fuelType };
+    if (transmission) whereClause.transmission = { contains: transmission };
 
-    return listings;
+    return await this.prisma.vehicleMarketSnapshot.findFirst({
+      where: whereClause,
+      orderBy: { matchedListingCount: 'desc' },
+    });
+  }
+
+  private convertSnapshotToCleanListings(snapshot: any, userKm: number): CleanListingItem[] {
+    const p35 = snapshot.weightedP35 || snapshot.weightedP50 * 0.92;
+    const p50 = snapshot.weightedP50;
+    const p60 = snapshot.weightedP60 || snapshot.weightedP50 * 1.02;
+    const p5 = snapshot.weightedP5 || snapshot.weightedP50 * 0.85;
+    const p95 = snapshot.weightedP95 || snapshot.weightedP50 * 1.15;
+
+    // Convert real percentiles into representational clean listing array points
+    const points = [p5, p35, p50, p60, p95];
+    return points.map((price, idx) => ({
+      id: `snapshot-${snapshot.id.slice(0, 8)}-p${idx}`,
+      make: snapshot.make,
+      model: snapshot.model,
+      variant: snapshot.variant || '',
+      year: snapshot.year,
+      mileageKm: userKm,
+      price: Math.round(price),
+      bodyType: snapshot.bodyType || undefined,
+      fuelType: snapshot.fuelType || undefined,
+      transmission: snapshot.transmission || undefined,
+      isDamaged: false,
+    }));
   }
 }
