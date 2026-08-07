@@ -135,7 +135,7 @@ export class EmsalMatcherService {
    */
   private async queryListingsFromDb(filter: {
     make: string;
-    model: string;
+    model?: string;
     variant?: string;
     yearExact?: number;
     yearMin?: number;
@@ -151,15 +151,14 @@ export class EmsalMatcherService {
     });
     if (!mfg) return [];
 
-    const modelRecord = await this.prisma.model.findFirst({
+    const modelRecord = model ? await this.prisma.model.findFirst({
       where: { manufacturerId: mfg.id, name: { equals: model } },
-    });
-    if (!modelRecord) return [];
+    }) : null;
 
     const specs = await this.prisma.vehicleSpecification.findMany({
       where: {
         manufacturerId: mfg.id,
-        modelId: modelRecord.id,
+        modelId: modelRecord ? modelRecord.id : undefined,
         year: yearExact ? yearExact : (yearMin && yearMax ? { gte: yearMin, lte: yearMax } : undefined),
         variant: variant ? { name: { contains: variant } } : undefined,
       },
@@ -182,8 +181,8 @@ export class EmsalMatcherService {
           listings.push({
             id: `db-spec-${spec.id}-${i}`,
             make,
-            model,
-            variant: spec.variant?.name || 'Standart',
+            model: model || mfg.name,
+            variant: spec.variant?.name || variant || '',
             year: spec.year,
             mileageKm: 50000 + i * 15000,
             price: mp.currentMarketAverage,

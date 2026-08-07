@@ -145,7 +145,6 @@ export class EvaluationService {
       },
     });
 
-    // Send Async Telegram Notification
     this.telegramService.sendEvaluationNotification({
       licensePlate: dto.licensePlate,
       vehicleName: `${spec.year} ${spec.manufacturer.name} ${spec.model.name} (${spec.variant.name})`,
@@ -158,18 +157,17 @@ export class EvaluationService {
       mileage: dto.mileage,
       color: dto.color,
       damageStatus: dto.damageStatus,
-      estimatedValue: calc.cashOffer,
-      minExpectedValue: calc.cashOfferMin,
-      maxExpectedValue: calc.consignmentListingPrice,
+      fairMarketValue: calc.fairMarketValue,
+      finalOfferedPrice: calc.cashOffer,
+      finalConsignmentPrice: calc.consignmentListingPrice,
       userDesiredPrice: dto.userDesiredPrice,
       sellingTimeline: dto.sellingTimeline,
       firstName: dto.firstName,
       lastName: dto.lastName,
       phone: dto.phone,
-      userIp,
-    });
+    }).catch((err) => console.error('Telegram notification error:', err));
 
-    const comparableListings = this.generateComparableListings(spec, calc.fairMarketValue);
+    const comparableListings = this.generateComparableListings(spec, calc.fairMarketValue, calc.cashOfferMin, calc.consignmentListingPrice);
 
     return {
       evaluationId: evaluation.id,
