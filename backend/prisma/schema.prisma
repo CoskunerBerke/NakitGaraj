@@ -229,6 +229,49 @@ model VehicleRequest {
   updatedAt DateTime @updatedAt
 }
 
+model RawVehicleListing {
+  id                      String   @id @default(uuid())
+  source                  String   @default("SAHIBINDEN_HTML")
+  sourceListingId         String
+  sourceFile              String
+  sourceFileHash          String?
+  rawMake                 String
+  rawModel                String
+  rawVariant              String?
+  rawTitle                String?
+  canonicalMake           String
+  canonicalModel          String
+  canonicalVariant        String?
+  canonicalTrim           String?
+  canonicalBodyType       String?
+  canonicalFuelType       String?
+  canonicalTransmission   String?
+  year                    Int
+  mileageKm               Int?
+  price                   Float
+  city                    String?
+  isDamaged               Boolean  @default(false)
+  parseStatus             String   @default("VALID") // "VALID", "QUARANTINED"
+  parseWarnings           String?
+  scrapedAt               DateTime?
+  importedAt              DateTime @default(now())
+  lastSeenAt              DateTime @default(now())
+
+  @@unique([source, sourceListingId])
+}
+
+model QuarantinedListing {
+  id            String   @id @default(uuid())
+  rawListingId  String?
+  rawMake       String?
+  rawModel      String?
+  rawVariant    String?
+  rawTitle      String?
+  sourceFile    String?
+  reason        String
+  quarantinedAt DateTime @default(now())
+}
+
 model VehicleMarketSnapshot {
   id                     String   @id @default(uuid())
   make                   String
@@ -239,17 +282,31 @@ model VehicleMarketSnapshot {
   bodyType               String?
   fuelType               String?
   transmission           String?
+  canonicalMake          String?
+  canonicalModel         String?
+  canonicalVariant       String?
+  canonicalTrim          String?
+  canonicalBodyType      String?
+  canonicalFuelType      String?
+  canonicalTransmission  String?
+  snapshotVersion        String   @default("v2.0")
   matchedLevel           Int      @default(1)
   matchedListingCount    Int      @default(0)
+  uniqueListingCount     Int      @default(0)
   weightedP5             Float    @default(0)
   weightedP35            Float    @default(0)
   weightedP50            Float    @default(0)
   weightedP60            Float    @default(0)
   weightedP95            Float    @default(0)
+  medianMileage          Float?
+  averageMileage         Float?
+  mileageSampleCount     Int      @default(0)
+  mileageAdjustmentSource String?
   iqrLowerBound          Float    @default(0)
   iqrUpperBound          Float    @default(0)
   kmDecayPer10k          Float    @default(0)
   confidenceScore        Int      @default(90)
+  dataQualityScore       Float    @default(100.0)
   snapshotDataJson       String?  // Detailed statistics and listing IDs
   createdAt              DateTime @default(now())
   updatedAt              DateTime @updatedAt

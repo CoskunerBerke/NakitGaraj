@@ -34,6 +34,7 @@ export interface EmsalMatchResult {
   kmDecayPer10k?: number;
   referenceMedianMileage?: number;
   mileageAdjustmentSource?: string;
+  yearAdjustmentSource?: string;
 }
 
 @Injectable()
@@ -82,7 +83,7 @@ export class EmsalMatcherService {
 
       const cleanComps = this.convertSnapshotToCleanListings(snapshot, mileageKm);
 
-      // Requirement 5: If bodyType/fuelType/transmission metadata is missing on snapshot, demote confidence
+      // Section 4 Level 1: Check full metadata presence
       const baseScore = hasFullMetadata ? 95 : 88;
       const dynamicScore = Math.min(hasFullMetadata ? 99 : 92, Math.max(83, baseScore + Math.floor(snapshot.matchedListingCount / 12)));
       const levelAssigned = hasFullMetadata ? 1 : 2;
@@ -103,6 +104,7 @@ export class EmsalMatcherService {
         kmDecayPer10k: snapshot.kmDecayPer10k || 0.0025,
         referenceMedianMileage: referenceMedianMileage || 100000,
         mileageAdjustmentSource: mileageAdjustmentSource || 'DEFAULT_FALLBACK',
+        yearAdjustmentSource: 'NOT_APPLICABLE_EXACT_YEAR',
       };
     }
 
@@ -125,7 +127,7 @@ export class EmsalMatcherService {
         cleanListings: cleanComps,
         confidenceScore: dynamicScore,
         isLimitedComps: false,
-        explanationNote: `Seviye 2: ${make} ${model} ${variant || ''} (${year - 1}-${year + 1}) grubundaki ${snapshotL2.matchedListingCount} adet gerçek emsal ${snapshotL2.snapshotCount} snapshot birleştirilerek ve yıllık %8 fiyat normalizasyonu uygulanarak hesaplandı. (Snapshot ID: ${snapshotL2.id.slice(0, 8)})`,
+        explanationNote: `Seviye 2: ${make} ${model} ${variant || ''} (${year - 1}-${year + 1}) grubundaki ${snapshotL2.matchedListingCount} adet gerçek emsal ${snapshotL2.snapshotCount} snapshot birleştirilerek ve yıllık %${(snapshotL2.yearAdjustmentRate * 100).toFixed(1)} fiyat normalizasyonu (${snapshotL2.yearAdjustmentSource}) uygulanarak hesaplandı. (Snapshot ID: ${snapshotL2.id.slice(0, 8)})`,
         snapshotId: snapshotL2.id,
         weightedP5: snapshotL2.weightedP5,
         weightedP35: snapshotL2.weightedP35,
@@ -135,6 +137,7 @@ export class EmsalMatcherService {
         kmDecayPer10k: snapshotL2.kmDecayPer10k || 0.0025,
         referenceMedianMileage: snapshotL2.medianMileage || 100000,
         mileageAdjustmentSource: snapshotL2.mileageAdjustmentSource || 'DEFAULT_FALLBACK',
+        yearAdjustmentSource: snapshotL2.yearAdjustmentSource,
       };
     }
 
@@ -166,6 +169,7 @@ export class EmsalMatcherService {
         kmDecayPer10k: snapshotL3.kmDecayPer10k || 0.0025,
         referenceMedianMileage: snapshotL3.medianMileage || 100000,
         mileageAdjustmentSource: snapshotL3.mileageAdjustmentSource || 'DEFAULT_FALLBACK',
+        yearAdjustmentSource: snapshotL3.yearAdjustmentSource,
       };
     }
 
@@ -206,6 +210,31 @@ export class EmsalMatcherService {
 
     if (snapshots.length === 0) return null;
 
+    // Learn year price ratio from adjacent snapshots (Section 4 Level 2)
+    let yearAdjustmentRate = 0.08;
+    let yearAdjustmentSource = 'DEFAULT_YEAR_ADJUSTMENT';
+
+    if (snapshots.length >= 2) {
+      const yearMap = new Map<number, number>();
+      for (const s of snapshots) {
+        if (s.weightedP50 > 0) yearMap.set(s.year, s.weightedP50);
+      }
+      const years = Array.from(yearMap.keys()).sort((a, b) => a - b);
+      if (years.length >= 2) {
+        const y1 = years[0];
+        const y2 = years[years.length - 1];
+        const p1 = yearMap.get(y1)!;
+        const p2 = yearMap.get(y2)!;
+        if (y2 > y1 && p1 > 0) {
+          const annualRatio = Math.pow(p2 / p1, 1 / (y2 - y1)) - 1;
+          if (annualRatio > 0.01 && annualRatio < 0.20) {
+            yearAdjustmentRate = annualRatio;
+            yearAdjustmentSource = 'LEARNED_YEAR_ADJUSTMENT';
+          }
+        }
+      }
+    }
+
     let totalWeight = 0;
     let weightedCount = 0;
     let sumP5 = 0;
@@ -219,7 +248,7 @@ export class EmsalMatcherService {
 
     for (const snap of snapshots) {
       const yearDiff = userYear - snap.year;
-      const yearPriceFactor = 1 + (yearDiff * 0.08); // Real year price normalization: +8% if user car is newer, -8% if older
+      const yearPriceFactor = 1 + (yearDiff * yearAdjustmentRate);
       const yearFactor = Math.pow(0.92, Math.abs(yearDiff));
       const weight = (snap.matchedListingCount || 1) * yearFactor;
 
@@ -259,6 +288,8 @@ export class EmsalMatcherService {
       medianMileage,
       mileageAdjustmentSource,
       kmDecayPer10k,
+      yearAdjustmentRate,
+      yearAdjustmentSource,
     };
   }
 

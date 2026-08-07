@@ -27,13 +27,16 @@ async function generateReport() {
   console.log(`====================================================================\n`);
 
   // Dynamic Prisma DB totals
-  const totalSnapshotsInDb = await prisma.vehicleMarketSnapshot.count();
-  const listingsSumResult = await prisma.vehicleMarketSnapshot.aggregate({
-    _sum: { matchedListingCount: true },
+  const totalUniqueRawListings = await prisma.rawVehicleListing.count({
+    where: { parseStatus: 'VALID' },
   });
-  const totalListingsInDb = listingsSumResult._sum.matchedListingCount || 0;
+  const totalQuarantinedListings = await prisma.quarantinedListing.count();
+  const totalLiveSnapshots = await prisma.vehicleMarketSnapshot.count();
 
-  console.log(`✓ Dinamik Veritabanı Toplamları: ${totalSnapshotsInDb.toLocaleString('tr-TR')} snapshot | ${totalListingsInDb.toLocaleString('tr-TR')} ilan\n`);
+  console.log(`✓ Dinamik Veritabanı Toplamları:`);
+  console.log(`  - RawVehicleListing Benzersiz İlan Sayısı: ${totalUniqueRawListings.toLocaleString('tr-TR')} adet`);
+  console.log(`  - QuarantinedListing Karantina Kayıt Sayısı: ${totalQuarantinedListings.toLocaleString('tr-TR')} adet`);
+  console.log(`  - VehicleMarketSnapshot Canlı Snapshot Sayısı: ${totalLiveSnapshots.toLocaleString('tr-TR')} adet\n`);
 
   // 1. Group DB snapshots by distinct brands to ensure 8+ brands and Level 1, 2, 3 mix
   const dbSnapshots = await prisma.vehicleMarketSnapshot.findMany({
@@ -150,7 +153,7 @@ async function generateReport() {
     let evalRes: any;
 
     if (spec) {
-      // Call LIVE EvaluationService API method
+      // Call LIVE EvaluationService API method (preview mode - no DB evaluation creation)
       evalRes = await evaluationService.evaluateVehicle({
         year: car.year,
         manufacturerId: spec.manufacturerId,
@@ -278,10 +281,10 @@ async function generateReport() {
   console.log(`✓ Seviye 3 Eşleşme Sayısı: ${level3Count}`);
   console.log(`✓ Farklı Marka Çeşitliliği: ${brandSet.size} farklı marka (${[...brandSet].slice(0, 10).join(', ')})\n`);
 
-  const reportMarkdown = `# 📊 NakitGaraj 50 Araç Canlı EvaluationService API ve Snapshot Karşılaştırma Raporu
+  const reportMarkdown = `# 📊 NakitGaraj 50 Araç Canlı EvaluationService API ve Canonical Snapshot Karşılaştırma Raporu
 
 > [!IMPORTANT]
-> Bu rapor, **tam 50 test aracı** üzerinde, sahte emsal ilanlar kullanılmadan, veritabanındaki **${totalListingsInDb.toLocaleString('tr-TR')} adet gerçek Sahibinden ilanından üretilmiş ${totalSnapshotsInDb.toLocaleString('tr-TR')} adet aggregate snapshot verisi** ve canlı \`EvaluationService.evaluateVehicle\` API üretim akışı ile oluşturulmuştur.
+> Bu rapor, **tam 50 test aracı** üzerinde, sahte emsal ilanlar kullanılmadan, veritabanındaki **${totalUniqueRawListings.toLocaleString('tr-TR')} adet benzersiz RawVehicleListing kaydı** (${totalQuarantinedListings.toLocaleString('tr-TR')} karantinalı kayıt ayrıştırılmıştır), **${totalLiveSnapshots.toLocaleString('tr-TR')} adet v2.0 süzülmüş canonical snapshot verisi** ve canlı \`EvaluationService.evaluateVehicle\` API üretim akışı ile otomatik olarak oluşturulmuştur.
 
 ## 📈 50 Araç Gerçek API Karşılaştırma Tablosu
 
@@ -298,7 +301,10 @@ ${reportRows.join('\n')}
 - **Yetersiz Veri Sayısı:** ${insufficientDataCount} adet (Veritabanında bulunmayan nadir/egzotik araçlar için fiyat uydurulmamış, \`INSUFFICIENT_DATA\` döndürülmüştür)
 - **Manuel Değerlendirme Gereken Araç Sayısı (<400k TL):** ${manualApprovalCount} adet
 - **Farklı Marka Çeşitliliği:** ${brandSet.size} farklı marka (${[...brandSet].join(', ')})
-- **Dinamik Veritabanı Hacmi:** ${totalListingsInDb.toLocaleString('tr-TR')} ilan / ${totalSnapshotsInDb.toLocaleString('tr-TR')} snapshot (Prisma veritabanı toplamı)
+- **Dinamik Veritabanı Hacmi:**
+  - **RawVehicleListing Benzersiz İlan Sayısı:** ${totalUniqueRawListings.toLocaleString('tr-TR')} adet
+  - **QuarantinedListing Karantina Kayıt Sayısı:** ${totalQuarantinedListings.toLocaleString('tr-TR')} adet
+  - **VehicleMarketSnapshot Canlı Snapshot Sayısı:** ${totalLiveSnapshots.toLocaleString('tr-TR')} adet
 - **9-Alan Birebir Eşitlik Kontrolü:** Snapshot Emsal Sayısı = Hesaplayıcı Emsal Sayısı = API Emsal Sayısı (%100 Birebir Eşit)
 
 ---
