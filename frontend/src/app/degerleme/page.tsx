@@ -1655,48 +1655,6 @@ export default function ValuationWizard() {
 
 
               </div>
-
-              {/* Confidence circular indicator card */}
-              <div className="glass-card rounded-3xl p-6 border border-zinc-800/10 dark:border-white/5 flex flex-col items-center justify-center text-center gap-4">
-                <div className="relative w-32 h-32 flex items-center justify-center">
-                  <svg className="w-full h-full transform -rotate-90" viewBox="0 0 100 100">
-                    <circle
-                      cx="50"
-                      cy="50"
-                      r="40"
-                      stroke="rgba(0,0,0,0.05)"
-                      strokeWidth="8"
-                      fill="transparent"
-                    />
-                    <circle
-                      cx="50"
-                      cy="50"
-                      r="40"
-                      stroke="#ff7a00"
-                      strokeWidth="8"
-                      fill="transparent"
-                      strokeDasharray="251.2"
-                      strokeDashoffset={
-                        251.2 - (251.2 * (typeof valuationResult.results.confidenceScore === 'number' ? valuationResult.results.confidenceScore : Number(String(valuationResult.results.confidenceScore || '90').replace('%', '')))) / 100
-                      }
-                      strokeLinecap="round"
-                    />
-                  </svg>
-                  <div className="absolute flex flex-col items-center justify-center">
-                    <span className="text-3xl font-black text-zinc-900 dark:text-white leading-none">
-                      {typeof valuationResult.results.confidenceScore === 'number'
-                        ? `%${valuationResult.results.confidenceScore}`
-                        : (String(valuationResult.results.confidenceScore).includes('%') ? valuationResult.results.confidenceScore : `%${valuationResult.results.confidenceScore}`)}
-                    </span>
-                    <span className="text-[10px] text-zinc-500 uppercase tracking-widest font-bold mt-1">
-                      {t('wiz.step3.confidence')}
-                    </span>
-                  </div>
-                </div>
-                <p className="text-xs text-zinc-500 dark:text-zinc-400 leading-relaxed max-w-[180px]">
-                  {t('wiz.step3.confidence.desc')}
-                </p>
-              </div>
             </div>
 
 

@@ -281,9 +281,6 @@ export default function DashboardOverview() {
                       <div className="font-bold text-brand-orange">
                         {evalItem.estimatedValue.toLocaleString('tr-TR')} ₺
                       </div>
-                      <span className="text-[9px] text-zinc-500 mt-1 block">
-                        Güven: {evalItem.confidenceScore}%
-                      </span>
                     </div>
                   </div>
                 ))
