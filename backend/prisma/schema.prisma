@@ -228,3 +228,58 @@ model VehicleRequest {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
+
+model VehicleMarketSnapshot {
+  id                     String   @id @default(uuid())
+  make                   String
+  model                  String
+  variant                String?
+  trim                   String?
+  year                   Int
+  bodyType               String?
+  fuelType               String?
+  transmission           String?
+  matchedLevel           Int      @default(1)
+  matchedListingCount    Int      @default(0)
+  weightedP5             Float    @default(0)
+  weightedP35            Float    @default(0)
+  weightedP50            Float    @default(0)
+  weightedP60            Float    @default(0)
+  weightedP95            Float    @default(0)
+  iqrLowerBound          Float    @default(0)
+  iqrUpperBound          Float    @default(0)
+  kmDecayPer10k          Float    @default(0)
+  confidenceScore        Int      @default(90)
+  snapshotDataJson       String?  // Detailed statistics and listing IDs
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
+
+  @@unique([make, model, year, variant])
+}
+
+model VehicleTransactionRecord {
+  id                           String   @id @default(uuid())
+  vehicleSpecificationId       String?
+  licensePlate                 String?
+  calculatedFairMarketValue    Float
+  offeredCashPrice             Float
+  finalPurchasePrice           Float?
+  preparationCost              Float    @default(0)
+  repairCost                   Float    @default(0)
+  holdingDays                  Int?
+  resaleListingPrice           Float?
+  finalResalePrice             Float?
+  cashGrossProfit              Float?
+  cashNetProfit                Float?
+  consignmentListingPrice      Float?
+  consignmentFinalSalePrice    Float?
+  commission                   Float?
+  customerNet                  Float?
+  offerAccepted                Boolean  @default(false)
+  offerRejected                Boolean  @default(false)
+  rejectionReason              String?
+  daysToSell                   Int?
+  createdAt                    DateTime @default(now())
+  updatedAt                    DateTime @updatedAt
+}
+
