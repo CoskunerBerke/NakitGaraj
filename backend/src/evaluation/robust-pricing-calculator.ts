@@ -3,6 +3,15 @@ import { CleanListingItem } from './emsal-matcher.service';
 export interface PricingEngineOutput {
   adjustedP35: number;
   fairMarketValue: number;
+  recommendedPublicListingPrice: number;
+  expectedSalePrice: number;
+  customerDesiredNet: number;
+  aiRecommendedCustomerNet: number;
+  proposedCustomerNet: number;
+  agreedCustomerNet: number;
+  baseCommission: number;
+  performanceMargin: number;
+  expectedCompanyGrossMargin: number;
   cashOffer: number;
   cashOfferMin: number;
   cashOfferMax: number;
@@ -236,6 +245,15 @@ export class RobustPricingCalculator {
     return {
       adjustedP35,
       fairMarketValue,
+      recommendedPublicListingPrice: consignmentListingPrice,
+      expectedSalePrice: expectedConsignmentSalePrice,
+      customerDesiredNet: userDesiredPrice > 0 ? userDesiredPrice : customerConsignmentNet,
+      aiRecommendedCustomerNet: customerConsignmentNet,
+      proposedCustomerNet: customerConsignmentNet,
+      agreedCustomerNet: customerConsignmentNet,
+      baseCommission: consignmentCommission,
+      performanceMargin: 0,
+      expectedCompanyGrossMargin: consignmentCommission,
       cashOffer,
       cashOfferMin,
       cashOfferMax,

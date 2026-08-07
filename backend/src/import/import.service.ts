@@ -31,7 +31,7 @@ export class ImportService {
   async importExcel(buffer: Buffer) {
     try {
       const workbook = new ExcelJS.Workbook();
-      await workbook.xlsx.load(buffer);
+      await workbook.xlsx.load(buffer as any);
       const worksheet = workbook.worksheets[0];
       if (!worksheet) {
         return await this.processImportRows([]);

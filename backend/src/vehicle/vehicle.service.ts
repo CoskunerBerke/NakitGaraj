@@ -52,12 +52,21 @@ export class VehicleService {
   }
 
   async getModels(brandId: string) {
-    return this.withRetry(() =>
+    const models = await this.withRetry(() =>
       this.prisma.model.findMany({
         where: { manufacturerId: brandId },
         orderBy: { name: 'asc' },
       }),
     );
+    return models.filter(m => {
+      const lower = m.name.toLowerCase();
+      return (
+        !lower.includes('sahibinden') &&
+        !lower.includes('fiyatları') &&
+        !lower.includes('.html') &&
+        !/-\s*\d+$/.test(lower)
+      );
+    });
   }
 
   async getVariants(modelId: string) {

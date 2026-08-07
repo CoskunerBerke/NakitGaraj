@@ -25,32 +25,32 @@ jobs:
           cache-dependency-path: backend/package-lock.json
 
       - name: Install Backend Dependencies
-        cwd: backend
+        working-directory: backend
         run: npm ci
 
       - name: Prisma Validate & Generate
-        cwd: backend
+        working-directory: backend
         run: |
           npx prisma validate
           npx prisma generate
 
       - name: Backend Production Security Audit Check (Fail on High/Critical)
-        cwd: backend
+        working-directory: backend
         run: npm audit --omit=dev --audit-level=high
 
       - name: Build Backend Application
-        cwd: backend
+        working-directory: backend
         run: npm run build
 
       - name: Initialize Isolated Test Database
-        cwd: backend
+        working-directory: backend
         run: |
           npx ts-node -e "import { setupIsolatedTestDb } from './src/test/setup_test_db'; setupIsolatedTestDb().then(() => process.exit(0)).catch(e => { console.error(e); process.exit(1); })"
         env:
           DATABASE_URL: "file:./prisma/test_security.db"
 
       - name: Run Supertest Security Penetration Test Suite (36 Tests)
-        cwd: backend
+        working-directory: backend
         run: npx jest src/test/security_penetration_test_suite.spec.ts --runInBand
         env:
           DATABASE_URL: "file:./prisma/test_security.db"
@@ -71,15 +71,15 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
 
       - name: Install Frontend Dependencies
-        cwd: frontend
+        working-directory: frontend
         run: npm ci
 
       - name: Frontend Production Security Audit Check (Fail on High/Critical)
-        cwd: frontend
+        working-directory: frontend
         run: npm audit --omit=dev --audit-level=high
 
       - name: Build Frontend Application
-        cwd: frontend
+        working-directory: frontend
         run: npm run build
 
   acceptance-and-invariants-ci:
@@ -97,11 +97,11 @@ jobs:
           node-version: 20
 
       - name: Install Root Dependencies
-        cwd: backend
+        working-directory: backend
         run: npm ci
 
       - name: Initialize Test Database & Seed Fixtures
-        cwd: backend
+        working-directory: backend
         run: |
           npx prisma generate
           npx ts-node -e "import { setupIsolatedTestDb } from './src/test/setup_test_db'; setupIsolatedTestDb().then(() => process.exit(0)).catch(e => { console.error(e); process.exit(1); })"

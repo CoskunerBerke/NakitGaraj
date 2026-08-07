@@ -1,10 +1,17 @@
-import { PrismaClient } from '@prisma/client';
-import * as fs from 'fs';
 import * as path from 'path';
+import * as fs from 'fs';
 import * as crypto from 'crypto';
 import * as cheerio from 'cheerio';
 
+try { require('dotenv').config({ path: path.resolve(__dirname, '../../.env') }); } catch (e) {}
+if (!process.env.DATABASE_URL || process.env.DATABASE_URL.endsWith('dev.db')) {
+  process.env.DATABASE_URL = 'file:' + path.resolve(__dirname, '../../prisma/dev.db');
+}
+
+import { PrismaClient } from '@prisma/client';
 import { VehicleService } from '../vehicle/vehicle.service';
+
+const prisma = new PrismaClient();
 
 const envSourceDir = process.env.SAHIBINDEN_HTML_DIR;
 const SOURCE_DIR = envSourceDir && envSourceDir.trim() !== '' ? envSourceDir : path.resolve(process.cwd(), 'data/sahibinden_html');
@@ -54,7 +61,7 @@ const KNOWN_HARDWARE_TRIMS = [
   'Easy', 'Street', 'Mirror', 'First Edition M Sport', 'First Edition'
 ];
 
-function parseHeaderMakeModelSubModel(text: string, fallbackFolder: string): { make: string; model: string; subModel: string | null; engineVariant?: string | null; trimPackage?: string | null } {
+export function parseHeaderMakeModelSubModel(text: string, fallbackFolder: string): { make: string; model: string; subModel: string | null; engineVariant?: string | null; trimPackage?: string | null } {
   let clean = text
     .replace(/\.html?/gi, '')
     .replace(/\s*-\s*\d+$/g, '')
@@ -239,7 +246,16 @@ async function runImport() {
     }
   }
 
-  const allHtmlFiles = scanHtmlFilesRecursively(SOURCE_DIR);
+  let allHtmlFiles = scanHtmlFilesRecursively(SOURCE_DIR);
+  const targetBrand = process.env.IMPORT_BRAND || process.env.IMPORT_SUBDIR;
+  if (targetBrand) {
+    allHtmlFiles = allHtmlFiles.filter(p => {
+      const rel = path.relative(SOURCE_DIR, p);
+      return rel.split(path.sep)[0].toLowerCase() === targetBrand.toLowerCase();
+    });
+    console.log(`✓ Filtre uygulandı: Sadece [${targetBrand}] klasöründeki ${allHtmlFiles.length} HTML dosyası işlenecek.`);
+  }
+
   const currentFilesMap = new Map<string, string>(); // relativePath -> absolutePath
 
   allHtmlFiles.forEach(absP => {
@@ -341,7 +357,7 @@ async function runImport() {
     process.exit(0);
   }
 
-  const filesToProcess = isIncremental ? [...newFilePaths, ...changedFilePaths] : allHtmlFiles;
+  const filesToProcess = targetBrand ? allHtmlFiles : (isIncremental ? [...newFilePaths, ...changedFilePaths] : allHtmlFiles);
 
   if (filesToProcess.length === 0) {
     console.log(`NO_NEW_HTML_FILES`);
@@ -581,6 +597,19 @@ async function runImport() {
     }
   }
 
+  // Print 10-row sample table
+  if (recordsToInsert.length > 0 || recordsToUpdate.length > 0) {
+    console.log(`\n====================================================================`);
+    console.log(`  ÖRNEK 10 İLAN SATIRI (FORD ARTIMLI VERİ AKTARIMI SİMÜLASYONU)`);
+    console.log(`====================================================================`);
+    console.log(`İlan ID | Marka | Seri/Model | Motor/Versiyon/Paket | Yıl | KM | Renk | Fiyat | Kaynak Dosya`);
+    const allRecords = [...recordsToInsert, ...recordsToUpdate];
+    allRecords.slice(0, 10).forEach(r => {
+      console.log(`${r.sourceListingId || r.id} | ${r.rawMake || 'Ford'} | ${r.rawModel || 'Focus'} | ${r.rawVariant || '-'} | ${r.year || '-'} | ${r.mileageKm || '-'} | ${r.color || '-'} | ${r.price ? r.price.toLocaleString('tr-TR') + ' TL' : '0 TL'} | ${r.sourceFile || 'Ford.html'}`);
+    });
+    console.log(`====================================================================\n`);
+  }
+
   // Insert new records in chunks
   if (recordsToInsert.length > 0) {
     const chunkSize = 5000;
@@ -588,6 +617,10 @@ async function runImport() {
       const chunk = recordsToInsert.slice(i, i + chunkSize);
       await prisma.rawVehicleListing.createMany({ data: chunk });
     }
+
+    // Immediately upsert VehicleSpecifications for newly added raw listings
+    const vehicleService = new VehicleService(prisma as any, {} as any);
+    await vehicleService.upsertVehicleSpecificationsForRawListings(recordsToInsert);
   }
 
   // Synchronize new specs and invalidate targeted cache
@@ -630,4 +663,6 @@ async function runImport() {
   console.log(`- Güncellenen snapshot grupları: ${affectedVehicleGroups.size}\n`);
 }
 
-runImport().finally(() => prisma.$disconnect());
+if (require.main === module) {
+  runImport().finally(() => prisma.$disconnect());
+}
