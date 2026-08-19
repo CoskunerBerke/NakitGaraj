@@ -59,3 +59,7 @@ artifacts_screenshots/
 # Importer turevi gecici durum dosyalari (uretilen, kaynak degil)
 backend/data/import-state/db_listings_checksum.json
 frontend/test-results/
+
+# Kalibrasyon: komutla yeniden uretilen dosyalar (gercek saha verisi icerir)
+backend/data/calibration/calibration_cases.csv
+RAPOR_KALIBRASYON.md

@@ -25,7 +25,9 @@
     "import:watch": "ts-node src/scripts/watch_import.ts",
     "rebuild:listings": "ts-node src/scripts/rebuild_raw_listings_v3.ts",
     "rebuild:listings:dry": "ts-node src/scripts/rebuild_raw_listings_v3.ts --dry-run",
-    "report:50-cars": "ts-node src/scripts/generate_50_car_report_v3.ts"
+    "report:50-cars": "ts-node src/scripts/generate_50_car_report_v3.ts",
+    "calibration:init": "ts-node src/scripts/calibration_report.ts --init",
+    "calibration:report": "ts-node src/scripts/calibration_report.ts"
   },
   "dependencies": {
     "@napi-rs/canvas": "^1.0.3",

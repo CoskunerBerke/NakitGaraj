@@ -1,0 +1,22 @@
+# ORNEK DOSYA - gercek arac/musteri verisi icermez.
+# Kullanim:
+#   npm run calibration:init     -> calibration_cases.csv sablonunu olusturur
+#   (bu dosyayi kopyalayip da baslayabilirsin)
+#   npm run calibration:report   -> RAPOR_KALIBRASYON.md uretir
+#
+# SEN DOLDUR (arac kimligi): id, make, model, engine, trim, year, km, damage
+#   engine : motor kodu ("320i", "1.6 Multijet") - katalogdaki gibi
+#   trim   : paket ("M Sport", "Urban") - bilinmiyorsa bos birak
+#   damage : 0 = hatasiz, 0.08 = boyali/hasarli, 0.25 = agir hasarli
+#
+# SEN DOLDUR (gercek saha verisi) - bilmediklerini BOS birak:
+#   dealerMarketValue     : galericinin gercek piyasa degeri tahmini
+#   dealerCashOffer       : galericinin verdigi nakit alis fiyati
+#   realisticListingPrice : gercekci ilan fiyati
+#   actualSalePrice       : gerceklesen satis fiyati (varsa)
+#   actualDaysToSell      : satis suresi, gun (varsa)
+#
+# Sistem degerleri ve sapmalar OTOMATIK hesaplanir; bu dosyaya geri yazilmaz.
+#
+id,make,model,engine,trim,year,km,damage,dealerMarketValue,dealerCashOffer,realisticListingPrice,actualSalePrice,actualDaysToSell,notes
+ORNEK-1,Ornek Marka,Ornek Model,1.6 Ornek,Ornek Paket,2020,100000,0,1.000.000,900.000,1.020.000,990.000,30,bu satir ornektir - silin
