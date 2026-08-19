@@ -60,6 +60,38 @@ interface PricingCoreInput {
   transmissionKnownShare: number;
   /** Hedef aracin motoru biliniyor mu */
   targetEngineKnown: boolean;
+  /**
+   * Hedef kilometrenin, emsal havuzunun gozlenen [p10, p90] araliginin
+   * DISINDA kalan mesafesi (km). Aralik icindeyse 0.
+   */
+  distanceOutsideObservedRange: number;
+}
+
+/**
+ * Kilometre ekstrapolasyon belirsizligi cezasi.
+ *
+ * Gozlenen km araligi ICINDE ceza yoktur. Aralik disina cikildikca kademeli
+ * (surekli, cliff'siz) artan bir ceza uygulanir: uzak bir kilometreye tasinan
+ * tahmin, fiyat yonu dogru sonimlense bile daha belirsizdir.
+ *
+ * Egri: 0km->0, 25k->4, 75k->10, 150k->18, 300k+->24 (dogrusal ara degerler)
+ */
+export function mileageExtrapolationPenalty(distanceKm: number): number {
+  const d = Math.max(0, distanceKm || 0);
+  if (d === 0) return 0;
+  const curve: Array<[number, number]> = [
+    [0, 0],
+    [25_000, 4],
+    [75_000, 10],
+    [150_000, 18],
+    [300_000, 24],
+  ];
+  for (let i = 1; i < curve.length; i++) {
+    const [x0, y0] = curve[i - 1];
+    const [x1, y1] = curve[i];
+    if (d <= x1) return y0 + ((d - x0) / (x1 - x0)) * (y1 - y0);
+  }
+  return curve[curve.length - 1][1];
 }
 
 /**
@@ -76,6 +108,8 @@ export function computeConfidence(input: {
   freshnessScore: number;
   dispersion: number;
   targetEngineKnown: boolean;
+  /** Gozlenen km araligi disinda kalan mesafe (km); aralik icinde 0 */
+  distanceOutsideObservedRange?: number;
 }): number {
   const LEVEL_BASE: Record<number, number> = { 1: 94, 2: 80, 3: 64 };
   let score = LEVEL_BASE[input.matchedLevel] ?? 40;
@@ -103,6 +137,11 @@ export function computeConfidence(input: {
   if (input.transmissionKnownShare < 0.5) score = Math.min(score, 90);
   // Hedef aracin motoru bilinmiyorsa fiyat model ailesini temsil eder.
   if (!input.targetEngineKnown) score = Math.min(score, 60);
+
+  // 7) Kilometre ekstrapolasyon belirsizligi.
+  // Tavanlardan SONRA uygulanir; aksi halde tavan cezayi yutardi.
+  // Diger bilesenlerin yerine gecmez, onlara EK belirsizlik olarak calisir.
+  score -= mileageExtrapolationPenalty(input.distanceOutsideObservedRange || 0);
 
   return Math.max(0, Math.min(97, Math.round(score)));
 }
@@ -377,6 +416,7 @@ export class RobustPricingCalculator {
       freshnessScore,
       dispersion,
       targetEngineKnown: input.targetEngineKnown,
+      distanceOutsideObservedRange: input.distanceOutsideObservedRange,
     });
 
     const expectedCompanyGrossMargin = expectedSalePrice - agreedCustomerNet;
@@ -515,6 +555,8 @@ export class RobustPricingCalculator {
         fuelKnownShare,
         transmissionKnownShare,
         targetEngineKnown,
+        // Agregat snapshot yolunda gozlenen km dagilimi yoktur; ceza uygulanmaz.
+        distanceOutsideObservedRange: 0,
       });
     }
 
@@ -550,6 +592,7 @@ export class RobustPricingCalculator {
       fuelKnownShare,
       transmissionKnownShare,
       targetEngineKnown,
+      distanceOutsideObservedRange: 0,
     });
 
     return {
@@ -698,6 +741,16 @@ export class RobustPricingCalculator {
       if (slopeTrust < 1) mileageAdjustmentSource = 'LEARNED_SHRUNK_TO_DEFAULT';
     }
 
+    // Zaten hesaplanmis kmP10/kmP90 uzerinden turetilir; yeniden hesaplanmaz.
+    const distanceOutsideObservedRange =
+      kmSorted.length === 0
+        ? 0
+        : userMileage > kmP90
+          ? userMileage - kmP90
+          : userMileage < kmP10
+            ? kmP10 - userMileage
+            : 0;
+
     const damping = PRICING_LIMITS.kmExtrapolationDamping;
     const effectiveUserMileage =
       kmSorted.length === 0
@@ -737,6 +790,7 @@ export class RobustPricingCalculator {
       fuelKnownShare,
       transmissionKnownShare,
       targetEngineKnown,
+      distanceOutsideObservedRange,
     });
 
     const kmValues = withKm.map((w) => w.listing.mileageKm).sort((a, b) => a - b);
@@ -781,6 +835,10 @@ export class RobustPricingCalculator {
         mileageAdjustmentSource,
         kmSupportP10: Math.round(kmP10),
         kmSupportP90: Math.round(kmP90),
+        distanceOutsideObservedRange: Math.round(distanceOutsideObservedRange),
+        extrapolationConfidencePenalty: Number(
+          mileageExtrapolationPenalty(distanceOutsideObservedRange).toFixed(2),
+        ),
         effectiveTargetKm: Math.round(effectiveUserMileage),
         kmExtrapolated: userMileage > kmP90 || userMileage < kmP10,
         mileageAdjustmentAmount: mileageAdjustment,

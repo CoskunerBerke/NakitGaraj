@@ -2,7 +2,7 @@ import { RobustPricingCalculator } from './robust-pricing-calculator';
 import { EmsalMatcherService, CleanListingItem } from './emsal-matcher.service';
 import { PrismaClient } from '@prisma/client';
 import { PRICING_LIMITS, getSegment } from './pricing-config';
-import { computeConfidence } from './robust-pricing-calculator';
+import { computeConfidence, mileageExtrapolationPenalty } from './robust-pricing-calculator';
 import {
   deriveFromSource,
   deriveFuelFromEngineCode,
@@ -489,6 +489,108 @@ describe('NakitGaraj Fiyatlama Motoru V3', () => {
         transmissionKnownShare: 0, freshnessScore: 0.25, dispersion: 0.7, targetEngineKnown: true,
       });
       expect(worst).toBeLessThan(50);
+    });
+  });
+
+  /* ================================================================ */
+  /* G3. Km ekstrapolasyonunun guven skoruna yansimasi                 */
+  /* ================================================================ */
+
+  describe('G3. Kilometre ekstrapolasyonu güven skoruna yansır', () => {
+    /** Gözlenen km aralığı ~40.000–160.000 olan güçlü bir L1 havuzu */
+    const strongPool = () =>
+      comps(48, 1_500_000).map((l, i) => ({
+        ...l,
+        mileageKm: 35_000 + i * 3_000, // 35.000 - 176.000
+      }));
+
+    const at = (km: number) => priceIt(strongPool(), { userMileage: km });
+
+    test('G3-A. Aralık İÇİNDE ceza yoktur (p10/median/p90 aynı davranış)', () => {
+      const inside = [60_000, 105_000, 150_000].map(at);
+      for (const r of inside) {
+        expect(r.pricingAudit.kmExtrapolated).toBe(false);
+        expect(r.pricingAudit.distanceOutsideObservedRange).toBe(0);
+        expect(r.pricingAudit.extrapolationConfidencePenalty).toBe(0);
+      }
+      // Aralik ici confidence, cezasiz referansla birebir ayni
+      const ref = computeConfidence({
+        matchedLevel: 1, listingCount: 48, engineExactShare: 1, fuelKnownShare: 1,
+        transmissionKnownShare: 1, freshnessScore: 0.9, dispersion: inside[1].pricingAudit.dispersion,
+        targetEngineKnown: true,
+      });
+      const withZero = computeConfidence({
+        matchedLevel: 1, listingCount: 48, engineExactShare: 1, fuelKnownShare: 1,
+        transmissionKnownShare: 1, freshnessScore: 0.9, dispersion: inside[1].pricingAudit.dispersion,
+        targetEngineKnown: true, distanceOutsideObservedRange: 0,
+      });
+      expect(withZero).toBe(ref);
+    });
+
+    test('G3-B. p90+25k: güven düşer ama güçlü L1 veride gereksiz MANUAL olmaz', () => {
+      const p90 = at(105_000).pricingAudit.kmSupportP90;
+      const inRange = at(105_000);
+      const near = at(p90 + 25_000);
+      expect(near.confidenceScore).toBeLessThan(inRange.confidenceScore);
+      expect(near.confidenceScore).toBeGreaterThan(70); // manuel kapisina dusmez
+    });
+
+    test('G3-C. p90+75k: p90+25k’den daha düşük güven', () => {
+      const p90 = at(105_000).pricingAudit.kmSupportP90;
+      expect(at(p90 + 75_000).confidenceScore).toBeLessThan(
+        at(p90 + 25_000).confidenceScore,
+      );
+    });
+
+    test('G3-D. p90+150k: p90+75k’den daha düşük güven', () => {
+      const p90 = at(105_000).pricingAudit.kmSupportP90;
+      expect(at(p90 + 150_000).confidenceScore).toBeLessThan(
+        at(p90 + 75_000).confidenceScore,
+      );
+    });
+
+    test('G3-E. Uzaklık arttıkça güven ASLA yükselmez (monoton azalan)', () => {
+      const p90 = at(105_000).pricingAudit.kmSupportP90;
+      const seq = [0, 10_000, 25_000, 50_000, 75_000, 110_000, 150_000, 220_000, 400_000]
+        .map((d) => at(p90 + d).confidenceScore);
+      for (let i = 1; i < seq.length; i++) {
+        expect(seq[i]).toBeLessThanOrEqual(seq[i - 1]);
+      }
+      // ceza egrisi de surekli ve monoton
+      const pen = [0, 25_000, 75_000, 150_000, 300_000, 900_000].map(mileageExtrapolationPenalty);
+      expect(pen).toEqual([0, 4, 10, 18, 24, 24]);
+      for (let i = 1; i < pen.length; i++) expect(pen[i]).toBeGreaterThanOrEqual(pen[i - 1]);
+    });
+
+    test('G3-F. Fiyat çıktıları DEĞİŞMEZ (yalnız confidence değişir)', () => {
+      // Ayni girdide ceza uygulanan ve uygulanmayan iki senaryo: fiyat alanlari
+      // ceza mekanizmasindan etkilenmemeli. Guven skoru fiyat matematigine
+      // geri beslenmez (riskRate baseConfidenceScore'dan turer).
+      const pool = strongPool();
+      const far = priceIt(pool, { userMileage: 300_000 });
+      const farHighBase = priceIt(pool, { userMileage: 300_000, baseConfidenceScore: 92 });
+      for (const k of [
+        'fairMarketValue', 'expectedSalePrice', 'cashOffer',
+        'consignmentListingPrice', 'customerConsignmentNet',
+      ] as const) {
+        expect(far[k]).toBe(farHighBase[k]);
+      }
+      // ceza gercekten uygulanmis olmali
+      expect(far.pricingAudit.extrapolationConfidencePenalty).toBeGreaterThan(0);
+    });
+
+    test('G3-G. Ceza diğer bileşenlerin yerine geçmez, üzerine eklenir', () => {
+      const base = {
+        matchedLevel: 1 as const, listingCount: 48, engineExactShare: 1, fuelKnownShare: 1,
+        transmissionKnownShare: 1, freshnessScore: 1, dispersion: 0.1, targetEngineKnown: true,
+      };
+      const clean = computeConfidence(base);
+      const extrapolated = computeConfidence({ ...base, distanceOutsideObservedRange: 75_000 });
+      const staleOnly = computeConfidence({ ...base, freshnessScore: 0.3 });
+      const both = computeConfidence({ ...base, freshnessScore: 0.3, distanceOutsideObservedRange: 75_000 });
+      expect(clean - extrapolated).toBeCloseTo(10, 0);
+      expect(both).toBeLessThan(staleOnly);
+      expect(both).toBeLessThan(extrapolated);
     });
   });
 
