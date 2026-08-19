@@ -156,6 +156,21 @@ export const PRICING_LIMITS = {
   /** Tek bir ilanin km duzeltmesi, fiyatinin bu oranindan fazlasini degistiremez */
   maxKmAdjustmentRatio: 0.35,
 
+  /**
+   * Ogrenilen km egiminin guvenilirligi, havuzdaki km yayilimina baglidir.
+   * p10-p90 yayilimi bu degere ulastiginda egime tam guvenilir; daha dar
+   * havuzlarda egim varsayilana dogru buzulur (dar aralikta olculen egim
+   * gurultudur ve uzak km degerlerine tasinamaz).
+   */
+  kmSlopeFullTrustSpread: 60_000,
+
+  /**
+   * Hedef kilometre havuzun gozlenen [p10, p90] araligi disindaysa, disarida
+   * kalan mesafeye egimin yalnizca bu orani uygulanir (ekstrapolasyon
+   * sonimlemesi). Aralik ICINDE davranis degismez.
+   */
+  kmExtrapolationDamping: 0.35,
+
   /** Gecerli ilan fiyat araligi (TL) */
   priceSanityRange: [50_000, 150_000_000] as [number, number],
 };

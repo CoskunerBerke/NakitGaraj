@@ -676,6 +676,38 @@ export class RobustPricingCalculator {
       mileageAdjustmentSource = 'NO_KM_DATA';
     }
 
+    // --- Km egimi guvenilirligi ve ekstrapolasyon sinirlamasi ---
+    // Dar km araligina sahip havuzlarda (orn. cikis yili araclari: 6.000-40.000 km)
+    // regresyon egimi gurultuludur ve sinir degerine dayanabilir. Bu egimi
+    // havuzun disindaki bir kilometreye tasimak, yeni model bir araci eski
+    // modelden ucuz gosterebilir. Bu yuzden:
+    //   1) egim, km yayilimi dar oldukca varsayilana dogru buzulur,
+    //   2) gozlenen [p10, p90] araliginin disinda kalan mesafeye egimin
+    //      yalnizca bir kismi uygulanir.
+    // Aralik ICINDE hesaplama degismez.
+    const kmSorted = withKm.map((w) => w.listing.mileageKm).sort((a, b) => a - b);
+    const kmP10 = kmSorted.length ? this.quantile(kmSorted, 0.1) : 0;
+    const kmP90 = kmSorted.length ? this.quantile(kmSorted, 0.9) : 0;
+    const kmSupportSpread = Math.max(0, kmP90 - kmP10);
+
+    if (mileageAdjustmentSource === 'LEARNED_FROM_LISTINGS') {
+      const slopeTrust = clamp(kmSupportSpread / PRICING_LIMITS.kmSlopeFullTrustSpread, 0, 1);
+      learnedRatePer10k =
+        slopeTrust * learnedRatePer10k +
+        (1 - slopeTrust) * PRICING_LIMITS.defaultKmDecayPer10k;
+      if (slopeTrust < 1) mileageAdjustmentSource = 'LEARNED_SHRUNK_TO_DEFAULT';
+    }
+
+    const damping = PRICING_LIMITS.kmExtrapolationDamping;
+    const effectiveUserMileage =
+      kmSorted.length === 0
+        ? userMileage
+        : userMileage > kmP90
+          ? kmP90 + (userMileage - kmP90) * damping
+          : userMileage < kmP10
+            ? kmP10 - (kmP10 - userMileage) * damping
+            : userMileage;
+
     // 3) Her emsali hedef kilometreye indirge.
     //    Km bilgisi olmayan ilan duzeltilmez, agirligi dusurulur.
     const normalized = usable.map((w) => {
@@ -684,7 +716,7 @@ export class RobustPricingCalculator {
       if (!hasKm) {
         return { price: l.price, weight: w.weight * 0.5 };
       }
-      const deltaKm = l.mileageKm - userMileage;
+      const deltaKm = l.mileageKm - effectiveUserMileage;
       const ratio = clamp(
         (deltaKm / 10000) * learnedRatePer10k,
         -PRICING_LIMITS.maxKmAdjustmentRatio,
@@ -713,12 +745,15 @@ export class RobustPricingCalculator {
       : undefined;
     const kmDelta =
       referenceMedianMileage !== undefined ? userMileage - referenceMedianMileage : 0;
+    // Uygulanan duzeltme, sonimlenmis hedef km uzerinden raporlanir.
+    const effectiveKmDelta =
+      referenceMedianMileage !== undefined ? effectiveUserMileage - referenceMedianMileage : 0;
     const mileageAdjustment =
       referenceMedianMileage !== undefined
         ? -Math.round(
             basePrice *
               clamp(
-                (kmDelta / 10000) * learnedRatePer10k,
+                (effectiveKmDelta / 10000) * learnedRatePer10k,
                 -PRICING_LIMITS.maxKmAdjustmentRatio,
                 PRICING_LIMITS.maxKmAdjustmentRatio,
               ),
@@ -744,6 +779,10 @@ export class RobustPricingCalculator {
         usedTrimDistribution: params.usedTrimDistribution || {},
         learnedMileageRatePer10k: learnedRatePer10k,
         mileageAdjustmentSource,
+        kmSupportP10: Math.round(kmP10),
+        kmSupportP90: Math.round(kmP90),
+        effectiveTargetKm: Math.round(effectiveUserMileage),
+        kmExtrapolated: userMileage > kmP90 || userMileage < kmP10,
         mileageAdjustmentAmount: mileageAdjustment,
         referenceMedianMileage,
         listingsWithKm: withKm.length,

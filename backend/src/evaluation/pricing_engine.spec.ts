@@ -179,6 +179,101 @@ describe('NakitGaraj Fiyatlama Motoru V3', () => {
       expect(damaged.cashOffer).toBeLessThan(clean.cashOffer);
     });
 
+    test('C4. Havuzun km aralığı DIŞINDA eğim tam uygulanmaz (ekstrapolasyon sönümlemesi)', () => {
+      // Cikis yili havuzu: dar km araligi (5k-40k). Egim bu aralikta olculur;
+      // 150k km'ye tasinirken tam egim uygulanamaz.
+      const pool = comps(40, 6_000_000).map((l, i) => ({
+        ...l,
+        mileageKm: 5_000 + i * 900, // 5.000 - 40.100 km
+        price: Math.round(6_000_000 * (1 - i * 0.004)),
+      }));
+      const inSupport = priceIt(pool, { userMileage: 20_000 });
+      const farOutside = priceIt(pool, { userMileage: 150_000 });
+
+      // Yon dogru kalmali: yuksek km daha ucuz
+      expect(farOutside.fairMarketValue).toBeLessThan(inSupport.fairMarketValue);
+      // Ama sinirsiz ekstrapolasyon olmamali
+      expect(farOutside.pricingAudit.kmExtrapolated).toBe(true);
+      expect(farOutside.pricingAudit.effectiveTargetKm).toBeLessThan(150_000);
+      expect(farOutside.pricingAudit.effectiveTargetKm).toBeGreaterThan(
+        farOutside.pricingAudit.kmSupportP90,
+      );
+    });
+
+    test('C5. Km aralığı İÇİNDE davranış değişmez (sönümleme devreye girmez)', () => {
+      const pool = comps(40, 1_200_000, { km: 100_000 }).map((l, i) => ({
+        ...l,
+        mileageKm: 40_000 + i * 4_000, // 40k - 196k
+      }));
+      const r = priceIt(pool, { userMileage: 100_000 });
+      expect(r.pricingAudit.kmExtrapolated).toBe(false);
+      expect(r.pricingAudit.effectiveTargetKm).toBe(100_000);
+    });
+
+    test('C6. Dar km yayılımında öğrenilen eğim varsayılana doğru büzülür', () => {
+      // Cok dik ama dar aralikta olculmus egim, oldugu gibi kullanilmamali.
+      const narrow = comps(40, 6_000_000).map((l, i) => ({
+        ...l,
+        mileageKm: 10_000 + i * 200, // 10.000 - 17.800 km (cok dar)
+        price: Math.round(6_000_000 * (1 - i * 0.02)), // cok dik dusus
+      }));
+      const wide = comps(40, 6_000_000).map((l, i) => ({
+        ...l,
+        mileageKm: 10_000 + i * 4_000, // 10.000 - 166.000 km (genis)
+        price: Math.round(6_000_000 * (1 - i * 0.02)),
+      }));
+      const rNarrow = priceIt(narrow, { userMileage: 15_000 });
+      const rWide = priceIt(wide, { userMileage: 80_000 });
+      expect(rNarrow.pricingAudit.mileageAdjustmentSource).toBe('LEARNED_SHRUNK_TO_DEFAULT');
+      expect(rNarrow.kmDecayPer10k!).toBeLessThan(rWide.kmDecayPer10k!);
+    });
+
+    test('C7. Ceteris paribus: emsal medyanları yeni yılı desteklediğinde damping sıralamayı bozmaz', () => {
+      // KAPSAM UYARISI: Bu test GLOBAL bir "yeni yıl her zaman daha pahalıdır"
+      // invariantı DEĞİLDİR. Yalnızca aşağıdaki koşulların TAMAMI sağlandığında
+      // geçerli bir regresyondur:
+      //   - aynı marka/model/motor/paket/yakıt/şanzıman (comps() aynı variant üretir)
+      //   - aynı hedef kilometre (60.000)
+      //   - benzer veri kalitesi (aynı emsal sayısı, aynı tazelik/ağırlık)
+      //   - ve ham emsal medyanları yeni yılı DAHA YÜKSEK destekliyor
+      // Gerçek piyasa verisi tersini söylüyorsa algoritma zorla monotonlaştırılmaz;
+      // deep audit'te 51 yıl çiftinden ham veriyle çelişen 0 tanesi bulunmuştur.
+      //
+      // Regresyon: dar km havuzlu yeni model, tavana dayanan eğim yüzünden
+      // eski modelin ALTINA düşüyordu (BMW 520i 2024/2025, ~760.000 TL sapma).
+      const older = comps(40, 6_000_000).map((l, i) => ({
+        ...l, year: 2024, mileageKm: 10_000 + i * 900,
+      }));
+      const newer = comps(40, 6_300_000).map((l, i) => ({
+        ...l, year: 2025, mileageKm: 5_000 + i * 850,
+      }));
+
+      // Ön koşulu testin kendisi doğrular: ham medyanlar yeni yılı destekliyor mu?
+      const rawMedian = (pool: CleanListingItem[]) => {
+        const s2 = pool.map((l) => l.price).sort((a2, b2) => a2 - b2);
+        return s2[Math.floor(s2.length / 2)];
+      };
+      expect(rawMedian(newer)).toBeGreaterThan(rawMedian(older));
+
+      const a = priceIt(older, { userYear: 2024, userMileage: 60_000 });
+      const b = priceIt(newer, { userYear: 2025, userMileage: 60_000 });
+      expect(b.fairMarketValue).toBeGreaterThan(a.fairMarketValue);
+    });
+
+    test('C8. Ham veri eski yılı destekliyorsa sistem zorla monotonlaştırmaz', () => {
+      // Ters yon: piyasa gercekten eski yili daha yuksek fiyatliyorsa
+      // (orn. yeni yilda donanim dususu / stok baskisi), sistem bunu ezmemeli.
+      const older = comps(40, 6_300_000).map((l, i) => ({
+        ...l, year: 2024, mileageKm: 20_000 + i * 900,
+      }));
+      const newer = comps(40, 6_000_000).map((l, i) => ({
+        ...l, year: 2025, mileageKm: 20_000 + i * 900,
+      }));
+      const a = priceIt(older, { userYear: 2024, userMileage: 60_000 });
+      const b = priceIt(newer, { userYear: 2025, userMileage: 60_000 });
+      expect(b.fairMarketValue).toBeLessThan(a.fairMarketValue);
+    });
+
     test('C3. Km bilgisi olmayan emsal için varsayılan km UYDURULMAZ', () => {
       const pool = comps(20, 1_000_000, { km: 150_000 }).map((l, i) =>
         i % 2 === 0 ? { ...l, mileageKm: 0 } : l,
