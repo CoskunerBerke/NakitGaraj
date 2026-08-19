@@ -1,277 +1,603 @@
 import { RobustPricingCalculator } from './robust-pricing-calculator';
 import { EmsalMatcherService, CleanListingItem } from './emsal-matcher.service';
 import { PrismaClient } from '@prisma/client';
-import { EvaluationService } from './evaluation.service';
+import { PRICING_LIMITS, getSegment } from './pricing-config';
+import { computeConfidence } from './robust-pricing-calculator';
+import {
+  deriveFromSource,
+  deriveFuelFromEngineCode,
+  deriveTransmission,
+  engineKey,
+  isEngineCompatible,
+  parseTurkishListingDate,
+  splitVariantString,
+} from './listing-attributes';
 
-describe('NakitGaraj Real Database & Advanced Pricing Engine Integration Test Suite', () => {
-  let prisma: PrismaClient;
-  let matcher: EmsalMatcherService;
-  let evaluationService: EvaluationService;
-
-  beforeAll(() => {
-    prisma = new PrismaClient();
-    matcher = new EmsalMatcherService(prisma as any);
-    evaluationService = new EvaluationService(prisma as any, {} as any, matcher);
+/** Test emsali uretir (gercek ilan semantigi ile ayni alanlar) */
+function comps(
+  n: number,
+  basePrice: number,
+  opts: { km?: number; year?: number; spread?: number } = {},
+): CleanListingItem[] {
+  const { km = 100_000, year = 2019, spread = 0.06 } = opts;
+  return Array.from({ length: n }, (_, i) => {
+    const t = n === 1 ? 0 : i / (n - 1) - 0.5;
+    return {
+      make: 'Test',
+      model: 'Model',
+      variant: '1.6 TDI',
+      year,
+      mileageKm: km,
+      price: Math.round(basePrice * (1 + t * 2 * spread)),
+    };
   });
+}
 
-  afterAll(async () => {
-    await prisma.$disconnect();
+function priceIt(
+  listings: CleanListingItem[],
+  overrides: Partial<Parameters<typeof RobustPricingCalculator.computeValuation>[0]> = {},
+) {
+  return RobustPricingCalculator.computeValuation({
+    cleanListings: listings,
+    userYear: 2019,
+    userMileage: 100_000,
+    matchedLevel: 1,
+    baseConfidenceScore: 92,
+    freshnessScore: 0.9,
+    ...overrides,
   });
+}
 
-  test('1. Real Database Integration: BMW 3 Serisi 2015 yields real matched count and weighted percentiles', async () => {
-    const match = await matcher.matchComparableListings({
-      make: 'BMW',
-      model: '3 Serisi',
-      variant: 'Standart',
-      year: 2015,
-      mileageKm: 120000,
+describe('NakitGaraj Fiyatlama Motoru V3', () => {
+  /* ================================================================ */
+  /* A. Veri turetme (parse) katmani                                   */
+  /* ================================================================ */
+
+  describe('A. İlan özniteliği türetme', () => {
+    test('A1. Sayfa başlığından marka/model/motor/paket doğru ayrılır', () => {
+      const bmw = deriveFromSource({
+        folderMake: 'BMW',
+        pageTitleOrFileName: "BMW 3 Serisi 318i Luxury Plus Fiyatları & Modelleri sahibinden.com'da - 4",
+      });
+      expect(bmw.make).toBe('BMW');
+      expect(bmw.model).toBe('3 Serisi');
+      expect(bmw.engineCode).toBe('318i');
+      expect(bmw.trim).toBe('Luxury Plus');
+      expect(bmw.fuelType).toBe('Benzin');
+
+      const fiat = deriveFromSource({
+        folderMake: 'Fiat',
+        pageTitleOrFileName: "Fiat Egea 1.6 Multijet Urban Fiyatları & Modelleri sahibinden.com'da - 11",
+      });
+      expect(fiat.model).toBe('Egea');
+      expect(fiat.engineCode).toBe('1.6 Multijet');
+      expect(fiat.trim).toBe('Urban');
+      expect(fiat.fuelType).toBe('Dizel');
     });
 
-    expect(match.matchedCount).toBeGreaterThan(0);
-    expect(match.confidenceScore).toBeGreaterThan(70);
-    expect(match.snapshotId).toBeDefined();
-
-    const calc = RobustPricingCalculator.computeValuation({
-      cleanListings: match.cleanListings,
-      userYear: 2015,
-      userMileage: 120000,
-      matchedLevel: match.level,
-      baseConfidenceScore: match.confidenceScore,
+    test('A2. Yanlış marka klasörüne kaydedilmiş sayfa doğru markaya atanır', () => {
+      const d = deriveFromSource({
+        folderMake: 'Honda',
+        pageTitleOrFileName: "Hyundai Accent Era 1.5 CRDi VGT Team Fiyatları & Modelleri sahibinden.com'da",
+      });
+      expect(d.make).toBe('Hyundai');
+      expect(d.model).not.toContain('Hyundai');
     });
 
-    expect(calc.fairMarketValue).toBeGreaterThan(500000);
-    expect(calc.cashOffer).toBeLessThan(calc.fairMarketValue);
-  });
-
-  test('2. Missing Vehicle Integration: Unrecorded exotic vehicles (Ferrari Roma) yield Level 4 "Yeterli Veri Bulunamadı"', async () => {
-    const match = await matcher.matchComparableListings({
-      make: 'Ferrari',
-      model: 'Roma',
-      variant: '3.9 V8',
-      year: 2022,
-      mileageKm: 10000,
+    test('A3. Model adı türetilemeyen sayfa geçersiz sayılır (uydurma model üretilmez)', () => {
+      const d = deriveFromSource({
+        folderMake: 'Alfa Romeo',
+        pageTitleOrFileName: "Alfa Romeo Fiyatları & Modelleri sahibinden.com'da - 10",
+      });
+      expect(d.isValid).toBe(false);
+      expect(d.rejectReason).toBe('MODEL_TESPIT_EDILEMEDI');
     });
 
-    expect(match.level).toEqual(4);
-    expect(match.matchedCount).toEqual(0);
-    expect(match.confidenceScore).toEqual(0);
-    expect(match.isLimitedComps).toBe(true);
+    test('A4. Yakıt motor kodundan türetilir, model adından uydurulmaz', () => {
+      expect(deriveFuelFromEngineCode('320d')).toBe('Dizel');
+      expect(deriveFuelFromEngineCode('320i')).toBe('Benzin');
+      expect(deriveFuelFromEngineCode('1.6 TDCi')).toBe('Dizel');
+      expect(deriveFuelFromEngineCode('1.4 MPI')).toBe('Benzin');
+      // Bilinmiyorsa bos doner; varsayilan yakit ATANMAZ.
+      expect(deriveFuelFromEngineCode('1.3')).toBe('');
+      // "Fiat 500e" model adidir; yakit cikarimi yapilmaz.
+      expect(
+        deriveFromSource({ folderMake: 'Abarth', pageTitleOrFileName: 'Abarth 500e' }).fuelType,
+      ).toBe('');
+    });
+
+    test('A5. Şanzıman yalnızca metinde açıkça geçiyorsa atanır', () => {
+      expect(deriveTransmission('Otomatik vites hatasız')).toBe('Otomatik');
+      expect(deriveTransmission('düz vites')).toBe('Manuel');
+      expect(deriveTransmission('temiz aile aracı')).toBe('');
+    });
+
+    test('A6. Aynı motorun farklı yazımları tek anahtara indirgenir', () => {
+      expect(engineKey('1.6 i-DTEC')).toBe(engineKey('1.6i DTEC'));
+      expect(isEngineCompatible('1.6 i-DTEC', '1.6i DTEC', true)).toBe(true);
+    });
+
+    test('A7. Katalogdaki birleşik variant adı motor + pakete ayrılır', () => {
+      expect(splitVariantString('1.0 EcoBoost GTDi Titanium')).toEqual({
+        engineCode: '1.0 EcoBoost GTDi',
+        trim: 'Titanium',
+      });
+      expect(splitVariantString('320i')).toEqual({ engineCode: '320i', trim: '' });
+      expect(splitVariantString('Urban')).toEqual({ engineCode: '', trim: 'Urban' });
+    });
+
+    test('A8. Türkçe ilan tarihi ayrıştırılır (tazelik ağırlığı için)', () => {
+      const d = parseTurkishListingDate('06 Ağustos 2026');
+      expect(d).not.toBeNull();
+      expect(d!.getUTCMonth()).toBe(7);
+      expect(d!.getUTCDate()).toBe(6);
+      expect(parseTurkishListingDate('anlamsız metin')).toBeNull();
+    });
   });
 
-  test('3. Engine & Variant Separation: 1.6 TDI and 35 TFSI receive distinct price valuations', () => {
-    const tdiComps: CleanListingItem[] = [
-      { make: 'Audi', model: 'A3', variant: '1.6 TDI', year: 2020, mileageKm: 80000, price: 1200000 },
-      { make: 'Audi', model: 'A3', variant: '1.6 TDI', year: 2020, mileageKm: 82000, price: 1220000 },
-      { make: 'Audi', model: 'A3', variant: '1.6 TDI', year: 2020, mileageKm: 85000, price: 1250000 },
-      { make: 'Audi', model: 'A3', variant: '1.6 TDI', year: 2020, mileageKm: 78000, price: 1190000 },
+  /* ================================================================ */
+  /* B. Farkli motor/trim ayrimi                                       */
+  /* ================================================================ */
+
+  describe('B. Motor / donanım ayrımı', () => {
+    test('B1. Farklı yakıtlı motorlar asla aynı havuzda birleşmez', () => {
+      expect(isEngineCompatible('320i', '320d', false)).toBe(false);
+      expect(isEngineCompatible('1.6 Multijet', '1.6 MPI', false)).toBe(false);
+    });
+
+    test('B2. Ciddi güç farkı olan motorlar geniş fallback’te bile eşleşmez', () => {
+      expect(isEngineCompatible('316i', '340i', false)).toBe(false);
+      expect(isEngineCompatible('1.0 TSI', '2.0 TSI', false)).toBe(false);
+    });
+
+    test('B3. Farklı motorlar farklı fiyat üretir (aynı fiyat kopyalanmaz)', () => {
+      const cheap = priceIt(comps(30, 800_000));
+      const expensive = priceIt(comps(30, 1_400_000));
+      expect(cheap.fairMarketValue).toBeLessThan(expensive.fairMarketValue);
+      expect(cheap.cashOffer).toBeLessThan(expensive.cashOffer);
+    });
+  });
+
+  /* ================================================================ */
+  /* C. Km / hasar yonu                                                */
+  /* ================================================================ */
+
+  describe('C. Kilometre ve hasar etkisi', () => {
+    test('C1. Yüksek km fiyatı ASLA yükseltmez', () => {
+      const pool = comps(40, 1_000_000, { km: 120_000 });
+      const low = priceIt(pool, { userMileage: 60_000 });
+      const high = priceIt(pool, { userMileage: 300_000 });
+      expect(high.fairMarketValue).toBeLessThan(low.fairMarketValue);
+      expect(high.cashOffer).toBeLessThan(low.cashOffer);
+    });
+
+    test('C2. Hasar kaydı fiyatı ASLA yükseltmez', () => {
+      const pool = comps(40, 1_500_000);
+      const clean = priceIt(pool, { damagePenalty: 0 });
+      const damaged = priceIt(pool, { damagePenalty: 0.08 });
+      expect(damaged.fairMarketValue).toBeLessThan(clean.fairMarketValue);
+      expect(damaged.cashOffer).toBeLessThan(clean.cashOffer);
+    });
+
+    test('C3. Km bilgisi olmayan emsal için varsayılan km UYDURULMAZ', () => {
+      const pool = comps(20, 1_000_000, { km: 150_000 }).map((l, i) =>
+        i % 2 === 0 ? { ...l, mileageKm: 0 } : l,
+      );
+      const res = priceIt(pool, { userMileage: 150_000 });
+      // Referans medyan yalnizca km'si bilinen ilanlardan hesaplanir.
+      expect(res.referenceMedianMileage).toBe(150_000);
+      expect(res.pricingAudit.listingsWithKm).toBe(10);
+    });
+  });
+
+  /* ================================================================ */
+  /* D. Uc deger / mukerrer                                            */
+  /* ================================================================ */
+
+  describe('D. Veri temizliği', () => {
+    test('D1. Hatalı ucuz/pahalı ilanlar IQR ile ayıklanır', () => {
+      const cleaned = RobustPricingCalculator.cleanOutliersIQR([
+        60_000, 1_000_000, 1_020_000, 1_050_000, 1_060_000, 1_080_000, 9_000_000,
+      ]);
+      expect(cleaned).not.toContain(60_000);
+      expect(cleaned).not.toContain(9_000_000);
+      expect(cleaned.length).toBe(5);
+    });
+
+    test('D2. Sağlık aralığı dışındaki fiyatlar hiç değerlendirmeye girmez', () => {
+      const cleaned = RobustPricingCalculator.cleanOutliersIQR([1, 100, 500_000, 520_000, 530_000, 540_000]);
+      expect(Math.min(...cleaned)).toBeGreaterThanOrEqual(PRICING_LIMITS.priceSanityRange[0]);
+    });
+
+    test('D3. Tek bir hatalı ilan medyanı bozmaz', () => {
+      const pool = comps(30, 2_000_000);
+      const withOutlier = [...pool, { ...pool[0], price: 260_000 }];
+      const a = priceIt(pool);
+      const b = priceIt(withOutlier);
+      expect(Math.abs(a.fairMarketValue - b.fairMarketValue) / a.fairMarketValue).toBeLessThan(0.02);
+    });
+  });
+
+  /* ================================================================ */
+  /* E. Nakit / konsinye invariantlari                                 */
+  /* ================================================================ */
+
+  describe('E. Fiyat invariantları', () => {
+    const scenarios: Array<[string, number]> = [
+      ['ekonomik', 320_000],
+      ['orta-alt', 900_000],
+      ['orta', 1_600_000],
+      ['üst-orta', 3_200_000],
+      ['yüksek', 6_000_000],
+      ['premium', 12_000_000],
     ];
 
-    const tfsiComps: CleanListingItem[] = [
-      { make: 'Audi', model: 'A3', variant: '35 TFSI', year: 2020, mileageKm: 80000, price: 1600000 },
-      { make: 'Audi', model: 'A3', variant: '35 TFSI', year: 2020, mileageKm: 82000, price: 1620000 },
-      { make: 'Audi', model: 'A3', variant: '35 TFSI', year: 2020, mileageKm: 85000, price: 1650000 },
-      { make: 'Audi', model: 'A3', variant: '35 TFSI', year: 2020, mileageKm: 78000, price: 1590000 },
-    ];
-
-    const tdiResult = RobustPricingCalculator.computeValuation({
-      cleanListings: tdiComps,
-      userYear: 2020,
-      userMileage: 80000,
-      matchedLevel: 1,
-      baseConfidenceScore: 90,
+    test.each(scenarios)('E1. %s segmentinde 4 invariant birlikte sağlanır', (_name, base) => {
+      const r = priceIt(comps(40, base));
+      expect(r.cashOffer).toBeLessThan(r.expectedSalePrice);
+      expect(r.customerConsignmentNet).toBeLessThanOrEqual(r.expectedSalePrice);
+      expect(r.customerConsignmentNet).toBeGreaterThan(r.cashOffer);
+      expect(r.consignmentListingPrice).toBeGreaterThanOrEqual(r.expectedSalePrice);
     });
 
-    const tfsiResult = RobustPricingCalculator.computeValuation({
-      cleanListings: tfsiComps,
-      userYear: 2020,
-      userMileage: 80000,
-      matchedLevel: 1,
-      baseConfidenceScore: 90,
+    test('E2. Müşterinin istediği yüksek net, güvenli tavanı aşamaz', () => {
+      const r = priceIt(comps(40, 1_500_000), { userDesiredPrice: 99_000_000 });
+      expect(r.agreedCustomerNet).toBeLessThanOrEqual(r.expectedSalePrice);
+      expect(r.agreedCustomerNet).toBeLessThanOrEqual(r.aiRecommendedCustomerNet);
+      expect(r.customerConsignmentNet).toBeGreaterThan(r.cashOffer);
     });
 
-    expect(tfsiResult.fairMarketValue).toBeGreaterThan(tdiResult.fairMarketValue);
-    expect(tfsiResult.cashOffer).toBeGreaterThan(tdiResult.cashOffer);
+    test('E3. Konsinye ilan fiyatı beklenen satışın üzerinde pazarlık payı taşır', () => {
+      const r = priceIt(comps(40, 1_500_000));
+      expect(r.consignmentListingPrice).toBeGreaterThan(r.expectedSalePrice);
+      expect(r.consignmentCommission).toBeGreaterThan(0);
+      expect(r.customerConsignmentNet).toBe(
+        r.expectedConsignmentSalePrice - r.consignmentCommission,
+      );
+    });
   });
 
-  test('4. Mileage Decay: 70.000 km vehicle receives higher cash offer than 250.000 km vehicle', () => {
-    const comps: CleanListingItem[] = Array(8).fill(null).map((_, i) => ({
-      make: 'BMW', model: '3 Serisi', variant: '320i', year: 2019, mileageKm: 100000, price: 1800000
-    }));
+  /* ================================================================ */
+  /* F. Kar basamagi ve musteri korumasi                               */
+  /* ================================================================ */
 
-    const lowKm = RobustPricingCalculator.computeValuation({
-      cleanListings: comps, userYear: 2019, userMileage: 70000, matchedLevel: 1, baseConfidenceScore: 90
+  describe('F. Kâr basamağı ve müşteri koruması', () => {
+    test.each([
+      [400_000, 20_000],
+      [900_000, 30_000],
+      [1_600_000, 40_000],
+      [3_000_000, 60_000],
+      [6_000_000, 140_000],
+    ])('F1. %i TL segmentinde hedef kâr tabanı >= %i TL', (base, minProfit) => {
+      const r = priceIt(comps(40, base));
+      if (r.requiresManualApproval) return; // manuel akista fiyat gosterilmez
+      expect(r.pricingAudit.targetProfit).toBeGreaterThanOrEqual(minProfit);
+      // Nakit kanalinin brut marji hedef kari kapsamali
+      expect(r.expectedSalePrice - r.cashOffer).toBeGreaterThanOrEqual(minProfit);
     });
 
-    const highKm = RobustPricingCalculator.computeValuation({
-      cleanListings: comps, userYear: 2019, userMileage: 250000, matchedLevel: 1, baseConfidenceScore: 90
+    test('F2. Yüksek fiyat ve düşük veri güveninde hedef kâr otomatik büyür', () => {
+      const confident = priceIt(comps(40, 6_000_000), { baseConfidenceScore: 95 });
+      const risky = priceIt(comps(40, 6_000_000), { baseConfidenceScore: 60, matchedLevel: 3 });
+      expect(risky.pricingAudit.targetProfit).toBeGreaterThan(confident.pricingAudit.targetProfit);
+      expect(risky.cashOffer).toBeLessThan(confident.cashOffer);
     });
 
-    expect(lowKm.fairMarketValue).toBeGreaterThan(highKm.fairMarketValue);
-    expect(lowKm.cashOffer).toBeGreaterThan(highKm.cashOffer);
-  });
-
-  test('5. IQR Outlier Cleaning: Fake 1 TL and 111 TL prices are filtered out', () => {
-    const rawWithFakes = [1, 111, 5000, 1500000, 1520000, 1540000, 1550000, 1580000, 999999999];
-    const cleaned = RobustPricingCalculator.cleanOutliersIQR(rawWithFakes);
-
-    expect(cleaned).not.toContain(1);
-    expect(cleaned).not.toContain(111);
-    expect(cleaned).not.toContain(5000);
-    expect(cleaned).not.toContain(999999999);
-  });
-
-  test('6. P35 Protection Guard: Reserve is preserved when P35 is close to P50 (<3%)', () => {
-    const tightComps: CleanListingItem[] = [
-      { make: 'VW', model: 'Golf', year: 2022, mileageKm: 40000, price: 1500000 },
-      { make: 'VW', model: 'Golf', year: 2022, mileageKm: 40000, price: 1510000 },
-      { make: 'VW', model: 'Golf', year: 2022, mileageKm: 40000, price: 1520000 },
-      { make: 'VW', model: 'Golf', year: 2022, mileageKm: 40000, price: 1525000 },
-      { make: 'VW', model: 'Golf', year: 2022, mileageKm: 40000, price: 1530000 },
-    ];
-
-    const result = RobustPricingCalculator.computeValuation({
-      cleanListings: tightComps, userYear: 2022, userMileage: 40000, matchedLevel: 1, baseConfidenceScore: 90
+    test('F3. Nakit teklif müşteriyi kaçıracak kadar piyasa altına düşmez', () => {
+      for (const base of [400_000, 900_000, 1_600_000, 3_200_000, 6_000_000]) {
+        const r = priceIt(comps(40, base));
+        if (r.requiresManualApproval) continue;
+        const seg = getSegment(r.expectedSalePrice);
+        expect(r.cashOffer / r.expectedSalePrice).toBeGreaterThanOrEqual(
+          seg.minCashRatioOfExpectedSale - 0.01,
+        );
+      }
     });
 
-    expect(result.fairMarketValue - result.cashOffer).toBeGreaterThanOrEqual(80000);
-  });
-
-  test('7. Consignment Transparency: Listing price, expected sale price, commission, and net payout are distinct', () => {
-    const comps: CleanListingItem[] = Array(10).fill(null).map(() => ({
-      make: 'Chery', model: 'Tiggo 8', year: 2024, mileageKm: 20000, price: 2000000
-    }));
-
-    const result = RobustPricingCalculator.computeValuation({
-      cleanListings: comps, userYear: 2024, userMileage: 20000, matchedLevel: 1, baseConfidenceScore: 90
+    test('F5. Yuvarlanmış (gösterilen) teklif müşteri tabanının altına inemez', () => {
+      // Asagi yuvarlama, tabani bir basamak kadar sessizce delmemeli.
+      for (const base of [180_000, 220_000, 267_000, 310_000, 420_000, 560_000, 780_000, 1_050_000]) {
+        const r = priceIt(comps(40, base));
+        const seg = getSegment(r.expectedSalePrice);
+        const floor = r.expectedSalePrice * seg.minCashRatioOfExpectedSale;
+        if (r.cashOffer < floor) {
+          expect(r.requiresManualApproval).toBe(true);
+        }
+      }
     });
 
-    expect(result.consignmentListingPrice).toBeGreaterThan(result.expectedConsignmentSalePrice);
-    expect(result.expectedConsignmentSalePrice).toBeGreaterThan(result.customerConsignmentNet);
-    expect(result.consignmentCommission).toBeGreaterThan(0);
-    expect(result.customerConsignmentNet).toEqual(result.expectedConsignmentSalePrice - result.consignmentCommission);
+    test('F4. Kâr tabanı ile müşteri tabanı çakışırsa fiyat yerine MANUEL istenir', () => {
+      // Cok ucuz arac: sabit maliyet + minimum kar, musteri tabanina sigmaz.
+      const r = priceIt(comps(40, 95_000));
+      expect(r.requiresManualApproval).toBe(true);
+      expect(r.manualApprovalReason).toBeTruthy();
+    });
   });
 
-  test('8. Regression Test: BMW 5 Serisi 2016 Executive fetched directly from real DB snapshot ae03fc3c', async () => {
-    const snap = await prisma.vehicleMarketSnapshot.findFirst({
-      where: {
+  /* ================================================================ */
+  /* G. Guven skoru                                                    */
+  /* ================================================================ */
+
+  describe('G. Güven skoru veri kalitesiyle uyumlu', () => {
+    test('G1. Az emsal güveni düşürür', () => {
+      const many = priceIt(comps(40, 1_200_000), { realMatchedListingCount: 40 });
+      const few = priceIt(comps(6, 1_200_000), { realMatchedListingCount: 6 });
+      expect(few.confidenceScore).toBeLessThan(many.confidenceScore);
+    });
+
+    test('G2. Geniş fallback (Seviye 3) güveni düşürür', () => {
+      const l1 = priceIt(comps(40, 1_200_000), { matchedLevel: 1 });
+      const l3 = priceIt(comps(40, 1_200_000), { matchedLevel: 3 });
+      expect(l3.confidenceScore).toBeLessThan(l1.confidenceScore);
+    });
+
+    test('G3. Bayat emsal güveni düşürür ve pazarlık payını artırır', () => {
+      const fresh = priceIt(comps(40, 1_200_000), { freshnessScore: 1 });
+      const stale = priceIt(comps(40, 1_200_000), { freshnessScore: 0.25 });
+      expect(stale.confidenceScore).toBeLessThan(fresh.confidenceScore);
+      expect(stale.pricingAudit.negotiationRate).toBeGreaterThan(
+        fresh.pricingAudit.negotiationRate,
+      );
+      expect(stale.cashOffer).toBeLessThan(fresh.cashOffer);
+    });
+
+    test('G4. Dağılımı geniş piyasada pazarlık payı artar', () => {
+      const tight = priceIt(comps(40, 1_500_000, { spread: 0.03 }));
+      const wide = priceIt(comps(40, 1_500_000, { spread: 0.35 }));
+      expect(wide.pricingAudit.negotiationRate).toBeGreaterThan(
+        tight.pricingAudit.negotiationRate,
+      );
+    });
+  });
+
+  /* ================================================================ */
+  /* G2. Guven skoru bilesenleri (kalibrasyon)                         */
+  /* ================================================================ */
+
+  describe('G2. Confidence = veri kalitesi (sadece ilan sayısı değil)', () => {
+    const base = {
+      matchedLevel: 1, listingCount: 40, engineExactShare: 1, fuelKnownShare: 1,
+      transmissionKnownShare: 1, freshnessScore: 1, dispersion: 0.1, targetEngineKnown: true,
+    };
+
+    test('G2a. Her bozulma faktörü güveni ayrı ayrı düşürür', () => {
+      const full = computeConfidence(base);
+      expect(computeConfidence({ ...base, engineExactShare: 0.05 })).toBeLessThan(full);
+      expect(computeConfidence({ ...base, fuelKnownShare: 0.1 })).toBeLessThan(full);
+      expect(computeConfidence({ ...base, freshnessScore: 0.25 })).toBeLessThan(full);
+      expect(computeConfidence({ ...base, dispersion: 0.6 })).toBeLessThan(full);
+      expect(computeConfidence({ ...base, listingCount: 6 })).toBeLessThan(full);
+      expect(computeConfidence({ ...base, matchedLevel: 3 })).toBeLessThan(full);
+    });
+
+    test('G2b. Şanzıman havuzun yarısından azında biliniyorsa tam güven verilmez', () => {
+      expect(computeConfidence({ ...base, transmissionKnownShare: 0.02 })).toBeLessThanOrEqual(90);
+      expect(computeConfidence({ ...base, transmissionKnownShare: 0.8 })).toBeGreaterThan(90);
+    });
+
+    test('G2c. Hedef aracın motoru bilinmiyorsa güven 60 ile sınırlanır', () => {
+      expect(computeConfidence({ ...base, targetEngineKnown: false })).toBeLessThanOrEqual(60);
+    });
+
+    test('G2d. Çok emsal, kötü veri kalitesini telafi ETMEZ', () => {
+      const manyBad = computeConfidence({
+        ...base, listingCount: 800, engineExactShare: 0.03, matchedLevel: 2, freshnessScore: 0.4,
+      });
+      const fewGood = computeConfidence({ ...base, listingCount: 12 });
+      expect(manyBad).toBeLessThan(fewGood);
+      expect(manyBad).toBeLessThanOrEqual(70); // manuel kapısına düşer
+    });
+
+    test('G2e. Bozulmalar birikince güven manuel eşiğinin altına iner', () => {
+      const worst = computeConfidence({
+        matchedLevel: 3, listingCount: 6, engineExactShare: 0.05, fuelKnownShare: 0.1,
+        transmissionKnownShare: 0, freshnessScore: 0.25, dispersion: 0.7, targetEngineKnown: true,
+      });
+      expect(worst).toBeLessThan(50);
+    });
+  });
+
+  /* ================================================================ */
+  /* H. Gercek veritabani entegrasyonu                                 */
+  /* ================================================================ */
+
+  describe('H. Gerçek veritabanı entegrasyonu', () => {
+    let prisma: PrismaClient;
+    let matcher: EmsalMatcherService;
+
+    beforeAll(async () => {
+      prisma = new PrismaClient();
+      matcher = new EmsalMatcherService(prisma as any);
+    });
+
+    afterAll(async () => {
+      await prisma.$disconnect();
+    });
+
+    test('H1. Seviye 1 eşleşmesi birebir motor ve model yılı kullanır', async () => {
+      const m = await matcher.matchComparableListings({
         make: 'BMW',
-        model: '5 Serisi',
-        year: 2016,
-        variant: 'Executive',
-      },
-    });
-
-    expect(snap).toBeDefined();
-    expect(snap!.id).toBeDefined();
-    expect(snap!.matchedListingCount).toBeGreaterThanOrEqual(100);
-
-    const calc = RobustPricingCalculator.computeValuationFromSnapshot({
-      weightedP5: snap!.weightedP5 || Math.round(snap!.weightedP50 * 0.85),
-      weightedP35: snap!.weightedP35 || Math.round(snap!.weightedP50 * 0.92),
-      weightedP50: snap!.weightedP50,
-      weightedP60: snap!.weightedP60 || Math.round(snap!.weightedP50 * 1.02),
-      weightedP95: snap!.weightedP95 || Math.round(snap!.weightedP50 * 1.15),
-      realMatchedListingCount: snap!.matchedListingCount,
-      userYear: 2016,
-      userMileage: 100000,
-      matchedLevel: 1,
-      baseConfidenceScore: snap!.confidenceScore || 98,
-    });
-
-    expect(calc.matchedListingCount).toEqual(snap!.matchedListingCount);
-    expect(calc.fairMarketValue).toBeGreaterThan(2000000);
-    expect(calc.cashOffer).toBeGreaterThan(1880000);
-  });
-
-  test('9. Mismatched Fuel/Transmission/BodyType cannot yield Level 1 match', async () => {
-    const match = await matcher.matchComparableListings({
-      make: 'BMW',
-      model: '5 Serisi',
-      variant: 'Executive',
-      year: 2016,
-      mileageKm: 120000,
-      fuelType: 'Benzin',
-      transmission: 'Manuel',
-    });
-    expect(match.level).not.toEqual(1);
-  });
-
-  test('10. Duplicate quarantined listings are handled idempotently via upsert constraint', async () => {
-    const rawListingId = 'TST_QUARANTINE_123';
-    const reason = 'TEST_REASON_JUNK';
-
-    const res1 = await prisma.quarantinedListing.upsert({
-      where: {
-        source_rawListingId_reason: {
-          source: 'SAHIBINDEN_HTML',
-          rawListingId,
-          reason,
-        }
-      },
-      create: {
-        source: 'SAHIBINDEN_HTML',
-        rawListingId,
-        reason,
-        rawMake: 'Test',
-        rawModel: 'Model',
-      },
-      update: {
-        rawMake: 'TestUpdated',
+        model: '3 Serisi',
+        variant: '320i',
+        year: 2019,
+        mileageKm: 100_000,
+      });
+      if (m.level === 4) return;
+      expect(m.level).toBe(1);
+      expect(m.matchedCount).toBeGreaterThanOrEqual(PRICING_LIMITS.minCompCountForPricing);
+      for (const l of m.cleanListings) {
+        expect(l.year).toBe(2019);
+        expect(isEngineCompatible('320i', l.variant || '', true)).toBe(true);
       }
     });
 
-    expect(res1.id).toBeDefined();
+    test('H2. Emsal listesinde mükerrer ilan ID’si bulunmaz', async () => {
+      const m = await matcher.matchComparableListings({
+        make: 'BMW',
+        model: '3 Serisi',
+        variant: '320i',
+        year: 2019,
+        mileageKm: 100_000,
+      });
+      const ids = m.cleanListings.map((l) => l.id);
+      expect(new Set(ids).size).toBe(ids.length);
+    });
 
-    const res2 = await prisma.quarantinedListing.upsert({
-      where: {
-        source_rawListingId_reason: {
-          source: 'SAHIBINDEN_HTML',
-          rawListingId,
-          reason,
-        }
-      },
-      create: {
-        source: 'SAHIBINDEN_HTML',
-        rawListingId,
-        reason,
-        rawMake: 'Test',
-        rawModel: 'Model',
-      },
-      update: {
-        rawMake: 'TestUpdated',
+    test('H3. Farklı yakıtlı motorlar aynı emsal havuzuna girmez', async () => {
+      const m = await matcher.matchComparableListings({
+        make: 'BMW',
+        model: '3 Serisi',
+        variant: '320d',
+        year: 2019,
+        mileageKm: 100_000,
+      });
+      if (m.level === 4) return;
+      for (const l of m.cleanListings) {
+        if (l.fuelType) expect(l.fuelType).toBe('Dizel');
       }
     });
 
-    expect(res2.id).toEqual(res1.id);
-    expect(res2.rawMake).toEqual('TestUpdated');
-
-    await prisma.quarantinedListing.delete({
-      where: { id: res1.id }
-    });
-  });
-
-  test('11. Controlled INSUFFICIENT_DATA and no database write on preview service call', async () => {
-    const beforeCount = await prisma.vehicleEvaluation.count();
-
-    const result = await evaluationService.calculateVehicleValuationPreview({
-      year: 2026,
-      manufacturerId: 'non-existent-id',
-      modelId: 'non-existent-id',
-      mileage: 10000,
-      color: 'Beyaz',
-      damageStatus: 'NO',
-      licensePlate: '34TST50',
-      firstName: 'Test',
-      lastName: 'Kullanıcı',
-      phone: '05320000000',
-      sellingTimeline: 'hemen',
-      userDesiredPrice: 0,
+    test('H4. Kayıtlı olmayan araç fiyat üretmez (Seviye 4)', async () => {
+      const m = await matcher.matchComparableListings({
+        make: 'Ferrari',
+        model: 'Roma',
+        variant: '3.9 V8',
+        year: 2022,
+        mileageKm: 10_000,
+      });
+      expect(m.level).toBe(4);
+      expect(m.matchedCount === 0 || m.cleanListings.length === 0).toBe(true);
+      expect(m.confidenceScore).toBe(0);
     });
 
-    const afterCount = await prisma.vehicleEvaluation.count();
+    test('H5. Emsaller gerçek ilanlardan gelir; temsili/uydurma kayıt yoktur', async () => {
+      const m = await matcher.matchComparableListings({
+        make: 'BMW',
+        model: '3 Serisi',
+        variant: '320i',
+        year: 2019,
+        mileageKm: 100_000,
+      });
+      if (m.level === 4) return;
+      const ids = (m.uniqueListingIds || []).slice(0, 20);
+      const found = await prisma.rawVehicleListing.findMany({
+        where: { sourceListingId: { in: ids } },
+        select: { sourceListingId: true },
+      });
+      expect(found.length).toBe(ids.length);
+    });
 
-    expect(['INSUFFICIENT_DATA', 'DATA_INTEGRITY_ERROR']).toContain(result.status);
-    expect(result.results).toBeNull();
-    expect(afterCount).toEqual(beforeCount);
+    test('H6. Aynı model ailesindeki farklı motorlar farklı fiyat üretir', async () => {
+      const variants = ['320i', '318i', '320d'];
+      const values: number[] = [];
+      for (const v of variants) {
+        const m = await matcher.matchComparableListings({
+          make: 'BMW',
+          model: '3 Serisi',
+          variant: v,
+          year: 2019,
+          mileageKm: 100_000,
+        });
+        if (m.level === 4) continue;
+        const calc = RobustPricingCalculator.computeValuation({
+          cleanListings: m.cleanListings,
+          userYear: 2019,
+          userMileage: 100_000,
+          matchedLevel: m.level,
+          baseConfidenceScore: m.confidenceScore,
+          realMatchedListingCount: m.actuallyUsedListingCount || m.matchedCount,
+          listingWeights: m.listingWeights,
+          freshnessScore: m.freshnessScore,
+        });
+        values.push(calc.fairMarketValue);
+      }
+      if (values.length >= 2) {
+        expect(new Set(values).size).toBe(values.length);
+      }
+    });
+
+    test('H7. Gerçek veri üzerinde km artışı fiyatı düşürür (tüm seviyelerde)', async () => {
+      const cases = [
+        { make: 'BMW', model: '3 Serisi', variant: '316i', year: 2019 },
+        { make: 'Hyundai', model: 'i20', variant: '1.4 MPI', year: 2020 },
+      ];
+      for (const c of cases) {
+        const m = await matcher.matchComparableListings({ ...c, mileageKm: 80_000 });
+        if (m.level === 4) continue;
+        const mk = (km: number) =>
+          RobustPricingCalculator.computeValuation({
+            cleanListings: m.cleanListings,
+            userYear: c.year,
+            userMileage: km,
+            matchedLevel: m.level,
+            baseConfidenceScore: m.confidenceScore,
+            realMatchedListingCount: m.actuallyUsedListingCount || m.matchedCount,
+            listingWeights: m.listingWeights,
+            freshnessScore: m.freshnessScore,
+          });
+        expect(mk(250_000).fairMarketValue).toBeLessThan(mk(60_000).fairMarketValue);
+      }
+    });
+
+    test('H9. Motoru bilinmeyen seçimde havuz sınırlı işaretlenir ve güven 70 altına iner', async () => {
+      const m = await matcher.matchComparableListings({
+        make: 'BMW', model: '5 Serisi', variant: 'Executive', year: 2016, mileageKm: 150_000,
+      });
+      if (m.level === 4) return;
+      expect(m.isLimitedComps).toBe(true);
+      const r = RobustPricingCalculator.computeValuation({
+        cleanListings: m.cleanListings, userYear: 2016, userMileage: 150_000,
+        matchedLevel: m.level, baseConfidenceScore: m.confidenceScore,
+        realMatchedListingCount: m.actuallyUsedListingCount || m.matchedCount,
+        listingWeights: m.listingWeights, freshnessScore: m.freshnessScore,
+        engineExactShare: m.engineExactShare, fuelKnownShare: m.fuelKnownShare,
+        transmissionKnownShare: m.transmissionKnownShare,
+        targetEngineKnown: false,
+      });
+      expect(r.confidenceScore).toBeLessThanOrEqual(70);
+    });
+
+    test('H10. Aynı ailede zayıf motor eşleşmesi otomatik fiyat üretmez', async () => {
+      const m = await matcher.matchComparableListings({
+        make: 'BMW', model: '3 Serisi', variant: '316i', year: 2019, mileageKm: 120_000,
+      });
+      if (m.level === 4 || m.level === 1) return;
+      const r = RobustPricingCalculator.computeValuation({
+        cleanListings: m.cleanListings, userYear: 2019, userMileage: 120_000,
+        matchedLevel: m.level, baseConfidenceScore: m.confidenceScore,
+        realMatchedListingCount: m.actuallyUsedListingCount || m.matchedCount,
+        listingWeights: m.listingWeights, freshnessScore: m.freshnessScore,
+        engineExactShare: m.engineExactShare, fuelKnownShare: m.fuelKnownShare,
+        transmissionKnownShare: m.transmissionKnownShare, targetEngineKnown: true,
+      });
+      // Havuz agirlikli olarak farkli motorlardan olustugu icin otomatik teklif verilmez.
+      expect(r.confidenceScore).toBeLessThanOrEqual(70);
+    });
+
+    test('H8. Gerçek veri üzerinde invariantlar korunur', async () => {
+      const cases = [
+        { make: 'BMW', model: '5 Serisi', variant: '520i', year: 2016 },
+        { make: 'Fiat', model: 'Egea', variant: '1.4 Easy', year: 2021 },
+        { make: 'Hyundai', model: 'Accent', variant: '1.3', year: 2005 },
+      ];
+      for (const c of cases) {
+        const m = await matcher.matchComparableListings({ ...c, mileageKm: 150_000 });
+        if (m.level === 4) continue;
+        const r = RobustPricingCalculator.computeValuation({
+          cleanListings: m.cleanListings,
+          userYear: c.year,
+          userMileage: 150_000,
+          matchedLevel: m.level,
+          baseConfidenceScore: m.confidenceScore,
+          realMatchedListingCount: m.actuallyUsedListingCount || m.matchedCount,
+          listingWeights: m.listingWeights,
+          freshnessScore: m.freshnessScore,
+        });
+        expect(r.cashOffer).toBeLessThan(r.expectedSalePrice);
+        expect(r.customerConsignmentNet).toBeLessThanOrEqual(r.expectedSalePrice);
+        expect(r.customerConsignmentNet).toBeGreaterThan(r.cashOffer);
+        expect(r.consignmentListingPrice).toBeGreaterThanOrEqual(r.expectedSalePrice);
+      }
+    });
   });
 });

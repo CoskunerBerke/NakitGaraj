@@ -1,3 +1,16 @@
+/**
+ * !!! KULLANIM DISI (SUPERSEDED) - V3 ONCESI ICE AKTARICI !!!
+ *
+ * Bu script RawVehicleListing tablosuna V3 oncesi semantikle yazar
+ * (rawModel bazi markalarda tam sayfa basligi, bazilarinda paket adi;
+ * ilan tarihi / sehir / yakit / sanziman alanlari doldurulmaz).
+ * Calistirilmasi emsal esleme motorunu tekrar bozar.
+ *
+ * Yerine kullanilacak tek ice aktarici:
+ *   npm run rebuild:listings          (src/scripts/rebuild_raw_listings_v3.ts)
+ *   npm run rebuild:listings:dry      (veritabanina yazmadan dogrulama)
+ */
+
 import * as path from 'path';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
@@ -10,11 +23,15 @@ if (!process.env.DATABASE_URL || process.env.DATABASE_URL.endsWith('dev.db')) {
 
 import { PrismaClient } from '@prisma/client';
 import { VehicleService } from '../vehicle/vehicle.service';
+import { cleanModelName, cleanVariantOrTrimName } from './repair_corrupted_model_records';
+import { extractCanonicalVehicleMetadata } from './parser_v3_helper';
 
 const prisma = new PrismaClient();
 
 const envSourceDir = process.env.SAHIBINDEN_HTML_DIR;
-const SOURCE_DIR = envSourceDir && envSourceDir.trim() !== '' ? envSourceDir : path.resolve(process.cwd(), 'data/sahibinden_html');
+const SOURCE_DIR = envSourceDir && envSourceDir.trim() !== '' 
+  ? envSourceDir 
+  : (fs.existsSync('C:\\Users\\berke\\OneDrive\\Masaüstü\\sahibindne ilan') ? 'C:\\Users\\berke\\OneDrive\\Masaüstü\\sahibindne ilan' : path.resolve(process.cwd(), 'data/sahibinden_html'));
 const MANIFEST_PATH = path.join(__dirname, '../../data/import-state/sahibinden-import-manifest.json');
 
 const MULTI_WORD_MAKES = [
@@ -30,14 +47,22 @@ interface ManifestFileEntry {
   absolutePath: string;
   relativePath: string;
   fileSize: number;
-  modifiedTime: string;
-  sha256ContentHash: string;
+  modifiedAt: string;
+  processedAt: string;
+  sha256: string;
+  sha256ContentHash?: string;
   parserVersion: string;
-  importedAt: string;
+  catalogVersion?: string;
+  importedAt?: string;
   detectedMake: string;
   detectedModel: string;
   detectedSubModel: string | null;
-  listingRowCount: number;
+  extractedRowCount: number;
+  insertedListingCount: number;
+  updatedListingCount: number;
+  duplicateCount: number;
+  status: 'SUCCESS' | 'ERROR';
+  errorMessage?: string | null;
 }
 
 interface ImportManifest {
@@ -107,20 +132,12 @@ export function parseHeaderMakeModelSubModel(text: string, fallbackFolder: strin
   let model = words[0];
   words.shift();
 
-  // If model is e.g. "3" and next is "Serisi" -> "3 Serisi"
-  if (model === '3' && words.length > 0 && words[0].toLowerCase() === 'serisi') {
-    model = '3 Serisi';
-    words.shift();
-  } else if (model === '5' && words.length > 0 && words[0].toLowerCase() === 'serisi') {
-    model = '5 Serisi';
-    words.shift();
-  } else if (model === '1' && words.length > 0 && words[0].toLowerCase() === 'serisi') {
-    model = '1 Serisi';
-    words.shift();
-  } else if (model === '4' && words.length > 0 && words[0].toLowerCase() === 'serisi') {
-    model = '4 Serisi';
+  // If model is e.g. a digit ("1", "2", "3", "4", "5", "6", "7", "8") and next is "Serisi" -> e.g. "3 Serisi"
+  if (/^\d+$/.test(model) && words.length > 0 && words[0].toLowerCase() === 'serisi') {
+    model = `${model} Serisi`;
     words.shift();
   }
+
 
   const remaining = words.join(' ').trim();
   let engineVariant: string | null = null;
@@ -154,6 +171,44 @@ export function parseHeaderMakeModelSubModel(text: string, fallbackFolder: strin
   }
 
   return { make, model, subModel, engineVariant, trimPackage };
+}
+
+export interface TableHeaderMap {
+  seriesIdx: number;
+  modelIdx: number;
+  titleIdx: number;
+  yearIdx: number;
+  kmIdx: number;
+  colorIdx: number;
+  priceIdx: number;
+}
+
+export function parseTableHeaders($: cheerio.CheerioAPI): TableHeaderMap {
+  let seriesIdx = -1;
+  let modelIdx = -1;
+  let titleIdx = -1;
+  let yearIdx = -1;
+  let kmIdx = -1;
+  let colorIdx = -1;
+  let priceIdx = -1;
+
+  const headerCells: string[] = [];
+  $('table#searchResultsTable thead td, table#searchResultsTable thead th, table thead td, table thead th').each((_, el) => {
+    headerCells.push($(el).text().replace(/\s+/g, ' ').trim().toLowerCase());
+  });
+
+  for (let i = 0; i < headerCells.length; i++) {
+    const text = headerCells[i];
+    if (text === 'seri') seriesIdx = i;
+    else if (text === 'model') modelIdx = i;
+    else if (text.includes('başlığ') || text.includes('baslik')) titleIdx = i;
+    else if (text === 'yıl' || text === 'yil') yearIdx = i;
+    else if (text === 'km' || text.includes('kilometre')) kmIdx = i;
+    else if (text === 'renk') colorIdx = i;
+    else if (text === 'fiyat') priceIdx = i;
+  }
+
+  return { seriesIdx, modelIdx, titleIdx, yearIdx, kmIdx, colorIdx, priceIdx };
 }
 
 function scanHtmlFilesRecursively(dir: string, fileList: string[] = []): string[] {
@@ -204,9 +259,10 @@ function getVehicleGroupsFromDir(dir: string): { make: string; model: string; su
 
 async function runImport() {
   const isIncremental = process.argv.includes('--incremental');
+  const isDryRun = process.argv.includes('--dry-run');
 
   console.log(`\n====================================================================`);
-  console.log(`  SAHİBİNDEN HTML İLAN VERİTABANI ${isIncremental ? 'ARTIMLI (INCREMENTAL)' : 'FULL'} AKTARIMI`);
+  console.log(`  SAHİBİNDEN HTML İLAN VERİTABANI ${isIncremental ? 'ARTIMLI (INCREMENTAL)' : 'FULL'} ${isDryRun ? 'DRY-RUN SİMÜLASYONU' : 'AKTARIMI'}`);
   console.log(`====================================================================\n`);
 
   if (!fs.existsSync(SOURCE_DIR)) {
@@ -280,17 +336,34 @@ async function runImport() {
     console.warn(`⚠️ RAPOR: Manifestte kayıtlı olan ancak klasörde bulunamayan ${missingManifestKeys.length} adet dosya tespit edildi (MISSING_SOURCE_FILE). Eski ilanlar veritabanından silinmeyecektir.`);
   }
 
-  const CURRENT_PARSER_VERSION = 'v1.1';
+  const CURRENT_PARSER_VERSION = 'v3.0';
+  const CURRENT_CATALOG_VERSION = 'v3.0';
 
   // Check current files vs manifest
+  const now = Date.now();
   for (const [relP, absP] of currentFilesMap.entries()) {
     const stat = fs.statSync(absP);
+
+    // 3-second stability check for active file writes
+    const ageMs = now - stat.mtimeMs;
+    if (ageMs < 3000) {
+      console.log(`[STABILITY CHECK] ${relP} son 3 saniye içinde değiştirilmiş, stabil olana kadar atlanıyor...`);
+      unchangedFilePaths.push(absP);
+      continue;
+    }
+
     const currentHash = getSha256Hash(absP);
     const existingEntry = manifest.files[relP];
 
+    const prevHash = existingEntry ? (existingEntry.sha256 || existingEntry.sha256ContentHash) : null;
+
     if (!existingEntry) {
       newFilePaths.push(absP);
-    } else if (existingEntry.sha256ContentHash !== currentHash || existingEntry.parserVersion !== CURRENT_PARSER_VERSION) {
+    } else if (
+      prevHash !== currentHash ||
+      existingEntry.parserVersion !== CURRENT_PARSER_VERSION ||
+      existingEntry.catalogVersion !== CURRENT_CATALOG_VERSION
+    ) {
       changedFilePaths.push(absP);
     } else {
       unchangedFilePaths.push(absP);
@@ -318,14 +391,21 @@ async function runImport() {
         absolutePath: absP,
         relativePath: relP,
         fileSize: stat.size,
-        modifiedTime: stat.mtime.toISOString(),
+        modifiedAt: stat.mtime.toISOString(),
+        processedAt: new Date().toISOString(),
+        sha256: hash,
         sha256ContentHash: hash,
         parserVersion: 'v1.0',
         importedAt: new Date().toISOString(),
         detectedMake: info.make,
         detectedModel: info.model,
         detectedSubModel: info.subModel,
-        listingRowCount: rowCount,
+        extractedRowCount: rowCount,
+        insertedListingCount: rowCount,
+        updatedListingCount: 0,
+        duplicateCount: 0,
+        status: 'SUCCESS',
+        errorMessage: null,
       };
     }
 
@@ -369,7 +449,7 @@ async function runImport() {
   const backupPath = path.join(__dirname, `../../prisma/dev.db.backup_${Date.now()}`);
   const staticBackupPath = path.join(__dirname, '../../prisma/dev.db.bak');
 
-  if (fs.existsSync(dbPath)) {
+  if (!isDryRun && fs.existsSync(dbPath)) {
     fs.copyFileSync(dbPath, backupPath);
     fs.copyFileSync(dbPath, staticBackupPath);
     console.log(`✓ Veritabanı yedeği başarıyla alındı:`);
@@ -400,6 +480,8 @@ async function runImport() {
   const recordsToUpdate: any[] = [];
   const batchSeenListingIds = new Set<string>();
 
+
+
   for (const filePath of filesToProcess) {
     const fileName = path.basename(filePath);
     const parentFolder = path.basename(path.dirname(filePath));
@@ -411,11 +493,20 @@ async function runImport() {
     const pageH1 = $('h1').first().text().replace(/\s+/g, ' ').trim();
     const pageTitle = $('title').first().text().replace(/\s+/g, ' ').trim();
     const headerInfo = parseHeaderMakeModelSubModel(pageH1 || pageTitle || fileName, parentFolder);
+    const headerMap = parseTableHeaders($);
 
-    const groupKey = `${headerInfo.make}__${headerInfo.model}`;
+    // Extract primary make from top-level brand directory
+    const relParts = relP.split(path.sep);
+    const topLevelBrandDir = relParts.length > 0 ? relParts[0] : parentFolder;
+    const fileMake = topLevelBrandDir && topLevelBrandDir !== '.' ? topLevelBrandDir : headerInfo.make;
+
+    const groupKey = `${fileMake}__${headerInfo.model}`;
     affectedVehicleGroups.add(groupKey);
 
     let fileRowCount = 0;
+    let fileInsertedCount = 0;
+    let fileUpdatedCount = 0;
+    let fileDuplicateCount = 0;
 
     for (const rowEl of $('tr[data-id]').toArray()) {
       totalReadRows++;
@@ -427,78 +518,89 @@ async function runImport() {
         tds.push($(tdEl).text().replace(/\s+/g, ' ').trim());
       });
 
-      let rowMake = headerInfo.make;
-      let rowModel = headerInfo.model;
-      let rowSubModel = headerInfo.subModel;
-      let engineVariant: string | null = null;
+      let rowMake = fileMake;
+      let rawModelCell = headerInfo.model;
+      let rawVariantCell = headerInfo.subModel || '';
+      let rawTitleCell = '';
       let year: number | null = null;
       let mileageKm: number | null = null;
       let color: string | null = null;
       let priceTl: number | null = null;
 
-      let yearIdx = -1;
-      for (let i = 0; i < tds.length; i++) {
-        if (/^(19\d\d|20[0-2]\d)$/.test(tds[i])) {
-          yearIdx = i;
-          year = parseInt(tds[i], 10);
-          break;
-        }
+      // Use dynamic header map
+      if (headerMap.seriesIdx !== -1 && tds[headerMap.seriesIdx]) {
+        rawModelCell = tds[headerMap.seriesIdx];
+      } else if (headerMap.modelIdx !== -1 && tds[headerMap.modelIdx] && headerMap.seriesIdx === -1) {
+        rawModelCell = tds[headerMap.modelIdx];
       }
 
-      if (yearIdx === 3) {
-        engineVariant = tds[1] && tds[1] !== '' ? tds[1] : null;
-        mileageKm = tds[4] ? parseInt(tds[4].replace(/\./g, '').replace(/\D/g, ''), 10) || null : null;
-        color = tds[5] && tds[5] !== '' ? tds[5] : null;
-        priceTl = tds[6] ? parseInt(tds[6].replace(/\./g, '').replace(/\D/g, ''), 10) || null : null;
-      } else if (yearIdx === 4) {
-        if (tds[1] && tds[1] !== '') rowModel = tds[1];
-        engineVariant = tds[2] && tds[2] !== '' ? tds[2] : null;
-        mileageKm = tds[5] ? parseInt(tds[5].replace(/\./g, '').replace(/\D/g, ''), 10) || null : null;
-        color = tds[6] && tds[6] !== '' ? tds[6] : null;
-        priceTl = tds[7] ? parseInt(tds[7].replace(/\./g, '').replace(/\D/g, ''), 10) || null : null;
-      } else if (yearIdx > 4) {
-        engineVariant = tds[yearIdx - 2] && tds[yearIdx - 2] !== '' ? tds[yearIdx - 2] : null;
-        mileageKm = tds[yearIdx + 1] ? parseInt(tds[yearIdx + 1].replace(/\./g, '').replace(/\D/g, ''), 10) || null : null;
-        color = tds[yearIdx + 2] && tds[yearIdx + 2] !== '' ? tds[yearIdx + 2] : null;
-        priceTl = tds[yearIdx + 3] ? parseInt(tds[yearIdx + 3].replace(/\./g, '').replace(/\D/g, ''), 10) || null : null;
+      if (headerMap.seriesIdx !== -1 && headerMap.modelIdx !== -1 && tds[headerMap.modelIdx]) {
+        rawVariantCell = tds[headerMap.modelIdx];
+      } else if (headerMap.modelIdx !== -1 && tds[headerMap.modelIdx] && rawModelCell !== tds[headerMap.modelIdx]) {
+        rawVariantCell = tds[headerMap.modelIdx];
       }
 
-      let rowEngineVariant = headerInfo.engineVariant || null;
-      let rowTrimPackage = headerInfo.trimPackage || null;
+      if (headerMap.titleIdx !== -1 && tds[headerMap.titleIdx]) {
+        rawTitleCell = tds[headerMap.titleIdx];
+      }
 
-      if (!rowEngineVariant && engineVariant) {
-        for (const eng of KNOWN_BMW_ENGINES) {
-          if (new RegExp(`\\b${eng}\\b`, 'i').test(engineVariant)) {
-            rowEngineVariant = eng;
+      if (headerMap.yearIdx !== -1 && tds[headerMap.yearIdx]) {
+        const yVal = parseInt(tds[headerMap.yearIdx].replace(/\D/g, ''), 10);
+        if (!isNaN(yVal) && yVal >= 1900 && yVal <= 2030) year = yVal;
+      }
+
+      if (headerMap.kmIdx !== -1 && tds[headerMap.kmIdx]) {
+        const kmVal = parseInt(tds[headerMap.kmIdx].replace(/\./g, '').replace(/\D/g, ''), 10);
+        if (!isNaN(kmVal)) mileageKm = kmVal;
+      }
+
+      if (headerMap.colorIdx !== -1 && tds[headerMap.colorIdx]) {
+        color = tds[headerMap.colorIdx];
+      }
+
+      if (headerMap.priceIdx !== -1 && tds[headerMap.priceIdx]) {
+        const pVal = parseInt(tds[headerMap.priceIdx].replace(/\./g, '').replace(/\D/g, ''), 10);
+        if (!isNaN(pVal) && pVal > 0) priceTl = pVal;
+      }
+
+      // Regex fallback scan if dynamic headers failed to detect year or price
+      if (!year) {
+        for (let i = 0; i < tds.length; i++) {
+          if (/^(19\d\d|20[0-2]\d)$/.test(tds[i])) {
+            year = parseInt(tds[i], 10);
             break;
           }
         }
       }
 
-      if (!rowTrimPackage && engineVariant) {
-        for (const tr of KNOWN_HARDWARE_TRIMS) {
-          if (new RegExp(`\\b${tr}\\b`, 'i').test(engineVariant)) {
-            rowTrimPackage = tr;
-            break;
+      if (!priceTl) {
+        for (let i = tds.length - 1; i >= 0; i--) {
+          if (tds[i].includes('TL')) {
+            const pVal = parseInt(tds[i].replace(/\./g, '').replace(/\D/g, ''), 10);
+            if (!isNaN(pVal) && pVal > 0) {
+              priceTl = pVal;
+              break;
+            }
           }
         }
       }
 
-      if (!rowEngineVariant) {
-        rowEngineVariant = engineVariant;
-      }
-      if (!rowTrimPackage && engineVariant && engineVariant !== rowEngineVariant) {
-        rowTrimPackage = engineVariant;
-      }
+      // Parser V3 Metadata Extraction
+      const parsedMeta = extractCanonicalVehicleMetadata(rowMake, rawModelCell, rawVariantCell, rawTitleCell);
+      const cMake = parsedMeta.canonicalMake || rowMake;
+      const cModel = parsedMeta.canonicalModel || rawModelCell;
+      const cVariant = parsedMeta.canonicalVariant;
+      const cTrim = parsedMeta.canonicalTrim;
+      const cBody = parsedMeta.canonicalBodyType;
 
-      const compositeKey = `${dataId}__${rowMake}__${rowModel}__${rowSubModel || ''}__${rowEngineVariant || ''}__${year || 0}__${mileageKm || 0}__${color || ''}__${priceTl || 0}`.toLowerCase();
+      const compositeKey = `${dataId}__${rowMake}__${cModel}__${rawVariantCell || ''}__${cVariant || ''}__${year || 0}__${mileageKm || 0}__${color || ''}__${priceTl || 0}`.toLowerCase();
       const listingIdKey = dataId || `HASH_${compositeKey}`;
 
       const missingList: string[] = [];
-      if (!rowEngineVariant) missingList.push('engineVariant');
+      if (!cVariant || cVariant === 'UNKNOWN') missingList.push('engineVariant');
       if (!priceTl || priceTl <= 0) missingList.push('price');
-      if (!rowMake || rowMake === 'Bilinmeyen') missingList.push('make');
-      if (!rowModel || rowModel === 'Genel') missingList.push('model');
+      if (!cMake || cMake === 'Bilinmeyen') missingList.push('make');
+      if (!cModel || cModel === 'Genel Model') missingList.push('model');
       if (!year) missingList.push('year');
       if (mileageKm === null) missingList.push('mileageKm');
       if (!color) missingList.push('color');
@@ -513,6 +615,7 @@ async function runImport() {
       // Check intra-batch duplicate
       if (batchSeenListingIds.has(listingIdKey)) {
         mergedDuplicateCount++;
+        fileDuplicateCount++;
         continue;
       }
       batchSeenListingIds.add(listingIdKey);
@@ -521,17 +624,21 @@ async function runImport() {
       const existingInDb = existingMap.get(listingIdKey);
       if (existingInDb) {
         updatedExistingListingCount++;
+        fileUpdatedCount++;
         recordsToUpdate.push({
           id: existingInDb.id,
-          rawVariant: rowEngineVariant,
-          canonicalVariant: rowEngineVariant,
-          canonicalTrim: rowTrimPackage,
+          canonicalMake: cMake,
+          canonicalModel: cModel,
+          canonicalVariant: cVariant,
+          canonicalTrim: cTrim,
+          canonicalBodyType: cBody,
           price: priceTl || 0,
           mileageKm: mileageKm,
           parseStatus,
         });
       } else {
         newUniqueListingCount++;
+        fileInsertedCount++;
         if (parseStatus === 'VALID') completeCount++;
         else if (parseStatus === 'MISSING_PRICE') missingPriceCount++;
         else missingEngineVariantCount++;
@@ -545,12 +652,14 @@ async function runImport() {
           sourceListingId: listingIdKey,
           sourceFile: fileName,
           rawMake: rowMake,
-          rawModel: rowModel,
-          rawVariant: rowEngineVariant,
-          canonicalMake: rowMake,
-          canonicalModel: rowModel,
-          canonicalVariant: rowEngineVariant,
-          canonicalTrim: rowTrimPackage,
+          rawModel: rawModelCell,
+          rawVariant: rawVariantCell,
+          rawTitle: rawTitleCell,
+          canonicalMake: cMake,
+          canonicalModel: cModel,
+          canonicalVariant: cVariant,
+          canonicalTrim: cTrim,
+          canonicalBodyType: cBody,
           year: year || 2000,
           mileageKm: mileageKm,
           price: priceTl || 0,
@@ -568,15 +677,52 @@ async function runImport() {
       absolutePath: filePath,
       relativePath: relP,
       fileSize: stat.size,
-      modifiedTime: stat.mtime.toISOString(),
+      modifiedAt: stat.mtime.toISOString(),
+      processedAt: new Date().toISOString(),
+      sha256: hash,
       sha256ContentHash: hash,
       parserVersion: CURRENT_PARSER_VERSION,
+      catalogVersion: CURRENT_CATALOG_VERSION,
       importedAt: new Date().toISOString(),
       detectedMake: headerInfo.make,
       detectedModel: headerInfo.model,
       detectedSubModel: headerInfo.subModel,
-      listingRowCount: fileRowCount,
+      extractedRowCount: fileRowCount,
+      insertedListingCount: fileInsertedCount,
+      updatedListingCount: fileUpdatedCount,
+      duplicateCount: fileDuplicateCount,
+      status: 'SUCCESS',
+      errorMessage: null,
     };
+  }
+
+  // Print 10-row sample table
+  if (recordsToInsert.length > 0 || recordsToUpdate.length > 0) {
+    console.log(`\n====================================================================`);
+    console.log(`  ÖRNEK 10 İLAN SATIRI (${isDryRun ? 'DRY-RUN SİMÜLASYONU' : 'ARTIMLI AKTARIM'})`);
+    console.log(`====================================================================`);
+    console.log(`İlan ID | Marka | Seri/Model | Motor/Versiyon/Paket | Yıl | KM | Renk | Fiyat | Kaynak Dosya`);
+    const allRecords = [...recordsToInsert, ...recordsToUpdate];
+    allRecords.slice(0, 10).forEach(r => {
+      console.log(`${r.sourceListingId || r.id} | ${r.rawMake || 'Ford'} | ${r.rawModel || 'Focus'} | ${r.rawVariant || '-'} | ${r.year || '-'} | ${r.mileageKm || '-'} | ${r.color || '-'} | ${r.price ? r.price.toLocaleString('tr-TR') + ' TL' : '0 TL'} | ${r.sourceFile || 'Ford.html'}`);
+    });
+    console.log(`====================================================================\n`);
+  }
+
+  if (isDryRun) {
+    console.log(`✓ DRY-RUN SİMÜLASYONU TAMAMLANDI. Veritabanına veya manifest dosyasına hiçbir değişiklik yazılmadı.`);
+    console.log(`\n====================================================================`);
+    console.log(`  ARTIMLI (INCREMENTAL) AKTARIM DRY-RUN RAPORU`);
+    console.log(`====================================================================`);
+    console.log(`- İşlenecek HTML dosyası: ${filesToProcess.length} (Yeni: ${newFilePaths.length}, Değişen: ${changedFilePaths.length}, Atlanan: ${unchangedFilePaths.length})`);
+    console.log(`- Okunan toplam ilan satırı: ${totalReadRows}`);
+    console.log(`- Yeni eklenecek benzersiz ilan: ${newUniqueListingCount}`);
+    console.log(`- Güncellenecek mevcut ilan: ${updatedExistingListingCount}`);
+    console.log(`- Birleştirilecek duplicate ilan: ${mergedDuplicateCount}`);
+    console.log(`- Eksik fiyatlı ilan: ${missingPriceCount}`);
+    console.log(`- Fiyatlandırmada kullanılabilir ilan: ${pricingUsableNewCount}`);
+    console.log(`- Etkilenen araç grupları (Cache temizliği): ${affectedVehicleGroups.size}\n`);
+    return;
   }
 
   // Update existing records
@@ -595,19 +741,6 @@ async function runImport() {
         }
       });
     }
-  }
-
-  // Print 10-row sample table
-  if (recordsToInsert.length > 0 || recordsToUpdate.length > 0) {
-    console.log(`\n====================================================================`);
-    console.log(`  ÖRNEK 10 İLAN SATIRI (FORD ARTIMLI VERİ AKTARIMI SİMÜLASYONU)`);
-    console.log(`====================================================================`);
-    console.log(`İlan ID | Marka | Seri/Model | Motor/Versiyon/Paket | Yıl | KM | Renk | Fiyat | Kaynak Dosya`);
-    const allRecords = [...recordsToInsert, ...recordsToUpdate];
-    allRecords.slice(0, 10).forEach(r => {
-      console.log(`${r.sourceListingId || r.id} | ${r.rawMake || 'Ford'} | ${r.rawModel || 'Focus'} | ${r.rawVariant || '-'} | ${r.year || '-'} | ${r.mileageKm || '-'} | ${r.color || '-'} | ${r.price ? r.price.toLocaleString('tr-TR') + ' TL' : '0 TL'} | ${r.sourceFile || 'Ford.html'}`);
-    });
-    console.log(`====================================================================\n`);
   }
 
   // Insert new records in chunks

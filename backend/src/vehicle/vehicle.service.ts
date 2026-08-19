@@ -51,46 +51,166 @@ export class VehicleService {
     );
   }
 
-  async getModels(brandId: string) {
-    const models = await this.withRetry(() =>
-      this.prisma.model.findMany({
-        where: { manufacturerId: brandId },
-        orderBy: { name: 'asc' },
-      }),
-    );
-    return models.filter(m => {
+  async getModels(brandId: string, year?: number) {
+    const numYear = year ? Number(year) : null;
+    const cacheKey = numYear ? `models:${brandId}:${numYear}` : `models:${brandId}:all`;
+    const cached = await this.cache.get<any[]>(cacheKey);
+    if (cached) return cached;
+
+    let models: any[] = [];
+    if (numYear) {
+      const manufacturer = await this.prisma.manufacturer.findUnique({
+        where: { id: brandId },
+        select: { name: true }
+      });
+
+      const specs = await this.prisma.vehicleSpecification.findMany({
+        where: { manufacturerId: brandId, year: numYear },
+        select: { modelId: true }
+      });
+      const validModelIds = new Set(specs.map(s => s.modelId));
+
+      if (manufacturer) {
+        const rawListings = await this.prisma.rawVehicleListing.findMany({
+          where: { canonicalMake: manufacturer.name, year: numYear },
+          select: { canonicalModel: true }
+        });
+        const rawModelNames = Array.from(new Set(rawListings.map(r => r.canonicalModel).filter(Boolean)));
+        if (rawModelNames.length > 0) {
+          const matchingModels = await this.prisma.model.findMany({
+            where: {
+              manufacturerId: brandId,
+              name: { in: rawModelNames }
+            },
+            select: { id: true }
+          });
+          matchingModels.forEach(m => validModelIds.add(m.id));
+        }
+      }
+
+      if (validModelIds.size > 0) {
+        models = await this.withRetry(() =>
+          this.prisma.model.findMany({
+            where: { manufacturerId: brandId, id: { in: Array.from(validModelIds) } },
+            orderBy: { name: 'asc' },
+          }),
+        );
+      } else {
+        models = await this.withRetry(() =>
+          this.prisma.model.findMany({
+            where: { manufacturerId: brandId },
+            orderBy: { name: 'asc' },
+          }),
+        );
+      }
+    } else {
+      models = await this.withRetry(() =>
+        this.prisma.model.findMany({
+          where: { manufacturerId: brandId },
+          orderBy: { name: 'asc' },
+        }),
+      );
+    }
+
+    const filtered = models.filter(m => {
       const lower = m.name.toLowerCase();
       return (
         !lower.includes('sahibinden') &&
         !lower.includes('fiyatları') &&
         !lower.includes('.html') &&
+        !lower.includes('modelleri') &&
         !/-\s*\d+$/.test(lower)
       );
     });
+
+    await this.cache.set(cacheKey, filtered, 3600);
+    return filtered;
   }
 
-  async getVariants(modelId: string) {
-    const cacheKey = `variants_${modelId}`;
+  async getVariants(modelId: string, brandId?: string, year?: number) {
+    const numYear = year ? Number(year) : null;
+    const cacheKey = numYear && brandId ? `variants:${brandId}:${numYear}:${modelId}` : `variants:${modelId}`;
     const cached = await this.cache.get<any[]>(cacheKey);
     if (cached) return cached;
 
-    const variants = await this.withRetry(() =>
-      this.prisma.variant.findMany({
-        where: { modelId },
-        orderBy: { name: 'asc' },
-      }),
-    );
+    let variants: any[] = [];
+    if (numYear && brandId) {
+      const specs = await this.prisma.vehicleSpecification.findMany({
+        where: { manufacturerId: brandId, modelId: modelId, year: numYear },
+        select: { variantId: true }
+      });
+      const validVariantIds = new Set(specs.map(s => s.variantId));
+
+      if (validVariantIds.size > 0) {
+        variants = await this.withRetry(() =>
+          this.prisma.variant.findMany({
+            where: { modelId: modelId, id: { in: Array.from(validVariantIds) } },
+            orderBy: { name: 'asc' },
+          }),
+        );
+      }
+    }
+
+    if (variants.length === 0) {
+      variants = await this.withRetry(() =>
+        this.prisma.variant.findMany({
+          where: { modelId },
+          orderBy: { name: 'asc' },
+        }),
+      );
+    }
+
+    if (variants.length === 0) {
+      variants = [{ id: 'UNKNOWN', name: 'UNKNOWN', modelId }];
+    }
+
     await this.cache.set(cacheKey, variants, 3600);
     return variants;
   }
 
+  async getPackages(variantId: string, modelId?: string, brandId?: string, year?: number) {
+    const numYear = year ? Number(year) : null;
+    const cacheKey = numYear && brandId && modelId
+      ? `packages:${brandId}:${numYear}:${modelId}:${variantId}`
+      : `packages:${variantId}`;
+    const cached = await this.cache.get<any[]>(cacheKey);
+    if (cached) return cached;
+
+    let packages: any[] = [];
+    if (numYear && brandId && modelId) {
+      const specs = await this.prisma.vehicleSpecification.findMany({
+        where: { manufacturerId: brandId, modelId: modelId, variantId: variantId, year: numYear },
+        select: { packageId: true }
+      });
+      const validPackageIds = new Set(specs.map(s => s.packageId).filter(Boolean) as string[]);
+
+      packages = await this.withRetry(() =>
+        this.prisma.package.findMany({
+          where: { variantId: variantId, id: { in: Array.from(validPackageIds) } },
+          orderBy: { name: 'asc' },
+        }),
+      );
+    } else {
+      packages = await this.withRetry(() =>
+        this.prisma.package.findMany({
+          where: { variantId },
+          orderBy: { name: 'asc' },
+        }),
+      );
+    }
+
+    await this.cache.set(cacheKey, packages, 3600);
+    return packages;
+  }
+
   async getYears() {
     const years = [];
-    for (let y = 2026; y >= 2000; y--) {
+    for (let y = 2026; y >= 1970; y--) {
       years.push(y);
     }
     return years;
   }
+
 
   private static vehicleDataCache = new Map<string, { data: any; timestamp: number }>();
 

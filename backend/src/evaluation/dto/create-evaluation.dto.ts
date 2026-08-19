@@ -10,6 +10,8 @@ import {
   IsEnum,
 } from 'class-validator';
 
+import { Transform } from 'class-transformer';
+
 export class CreateEvaluationDto {
   @IsNotEmpty({ message: 'Yıl alanı boş bırakılamaz.' })
   @IsNumber({}, { message: 'Yıl sayı olmalıdır.' })
@@ -27,29 +29,29 @@ export class CreateEvaluationDto {
   @Length(1, 100)
   modelId!: string;
 
+  @Transform(({ value }) => (typeof value === 'string' && value.trim() === '' ? undefined : value))
   @IsOptional()
   @IsString()
-  @Length(1, 100)
   variantId?: string;
 
+  @Transform(({ value }) => (typeof value === 'string' && value.trim() === '' ? undefined : value))
   @IsOptional()
   @IsString()
-  @Length(1, 100)
   packageId?: string;
 
+  @Transform(({ value }) => (typeof value === 'string' && value.trim() === '' ? undefined : value))
   @IsOptional()
   @IsString()
-  @Length(1, 100)
   bodyTypeId?: string;
 
+  @Transform(({ value }) => (typeof value === 'string' && value.trim() === '' ? undefined : value))
   @IsOptional()
   @IsString()
-  @Length(1, 100)
   fuelTypeId?: string;
 
+  @Transform(({ value }) => (typeof value === 'string' && value.trim() === '' ? undefined : value))
   @IsOptional()
   @IsString()
-  @Length(1, 100)
   transmissionTypeId?: string;
 
   @IsNotEmpty({ message: 'Kilometre boş bırakılamaz.' })

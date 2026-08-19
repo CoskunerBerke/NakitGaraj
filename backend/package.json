@@ -20,7 +20,12 @@
     "test:e2e": "jest --config ./test/jest-e2e.json",
     "inspect:sahibinden-html": "ts-node src/scripts/inspect_sahibinden_html.ts",
     "dry-run:html-parser": "ts-node src/scripts/dry_run_html_parser.ts",
-    "import:sahibinden-html": "ts-node src/scripts/import_unique_sahibinden_listings.ts"
+    "import:sahibinden-html": "ts-node src/scripts/rebuild_raw_listings_v3.ts",
+    "import:new-html": "ts-node src/scripts/rebuild_raw_listings_v3.ts",
+    "import:watch": "ts-node src/scripts/watch_import.ts",
+    "rebuild:listings": "ts-node src/scripts/rebuild_raw_listings_v3.ts",
+    "rebuild:listings:dry": "ts-node src/scripts/rebuild_raw_listings_v3.ts --dry-run",
+    "report:50-cars": "ts-node src/scripts/generate_50_car_report_v3.ts"
   },
   "dependencies": {
     "@napi-rs/canvas": "^1.0.3",
@@ -32,19 +37,21 @@
     "@nestjs/schedule": "^6.1.3",
     "@nestjs/throttler": "^6.5.0",
     "@prisma/client": "^5.22.0",
+    "@types/better-sqlite3": "^9.6.0",
     "@types/jsdom": "^28.0.3",
     "bcrypt": "^6.0.0",
+    "better-sqlite3": "^13.0.3",
     "cheerio": "^1.2.0",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
     "csv-parser": "^3.2.1",
+    "exceljs": "^4.4.0",
     "helmet": "^8.3.0",
     "jsdom": "^29.1.1",
     "playwright": "^1.62.0",
     "redis": "^6.1.0",
     "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.1",
-    "exceljs": "^4.4.0"
+    "rxjs": "^7.8.1"
   },
   "overrides": {
     "js-yaml": "^4.1.0",
@@ -94,7 +101,8 @@
       "**/*.(t|j)s"
     ],
     "coverageDirectory": "../coverage",
-    "testEnvironment": "node"
+    "testEnvironment": "node",
+    "testTimeout": 30000
   },
   "prisma": {
     "seed": "ts-node prisma/seed.ts"

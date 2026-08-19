@@ -37,3 +37,25 @@ yarn-debug.log*
 # System Files
 .DS_Store
 Thumbs.db
+
+# SQLite yan dosyalari ve tum DB yedekleri (baseline commit korumasi)
+*.db-wal
+*.db-shm
+*.bak
+*.bak_*
+*.backup_*
+**/prisma/*.bak*
+**/prisma/*backup*
+**/prisma/dev.db*
+
+# Sahibinden ham HTML kaynak verisi ve turevleri
+sahibindne ilan/
+**/sahibindne ilan/
+*.html.raw
+
+# Ekran goruntusu / artifact ciktilari
+artifacts_screenshots/
+
+# Importer turevi gecici durum dosyalari (uretilen, kaynak degil)
+backend/data/import-state/db_listings_checksum.json
+frontend/test-results/

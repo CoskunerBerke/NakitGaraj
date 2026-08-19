@@ -16,13 +16,27 @@ export class VehicleController {
   }
 
   @Get('models')
-  async getModels(@Query('brandId') brandId: string) {
-    return this.vehicleService.getModels(brandId);
+  async getModels(@Query('brandId') brandId: string, @Query('year') year?: number) {
+    return this.vehicleService.getModels(brandId, year);
   }
 
   @Get('variants')
-  async getVariants(@Query('modelId') modelId: string) {
-    return this.vehicleService.getVariants(modelId);
+  async getVariants(
+    @Query('modelId') modelId: string,
+    @Query('brandId') brandId?: string,
+    @Query('year') year?: number,
+  ) {
+    return this.vehicleService.getVariants(modelId, brandId, year);
+  }
+
+  @Get('packages')
+  async getPackages(
+    @Query('variantId') variantId: string,
+    @Query('modelId') modelId?: string,
+    @Query('brandId') brandId?: string,
+    @Query('year') year?: number,
+  ) {
+    return this.vehicleService.getPackages(variantId, modelId, brandId, year);
   }
 
   @Get('years')

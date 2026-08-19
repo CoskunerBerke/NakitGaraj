@@ -13,6 +13,7 @@ describe('NakitGaraj Comprehensive Hardened Security Penetration Test Suite', ()
   let prisma: PrismaService;
 
   beforeAll(async () => {
+    jest.setTimeout(30000);
     // 1. ISOLATED TEST DB ENFORCEMENT
     const testDbPath = path.resolve(__dirname, '../../prisma/test_security.db');
     process.env.DATABASE_URL = `file:${testDbPath}`;

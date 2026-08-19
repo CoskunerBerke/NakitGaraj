@@ -110,6 +110,17 @@ const VEHICLE_FEATURES = {
   ]
 };
 
+const filterDirtyOptions = (options: any[]) => {
+  return options.filter((opt) => {
+    if (!opt || typeof opt.name !== 'string') return false;
+    const name = opt.name.toLowerCase();
+    if (name === '' || name === '-' || name === '--') return false;
+    if (name.includes('sahibinden') || name.includes('.html') || name.includes('.htm') || name.includes('fiyatları & modelleri')) return false;
+    if (/-\s*\d+$/.test(name)) return false;
+    return true;
+  });
+};
+
 export default function ValuationWizard() {
   const { t, language } = useLanguage();
   const [step, setStep] = useState(1);
@@ -388,35 +399,90 @@ export default function ValuationWizard() {
 
     fetch(`${API_BASE}/brands`)
       .then((res) => res.json())
-      .then((data) => setBrands(Array.isArray(data) ? data : []))
+      .then((data) => setBrands(filterDirtyOptions(Array.isArray(data) ? data : [])))
       .catch(console.error);
   }, []);
 
-  // Fetch models when brand changes
+  // Fetch models when brand or year changes
   useEffect(() => {
-    if (selectedBrand) {
-      fetch(`${API_BASE}/models?brandId=${selectedBrand}`)
-        .then((res) => res.json())
-        .then((data) => {
-          const uniqueModels: any[] = [];
-          const seenNames = new Set<string>();
-          (data || []).forEach((m: any) => {
-            const cleanName = m.name.replace(/-/g, ' ').toLowerCase();
-            if (!seenNames.has(cleanName)) {
-              seenNames.add(cleanName);
-              uniqueModels.push(m);
-            }
-          });
-          setModels(uniqueModels);
-          // reset subordinate fields
-          setSelectedModel('');
-          resetSubordinateOptions();
-        })
-        .catch(console.error);
-    } else {
+    if (!selectedBrand) {
       setModels([]);
+      return;
     }
-  }, [selectedBrand]);
+    const controller = new AbortController();
+    const yearQuery = selectedYear ? `&year=${selectedYear}` : '';
+    fetch(`${API_BASE}/models?brandId=${selectedBrand}${yearQuery}`, { signal: controller.signal })
+      .then((res) => res.json())
+      .then((data) => {
+        const uniqueModels: any[] = [];
+        const seenNames = new Set<string>();
+        (data || []).forEach((m: any) => {
+          const cleanName = m.name.replace(/-/g, ' ').toLowerCase();
+          if (!seenNames.has(cleanName)) {
+            seenNames.add(cleanName);
+            uniqueModels.push(m);
+          }
+        });
+        setModels(filterDirtyOptions(uniqueModels));
+        setSelectedModel('');
+        resetSubordinateOptions();
+      })
+      .catch((err) => {
+        if (err.name !== 'AbortError') console.error(err);
+      });
+
+    return () => controller.abort();
+  }, [selectedBrand, selectedYear]);
+
+  // Fetch variants when model, brand, or year changes
+  useEffect(() => {
+    if (!selectedModel || !selectedBrand || !selectedYear) {
+      setAvailableVariants([]);
+      setSelectedVariant('');
+      return;
+    }
+    const controller = new AbortController();
+    setIsVehicleDataLoading(true);
+    fetch(`${API_BASE}/variants?modelId=${selectedModel}&brandId=${selectedBrand}&year=${selectedYear}`, { signal: controller.signal })
+      .then((res) => res.json())
+      .then((data) => {
+        const variantsList = filterDirtyOptions(Array.isArray(data) ? data : []);
+        setAvailableVariants(variantsList);
+        if (variantsList.length === 1) {
+          setSelectedVariant(variantsList[0].id);
+        }
+      })
+      .catch((err) => {
+        if (err.name !== 'AbortError') console.error(err);
+      })
+      .finally(() => setIsVehicleDataLoading(false));
+
+    return () => controller.abort();
+  }, [selectedModel, selectedBrand, selectedYear]);
+
+  // Fetch packages when variant, model, brand, or year changes
+  useEffect(() => {
+    if (!selectedVariant || selectedVariant === 'UNKNOWN' || !selectedModel || !selectedBrand || !selectedYear) {
+      setAvailablePackages([]);
+      setSelectedPackage('');
+      return;
+    }
+    const controller = new AbortController();
+    fetch(`${API_BASE}/packages?variantId=${selectedVariant}&modelId=${selectedModel}&brandId=${selectedBrand}&year=${selectedYear}`, { signal: controller.signal })
+      .then((res) => res.json())
+      .then((data) => {
+        const packagesList = filterDirtyOptions(Array.isArray(data) ? data : []);
+        setAvailablePackages(packagesList);
+        if (packagesList.length === 1) {
+          setSelectedPackage(packagesList[0].id);
+        }
+      })
+      .catch((err) => {
+        if (err.name !== 'AbortError') console.error(err);
+      });
+
+    return () => controller.abort();
+  }, [selectedVariant, selectedModel, selectedBrand, selectedYear]);
 
   const resetSubordinateOptions = () => {
     setSelectedVariant('');
@@ -460,9 +526,17 @@ function SearchableCombobox({
 }) {
   const [isOpen, setIsOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  const [highlightedIndex, setHighlightedIndex] = useState(0);
   const wrapperRef = React.useRef<HTMLDivElement>(null);
 
   const selectedOption = options.find((o) => o.id === value);
+
+  // Auto-select single option if only 1 option available
+  useEffect(() => {
+    if (options.length === 1 && !value && !disabled && !isLoading) {
+      onChange(options[0].id);
+    }
+  }, [options, value, disabled, isLoading, onChange]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -478,8 +552,39 @@ function SearchableCombobox({
     o.name.toLocaleLowerCase('tr-TR').includes(searchTerm.trim().toLocaleLowerCase('tr-TR'))
   );
 
+  useEffect(() => {
+    setHighlightedIndex(0);
+  }, [searchTerm, isOpen]);
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (!isOpen) {
+      if (e.key === 'ArrowDown' || e.key === 'Enter') {
+        setIsOpen(true);
+        e.preventDefault();
+      }
+      return;
+    }
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setHighlightedIndex((prev) => (prev + 1) % Math.max(1, filteredOptions.length));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setHighlightedIndex((prev) => (prev - 1 + filteredOptions.length) % Math.max(1, filteredOptions.length));
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (filteredOptions[highlightedIndex]) {
+        onChange(filteredOptions[highlightedIndex].id);
+        setIsOpen(false);
+        setSearchTerm('');
+      }
+    } else if (e.key === 'Escape') {
+      setIsOpen(false);
+    }
+  };
+
   return (
-    <div ref={wrapperRef} className="relative w-full">
+    <div ref={wrapperRef} className="relative w-full" onKeyDown={handleKeyDown}>
       {/* Hidden Native Select for Playwright test compatibility */}
       <select
         data-testid={dataTestId}
@@ -499,6 +604,7 @@ function SearchableCombobox({
 
       {/* Trigger Button */}
       <button
+        data-testid={dataTestId ? `trigger-${dataTestId}` : undefined}
         type="button"
         disabled={disabled || isLoading}
         onClick={() => setIsOpen(!isOpen)}
@@ -510,15 +616,22 @@ function SearchableCombobox({
           {isLoading ? (
             <span className="flex items-center gap-2 text-brand-orange">
               <Loader2 className="w-4 h-4 animate-spin shrink-0" />
-              {loadingMessage || 'Motor / versiyon seçenekleri yükleniyor...'}
+              {loadingMessage || 'Seçenekler yükleniyor...'}
             </span>
           ) : selectedOption ? (
-            selectedOption.name
+            selectedOption.name === 'UNKNOWN' ? 'Motor bilgisi belirtilmemiş' : selectedOption.name
           ) : (
             placeholder
           )}
         </span>
-        <ChevronDown className={`w-4 h-4 text-zinc-400 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} />
+        <div className="flex items-center gap-2">
+          {options.length > 0 && !isLoading && (
+            <span className="px-2 py-0.5 rounded-full bg-zinc-100 dark:bg-zinc-800 text-[10px] font-bold text-zinc-500">
+              {options.length}
+            </span>
+          )}
+          <ChevronDown className={`w-4 h-4 text-zinc-400 transition-transform duration-200 ${isOpen ? 'rotate-180' : ''}`} />
+        </div>
       </button>
 
       {/* Long Loading Warning */}
@@ -549,40 +662,54 @@ function SearchableCombobox({
       {isOpen && !disabled && !isLoading && (
         <div className="absolute left-0 right-0 top-full mt-2 z-50 rounded-2xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-150">
           {/* Search Box */}
-          <div className="p-2.5 border-b border-zinc-100 dark:border-zinc-800/80 bg-zinc-50/50 dark:bg-zinc-900/50 flex items-center gap-2">
-            <Search className="w-4 h-4 text-zinc-400 shrink-0" />
-            <input
-              type="text"
-              autoFocus
-              placeholder={searchPlaceholder}
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="bg-transparent text-xs w-full focus:outline-none text-zinc-900 dark:text-white font-semibold placeholder:text-zinc-400"
-            />
+          <div className="p-2.5 border-b border-zinc-100 dark:border-zinc-800/80 bg-zinc-50/50 dark:bg-zinc-900/50 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 flex-1">
+              <Search className="w-4 h-4 text-zinc-400 shrink-0" />
+              <input
+                type="text"
+                autoFocus
+                placeholder={searchPlaceholder}
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="bg-transparent text-xs w-full focus:outline-none text-zinc-900 dark:text-white font-semibold placeholder:text-zinc-400"
+              />
+            </div>
+            <span className="text-[10px] font-semibold text-zinc-400 bg-zinc-200/50 dark:bg-zinc-800 px-2 py-0.5 rounded-md">
+              {filteredOptions.length} Sonuç
+            </span>
           </div>
 
           {/* Options List (Max 8 visible items) */}
           <div className="max-h-60 overflow-y-auto p-1.5 flex flex-col gap-0.5 custom-scrollbar">
             {filteredOptions.length > 0 ? (
-              filteredOptions.map((opt) => (
-                <button
-                  key={opt.id}
-                  type="button"
-                  onClick={() => {
-                    onChange(opt.id);
-                    setIsOpen(false);
-                    setSearchTerm('');
-                  }}
-                  className={`w-full text-left px-3 py-2.5 rounded-xl text-xs font-semibold flex items-center justify-between transition-all cursor-pointer ${
-                    opt.id === value
-                      ? 'bg-brand-orange text-white font-extrabold shadow-sm'
-                      : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800/80'
-                  }`}
-                >
-                  <span>{opt.name}</span>
-                  {opt.id === value && <Check className="w-4 h-4 text-white shrink-0" />}
-                </button>
-              ))
+              filteredOptions.map((opt, idx) => {
+                const displayName = opt.name === 'UNKNOWN' ? 'Motor bilgisi belirtilmemiş' : opt.name;
+                const isSelected = opt.id === value;
+                const isHighlighted = idx === highlightedIndex;
+
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => {
+                      onChange(opt.id);
+                      setIsOpen(false);
+                      setSearchTerm('');
+                    }}
+                    onMouseEnter={() => setHighlightedIndex(idx)}
+                    className={`w-full text-left px-3 py-2.5 rounded-xl text-xs font-semibold flex items-center justify-between transition-all cursor-pointer ${
+                      isSelected
+                        ? 'bg-brand-orange text-white font-extrabold shadow-sm'
+                        : isHighlighted
+                        ? 'bg-zinc-100 dark:bg-zinc-800/80 text-zinc-900 dark:text-white'
+                        : 'text-zinc-700 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800/80'
+                    }`}
+                  >
+                    <span>{displayName}</span>
+                    {isSelected && <Check className="w-4 h-4 text-white shrink-0" />}
+                  </button>
+                );
+              })
             ) : (
               <div className="p-4 text-center text-xs text-zinc-400 font-medium">
                 Aramanızla eşleşen seçenek bulunamadı.
@@ -595,12 +722,13 @@ function SearchableCombobox({
   );
 }
 
-  // Is Step 1 completed? (Year, Brand, Model and Variant are sufficient!)
+  // Is Step 1 completed? (Year, Brand, Model, Variant, and Package if available are required!)
   const isStep1Complete =
     selectedYear !== '' &&
     selectedBrand !== '' &&
     selectedModel !== '' &&
-    (availableVariants.length === 0 || selectedVariant !== '');
+    selectedVariant !== '' &&
+    (availablePackages.length === 0 || selectedPackage !== '');
 
   const handleStep1Next = () => {
     if (isStep1Complete) {
@@ -608,7 +736,60 @@ function SearchableCombobox({
     }
   };
 
+  const handleStep2Invalid = (errors: any) => {
+    const errorList = Object.keys(errors || {}).map((key) => ({
+      field: key,
+      message: errors[key]?.message,
+    }));
+    console.log('[DEGERLEME FORM INVALID]', JSON.stringify(errorList));
+
+
+    let firstErrorElement: HTMLElement | null = null;
+
+    // Check first Zod validation error
+    const firstErrorKey = Object.keys(errors || {})[0];
+    if (firstErrorKey) {
+      const target = document.querySelector(
+        `[name="${firstErrorKey}"], [data-testid="vehicle-${firstErrorKey}"], [data-testid="step2-${firstErrorKey}"]`
+      );
+      if (target) firstErrorElement = target as HTMLElement;
+    }
+
+    // Check contact info
+    if (!isContactInfoValid() && !firstErrorElement) {
+      const phoneInput = document.querySelector('[data-testid="step2-phone"]');
+      if (phoneInput) firstErrorElement = phoneInput as HTMLElement;
+    }
+
+    // Check equipment selection
+    if (!isEquipmentValid() && !firstErrorElement) {
+      const eqSection = document.getElementById('equipment-section') || document.querySelector('[data-section="equipment"]');
+      if (eqSection) firstErrorElement = eqSection as HTMLElement;
+    }
+
+    if (firstErrorElement) {
+      firstErrorElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      if (typeof firstErrorElement.focus === 'function') {
+        firstErrorElement.focus();
+      }
+    }
+  };
+
   const handleStep2Submit = async (formData: any) => {
+    // Stale or missing vehicle selection check
+    if (!selectedBrand || !selectedYear || !selectedModel) {
+      alert('Seçtiğiniz araç bilgileri güncellendi. Lütfen Motor/Versiyon ve Paket seçimini yeniden yapın.');
+      resetSubordinateOptions();
+      setStep(1);
+      return;
+    }
+
+    // Custom validation check (equipment & contact info)
+    if (!isEquipmentValid() || !isContactInfoValid()) {
+      handleStep2Invalid(errors);
+      return;
+    }
+
     setIsLoading(true);
     try {
       const response = await fetch(`${API_BASE}/vehicle-evaluation`, {
@@ -618,11 +799,11 @@ function SearchableCombobox({
           year: Number(selectedYear),
           manufacturerId: selectedBrand,
           modelId: selectedModel,
-          variantId: selectedVariant,
-          packageId: selectedPackage,
-          bodyTypeId: selectedBodyType,
-          fuelTypeId: selectedFuelType,
-          transmissionTypeId: selectedTransmission,
+          variantId: selectedVariant && selectedVariant !== 'UNKNOWN' ? selectedVariant : undefined,
+          packageId: selectedPackage || undefined,
+          bodyTypeId: selectedBodyType || undefined,
+          fuelTypeId: selectedFuelType || undefined,
+          transmissionTypeId: selectedTransmission || undefined,
           licensePlate: formData.licensePlate.toUpperCase(),
           mileage: Number(formData.mileage),
           color: formData.color,
@@ -651,8 +832,13 @@ function SearchableCombobox({
       });
 
       if (!response.ok) {
-        const err = await response.json();
-        throw new Error(err.message || 'Değerleme işlemi başarısız.');
+        const err = await response.json().catch(() => ({ message: 'Değerleme işlemi başarısız.' }));
+        setValuationResult({
+          status: 'ERROR',
+          message: err.message || 'Değerleme sırasında bir hata oluştu, lütfen tekrar deneyiniz.'
+        });
+        setStep(3);
+        return;
       }
 
       const result = await response.json();
@@ -664,7 +850,12 @@ function SearchableCombobox({
       const friendlyMsg = isNetworkError
         ? 'Sunucu ile bağlantı kurulamadı (Backend servisi kapalı veya yanıt vermiyor). Lütfen backend sunucusunu başlatıp tekrar deneyiniz.'
         : (error.message || 'Değerleme sırasında bir hata oluştu, lütfen tekrar deneyiniz.');
-      alert(friendlyMsg);
+      
+      setValuationResult({
+        status: 'ERROR',
+        message: friendlyMsg
+      });
+      setStep(3);
     } finally {
       setIsLoading(false);
     }
@@ -854,6 +1045,7 @@ function SearchableCombobox({
 
                     {/* All Brands Dropdown */}
                     <select
+                      data-testid="vehicle-brand"
                       suppressHydrationWarning
                       value={selectedBrand}
                       onChange={(e) => {
@@ -1225,7 +1417,7 @@ function SearchableCombobox({
                   </span>
                 ) : (
                   <span className="text-[10px] font-bold uppercase bg-zinc-200 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 px-2.5 py-1 rounded-full">
-                    Araç seçimi henüz tamamlanmadı
+                    {!selectedModel ? 'Model Seçimi Bekleniyor' : !selectedVariant ? 'Motor / Versiyon Seçimi Bekleniyor' : 'Donanım Paketi Seçimi Bekleniyor'}
                   </span>
                 )}
               </motion.div>
@@ -1299,7 +1491,7 @@ function SearchableCombobox({
               </div>
             </div>
 
-            <form onSubmit={handleSubmit(handleStep2Submit)} className="flex flex-col gap-6">
+            <form onSubmit={handleSubmit(handleStep2Submit, handleStep2Invalid)} className="flex flex-col gap-6">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 {/* License Plate */}
                 <div className="flex flex-col gap-2">
@@ -1902,7 +2094,7 @@ function SearchableCombobox({
                 <button
                   data-testid="vehicle-submit-button"
                   type="submit"
-                  disabled={isLoading || !isEquipmentValid() || !isContactInfoValid()}
+                  disabled={isLoading}
                   className="inline-flex items-center gap-2 bg-brand-orange hover:bg-brand-orange/90 disabled:opacity-40 text-white font-bold py-3.5 px-8 rounded-xl transition-all duration-300 cursor-pointer"
                 >
                   {isLoading ? (language === 'tr' ? 'Değerlendiriliyor...' : 'Evaluating...') : t('wiz.calculate')}
@@ -2044,6 +2236,10 @@ function SearchableCombobox({
           const cashOfferPrice = activeResults.finalOfferedPrice || activeResults.cashOffer || activeResults.estimatedValue || 0;
           const consignmentPrice = activeResults.finalConsignmentPrice || activeResults.consignmentListingPrice || activeResults.maxExpectedValue || 0;
           const fairMarketPrice = activeResults.fairMarketValue || 0;
+          // Konsinyede müşteriye asıl önemli olan, ilan fiyatı değil eline geçecek net tutardır.
+          const consignmentExpectedSale = activeResults.expectedConsignmentSalePrice || activeResults.expectedSalePrice || 0;
+          const consignmentCustomerNet = activeResults.customerConsignmentNet || activeResults.agreedCustomerNet || 0;
+          const estimatedDaysToSell = activeResults.estimatedDaysToSell || '';
 
           return (
             <motion.div
@@ -2094,11 +2290,12 @@ function SearchableCombobox({
                           {cashOfferPrice.toLocaleString('tr-TR')} ₺
                         </div>
                         <p className="text-xs font-semibold text-emerald-800 dark:text-emerald-200 mt-2 leading-relaxed">
-                          Aracınızı <strong>30 dakikada nakit sizden satın alırız</strong>.
+                          Aracınızı <strong>30 dakikada nakit sizden satın alırız</strong>. Bu tutar,
+                          hiçbir kesinti olmadan <strong>doğrudan elinize geçen nettir</strong>.
                         </p>
                       </div>
                       <div className="mt-3 pt-2 border-t border-emerald-500/20 text-[11px] text-emerald-700 dark:text-emerald-300 font-bold flex items-center gap-1">
-                        ⚡ Anında ödeme & Sıfır bürokrasi
+                        ⚡ Aynı gün ödeme & Sıfır bürokrasi, beklemek yok
                       </div>
                     </div>
 
@@ -2108,15 +2305,45 @@ function SearchableCombobox({
                         <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-brand-orange text-white text-[11px] font-black uppercase tracking-wider mb-2">
                           🎯 2. Dükkana (Konsinye) Bırakma Fiyatı
                         </div>
-                        <div data-testid="result-consignment-price" className="text-3xl lg:text-4xl font-black text-brand-orange tracking-tight mt-1">
-                          {consignmentPrice.toLocaleString('tr-TR')} ₺
+                        <div className="text-[11px] font-bold text-brand-orange/80 dark:text-orange-200/80 mt-1">
+                          Size kalacak tahmini net
                         </div>
-                        <p className="text-xs font-semibold text-brand-orange/90 dark:text-orange-200 mt-2 leading-relaxed">
-                          Aracınızı dükkanımıza emanet bırakırsanız, <strong>sizin adınıza bu fiyata satarız.</strong>
+                        <div data-testid="result-consignment-net" className="text-3xl lg:text-4xl font-black text-brand-orange tracking-tight">
+                          {(consignmentCustomerNet || consignmentPrice).toLocaleString('tr-TR')} ₺
+                        </div>
+
+                        <div className="mt-3 space-y-1.5 text-[11px] font-semibold text-brand-orange/90 dark:text-orange-200">
+                          <div className="flex items-center justify-between gap-2">
+                            <span>İlan fiyatımız</span>
+                            <span data-testid="result-consignment-price" className="font-black">
+                              {consignmentPrice.toLocaleString('tr-TR')} ₺
+                            </span>
+                          </div>
+                          {consignmentExpectedSale > 0 && (
+                            <div className="flex items-center justify-between gap-2">
+                              <span>Tahmini satış fiyatı</span>
+                              <span data-testid="result-consignment-expected-sale" className="font-black">
+                                {consignmentExpectedSale.toLocaleString('tr-TR')} ₺
+                              </span>
+                            </div>
+                          )}
+                          {estimatedDaysToSell && (
+                            <div className="flex items-center justify-between gap-2">
+                              <span>Tahmini satış süresi</span>
+                              <span data-testid="result-consignment-duration" className="font-black">
+                                {estimatedDaysToSell}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+
+                        <p className="text-xs font-semibold text-brand-orange/90 dark:text-orange-200 mt-3 leading-relaxed">
+                          Aracınızı galerimize emanet bırakırsanız <strong>sizin adınıza satarız</strong>;
+                          satış gerçekleştiğinde yukarıdaki net tutar elinize geçer.
                         </p>
                       </div>
                       <div className="mt-3 pt-2 border-t border-brand-orange/20 text-[11px] text-brand-orange font-bold flex items-center gap-1">
-                        🏪 Galerimizde sergileme & Yüksek kazanç
+                        🏪 Galerimizde sergileme & Nakit teklife göre daha yüksek kazanç
                       </div>
                     </div>
                   </div>
@@ -2144,10 +2371,23 @@ function SearchableCombobox({
                       <div>
                         <div className="text-xs text-zinc-500">Kullanılan Emsal İlan</div>
                         <div className="text-lg font-extrabold text-zinc-900 dark:text-white">
-                          {activeResults.matchedListingCount || 0} Adet Real İlan
+                          {activeResults.actuallyUsedListingCount || activeResults.matchedListingCount || 0} Adet Real İlan
                         </div>
                       </div>
                     </div>
+
+                    {activeResults.usedTrimDistribution && Object.keys(activeResults.usedTrimDistribution).length > 0 && (
+                      <div className="mt-4 p-4 rounded-xl bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-200 dark:border-zinc-700">
+                        <div className="text-xs font-bold mb-2">Donanım Dağılımı</div>
+                        <div className="flex flex-wrap gap-2">
+                          {Object.entries(activeResults.usedTrimDistribution).map(([trim, count]) => (
+                            <span key={trim} className="text-[10px] px-2 py-1 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-md">
+                              {trim}: {String(count)}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>

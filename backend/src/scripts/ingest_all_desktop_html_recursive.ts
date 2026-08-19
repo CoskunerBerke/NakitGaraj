@@ -1,3 +1,16 @@
+/**
+ * !!! KULLANIM DISI (SUPERSEDED) - V3 ONCESI ICE AKTARICI !!!
+ *
+ * Bu script RawVehicleListing tablosuna V3 oncesi semantikle yazar
+ * (rawModel bazi markalarda tam sayfa basligi, bazilarinda paket adi;
+ * ilan tarihi / sehir / yakit / sanziman alanlari doldurulmaz).
+ * Calistirilmasi emsal esleme motorunu tekrar bozar.
+ *
+ * Yerine kullanilacak tek ice aktarici:
+ *   npm run rebuild:listings          (src/scripts/rebuild_raw_listings_v3.ts)
+ *   npm run rebuild:listings:dry      (veritabanina yazmadan dogrulama)
+ */
+
 import { PrismaClient } from '@prisma/client';
 import * as fs from 'fs';
 import * as path from 'path';

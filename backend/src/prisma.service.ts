@@ -5,5 +5,11 @@ import { PrismaClient } from '@prisma/client';
 export class PrismaService extends PrismaClient implements OnModuleInit {
   async onModuleInit() {
     await this.$connect();
+    try {
+      await this.$executeRawUnsafe(`PRAGMA busy_timeout = 30000;`);
+    } catch (e) {}
   }
 }
+
+
+

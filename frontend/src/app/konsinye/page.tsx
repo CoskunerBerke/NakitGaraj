@@ -72,6 +72,17 @@ const carParts = [
   'Sağ Ön Kapı', 'Sağ Ön Çamurluk', 'Ön Tampon', 'Motor Kaputu', 'Tavan'
 ];
 
+const filterDirtyOptions = (options: any[]) => {
+  return options.filter((opt) => {
+    if (!opt || typeof opt.name !== 'string') return false;
+    const name = opt.name.toLowerCase();
+    if (name === '' || name === '-' || name === '--') return false;
+    if (name.includes('sahibinden') || name.includes('.html') || name.includes('.htm') || name.includes('fiyatları & modelleri')) return false;
+    if (/-\s*\d+$/.test(name)) return false;
+    return true;
+  });
+};
+
 function ConsignmentContent() {
   const { t, language } = useLanguage();
   const searchParams = useSearchParams();
@@ -182,14 +193,16 @@ function ConsignmentContent() {
         .finally(() => setIsLoading(false));
     } else {
       fetch(`${API_BASE}/years`).then((res) => res.json()).then(setYears).catch(console.error);
-      fetch(`${API_BASE}/brands`).then((res) => res.json()).then(setBrands).catch(console.error);
+      fetch(`${API_BASE}/brands`).then((res) => res.json()).then((data) => setBrands(filterDirtyOptions(Array.isArray(data) ? data : []))).catch(console.error);
     }
   }, [evaluationId]);
 
-  // Load models on brand selection
+  // Load models on brand or year selection
   useEffect(() => {
     if (selectedBrand) {
-      fetch(`${API_BASE}/models?brandId=${selectedBrand}`)
+      const controller = new AbortController();
+      const yearQuery = selectedYear ? `&year=${selectedYear}` : '';
+      fetch(`${API_BASE}/models?brandId=${selectedBrand}${yearQuery}`, { signal: controller.signal })
         .then((res) => res.json())
         .then((data) => {
           const uniqueModels: any[] = [];
@@ -201,15 +214,18 @@ function ConsignmentContent() {
               uniqueModels.push(m);
             }
           });
-          setModels(uniqueModels);
+          setModels(filterDirtyOptions(uniqueModels));
           setSelectedModel('');
           resetSubordinateFields();
         })
-        .catch(console.error);
+        .catch((err) => {
+          if (err.name !== 'AbortError') console.error(err);
+        });
+      return () => controller.abort();
     } else {
       setModels([]);
     }
-  }, [selectedBrand]);
+  }, [selectedBrand, selectedYear]);
 
   const resetSubordinateFields = () => {
     setSelectedVariant('');
@@ -227,6 +243,7 @@ function ConsignmentContent() {
   // Fetch dynamic selections for remainder fields
   useEffect(() => {
     if (selectedYear && selectedBrand && selectedModel) {
+      const controller = new AbortController();
       const q = new URLSearchParams({
         year: String(selectedYear),
         manufacturerId: selectedBrand,
@@ -238,11 +255,11 @@ function ConsignmentContent() {
       if (selectedFuelType) q.append('fuelTypeId', selectedFuelType);
       if (selectedTransmission) q.append('transmissionTypeId', selectedTransmission);
 
-      fetch(`${API_BASE}/vehicle-data?${q.toString()}`)
+      fetch(`${API_BASE}/vehicle-data?${q.toString()}`, { signal: controller.signal })
         .then((res) => res.json())
         .then((data) => {
-          setAvailableVariants(data.variants || []);
-          setAvailablePackages(data.packages || []);
+          setAvailableVariants(filterDirtyOptions(data.variants || []));
+          setAvailablePackages(filterDirtyOptions(data.packages || []));
           setAvailableBodies(data.bodyTypes || []);
           setAvailableFuels(data.fuelTypes || []);
           setAvailableTransmissions(data.transmissionTypes || []);
@@ -256,7 +273,10 @@ function ConsignmentContent() {
             setSelectedTransmission(auto.transmissionTypeId);
           }
         })
-        .catch(console.error);
+        .catch((err) => {
+          if (err.name !== 'AbortError') console.error(err);
+        });
+      return () => controller.abort();
     }
   }, [
     selectedYear,
@@ -273,7 +293,7 @@ function ConsignmentContent() {
     selectedYear !== '' &&
     selectedBrand !== '' &&
     selectedModel !== '' &&
-    (availableVariants.length === 0 || selectedVariant !== '') &&
+    selectedVariant !== '' &&
     (availablePackages.length === 0 || selectedPackage !== '') &&
     (availableBodies.length === 0 || selectedBodyType !== '') &&
     (availableFuels.length === 0 || selectedFuelType !== '') &&
@@ -294,6 +314,29 @@ function ConsignmentContent() {
     setNoDamageChecked(checked);
     if (checked) {
       setPaintScheme(carParts.reduce((acc, part) => ({ ...acc, [part]: 'ORIJINAL' }), {}));
+    }
+  };
+
+  const handleFormInvalid = (errors: any) => {
+    if (process.env.NODE_ENV === 'development') {
+      const errorList = Object.keys(errors || {}).map((key) => ({
+        field: key,
+        type: errors[key]?.type,
+      }));
+      console.log('[KONSINYE FORM INVALID]', errorList);
+    }
+
+    const firstKey = Object.keys(errors || {})[0];
+    if (firstKey) {
+      const target = document.querySelector(
+        `[name="${firstKey}"], input[name="${firstKey}"], select[name="${firstKey}"]`
+      );
+      if (target) {
+        target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        if (typeof (target as HTMLElement).focus === 'function') {
+          (target as HTMLElement).focus();
+        }
+      }
     }
   };
 
@@ -323,11 +366,11 @@ function ConsignmentContent() {
         year: prePopulatedVehicle?.vehicle?.year || Number(selectedYear),
         manufacturerId: prePopulatedVehicle?.vehicle?.manufacturerId || selectedBrand,
         modelId: prePopulatedVehicle?.vehicle?.modelId || selectedModel,
-        variantId: prePopulatedVehicle?.vehicle?.variantId || selectedVariant,
-        packageId: prePopulatedVehicle?.vehicle?.packageId || selectedPackage || '',
-        bodyTypeId: prePopulatedVehicle?.vehicle?.bodyTypeId || selectedBodyType,
-        fuelTypeId: prePopulatedVehicle?.vehicle?.fuelTypeId || selectedFuelType,
-        transmissionTypeId: prePopulatedVehicle?.vehicle?.transmissionTypeId || selectedTransmission,
+        variantId: (prePopulatedVehicle?.vehicle?.variantId || selectedVariant) && (prePopulatedVehicle?.vehicle?.variantId || selectedVariant) !== 'UNKNOWN' ? (prePopulatedVehicle?.vehicle?.variantId || selectedVariant) : undefined,
+        packageId: prePopulatedVehicle?.vehicle?.packageId || selectedPackage || undefined,
+        bodyTypeId: prePopulatedVehicle?.vehicle?.bodyTypeId || selectedBodyType || undefined,
+        fuelTypeId: prePopulatedVehicle?.vehicle?.fuelTypeId || selectedFuelType || undefined,
+        transmissionTypeId: prePopulatedVehicle?.vehicle?.transmissionTypeId || selectedTransmission || undefined,
         mileage: prePopulatedVehicle?.mileage || 100000,
         color: prePopulatedVehicle?.color || 'Beyaz',
 
@@ -1093,7 +1136,7 @@ function ConsignmentContent() {
               </div>
             )}
 
-            <form onSubmit={handleSubmit(handleFormSubmit)} className="flex flex-col gap-6">
+            <form onSubmit={handleSubmit(handleFormSubmit, handleFormInvalid)} className="flex flex-col gap-6">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 {/* First Name */}
                 <div className="flex flex-col gap-2">

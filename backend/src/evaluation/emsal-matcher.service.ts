@@ -1,5 +1,14 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
+import { PRICING_LIMITS, clamp } from './pricing-config';
+import {
+  deriveFuelFromEngineCode,
+  deriveFuelType,
+  deriveTransmission,
+  foldTurkish,
+  isEngineCompatible,
+  splitVariantString,
+} from './listing-attributes';
 
 export interface CleanListingItem {
   id?: string;
@@ -16,6 +25,11 @@ export interface CleanListingItem {
   city?: string;
   title?: string;
   isDamaged?: boolean;
+  /** Yil normalizasyonu sonrasi hedef yila indirgenmis fiyat */
+  normalizedPrice?: number;
+  /** Tazelik * esleme kalitesi agirligi */
+  weight?: number;
+  listedAt?: Date | null;
 }
 
 export interface EmsalMatchResult {
@@ -35,15 +49,262 @@ export interface EmsalMatchResult {
   referenceMedianMileage?: number;
   mileageAdjustmentSource?: string;
   yearAdjustmentSource?: string;
+  yearAdjustmentRate?: number;
   contributingSnapshotIds?: string[];
+  level1CandidateCount?: number;
+  level2CandidateCount?: number;
+  level3CandidateCount?: number;
+  actuallyUsedListingCount?: number;
+  usedEngineDistribution?: Record<string, number>;
+  usedTrimDistribution?: Record<string, number>;
+  excludedListingCount?: number;
+  exclusionReasons?: string[];
+  /** Emsal fiyatlarinin agirliklari (calculator ile ayni sirada) */
+  listingWeights?: number[];
+  /** 0..1 tazelik skoru */
+  freshnessScore?: number;
+  /** 0..1 havuzdaki birebir motor eslesme orani */
+  engineExactShare?: number;
+  /** 0..1 yakiti bilinen emsal orani */
+  fuelKnownShare?: number;
+  /** 0..1 sanzimani bilinen emsal orani */
+  transmissionKnownShare?: number;
+  /** Emsal listesinin gercek ilan ID sayisi (mukerrer elendikten sonra) */
+  uniqueListingIds?: string[];
 }
+
+interface RawCandidate {
+  sourceListingId: string;
+  rawMake: string;
+  rawModel: string;
+  canonicalModel: string;
+  rawVariant: string | null;
+  canonicalVariant: string | null;
+  canonicalTrim: string | null;
+  canonicalFuelType: string | null;
+  canonicalTransmission: string | null;
+  rawTitle: string | null;
+  year: number;
+  mileageKm: number | null;
+  price: number;
+  city: string | null;
+  isDamaged: boolean;
+  scrapedAt: Date | null;
+}
+
+const DAMAGE_TOKENS = ['agir hasar', 'agir hasarli', 'pert', 'hasar kayitli', 'hasarli'];
 
 @Injectable()
 export class EmsalMatcherService {
   constructor(private prisma: PrismaService) {}
 
+  /* ---------------------------------------------------------------- */
+  /* Yardimcilar                                                       */
+  /* ---------------------------------------------------------------- */
+
+  /** Ilan tazeligi agirligi: yarilanma omurlu ustel azalma, tabani sabit. */
+  private freshnessWeight(scrapedAt: Date | null | undefined): number {
+    if (!scrapedAt) return PRICING_LIMITS.freshnessFloorWeight;
+    const ageDays = (Date.now() - new Date(scrapedAt).getTime()) / 86_400_000;
+    if (!Number.isFinite(ageDays) || ageDays < 0) return 1;
+    const w = Math.pow(0.5, ageDays / PRICING_LIMITS.freshnessHalfLifeDays);
+    return clamp(w, PRICING_LIMITS.freshnessFloorWeight, 1);
+  }
+
+  private isDamagedListing(r: RawCandidate): boolean {
+    if (r.isDamaged === true) return true;
+    const t = foldTurkish(r.rawTitle || '');
+    return DAMAGE_TOKENS.some((tok) => t.includes(tok));
+  }
+
+  /** Ilanin motor kodu: canonicalVariant > rawVariant */
+  private engineOf(r: RawCandidate): string {
+    return (r.canonicalVariant || r.rawVariant || '').trim();
+  }
+
+  private fuelOf(r: RawCandidate): string {
+    if (r.canonicalFuelType && r.canonicalFuelType.trim()) return r.canonicalFuelType.trim();
+    return deriveFuelFromEngineCode(this.engineOf(r)) || deriveFuelType(r.rawTitle || '');
+  }
+
+  private transmissionOf(r: RawCandidate): string {
+    if (r.canonicalTransmission && r.canonicalTransmission.trim()) {
+      return r.canonicalTransmission.trim();
+    }
+    return deriveTransmission(r.rawTitle || '');
+  }
+
   /**
-   * Performs strict 4-Level Emsal Matching against real VehicleMarketSnapshot DB records
+   * Havuzdan yillik deger kaybi orani ogrenir (log-fiyat ~ yil regresyonu).
+   * Ogrenilemezse konfigurasyondaki varsayilan kullanilir.
+   */
+  private learnAnnualDepreciation(rows: RawCandidate[]): {
+    rate: number;
+    source: string;
+  } {
+    const byYear = new Map<number, number[]>();
+    for (const r of rows) {
+      if (r.price <= 0) continue;
+      if (!byYear.has(r.year)) byYear.set(r.year, []);
+      byYear.get(r.year)!.push(r.price);
+    }
+    const points: Array<{ year: number; logPrice: number; n: number }> = [];
+    for (const [year, prices] of byYear) {
+      if (prices.length < 3) continue;
+      const sorted = [...prices].sort((a, b) => a - b);
+      const median = sorted[Math.floor(sorted.length / 2)];
+      if (median > 0) points.push({ year, logPrice: Math.log(median), n: prices.length });
+    }
+
+    if (points.length >= 3) {
+      const totalN = points.reduce((s, p) => s + p.n, 0);
+      const meanX = points.reduce((s, p) => s + p.year * p.n, 0) / totalN;
+      const meanY = points.reduce((s, p) => s + p.logPrice * p.n, 0) / totalN;
+      let num = 0;
+      let den = 0;
+      for (const p of points) {
+        num += p.n * (p.year - meanX) * (p.logPrice - meanY);
+        den += p.n * (p.year - meanX) ** 2;
+      }
+      if (den > 0) {
+        const slope = num / den; // log-fiyat / yil
+        const rate = Math.exp(slope) - 1; // yillik artis orani (yeni model daha pahali)
+        if (Number.isFinite(rate) && rate > 0) {
+          return {
+            rate: clamp(
+              rate,
+              PRICING_LIMITS.annualDepreciationRange[0],
+              PRICING_LIMITS.annualDepreciationRange[1],
+            ),
+            source: 'LEARNED_FROM_LISTINGS',
+          };
+        }
+      }
+    }
+
+    return {
+      rate: PRICING_LIMITS.defaultAnnualDepreciation,
+      source: 'DEFAULT_ANNUAL_RATE',
+    };
+  }
+
+  /** Emsali hedef yila indirger. */
+  private normalizeToYear(price: number, listingYear: number, targetYear: number, rate: number): number {
+    const diff = targetYear - listingYear;
+    if (diff === 0) return price;
+    const factor = Math.pow(1 + rate, diff);
+    return Math.max(1, Math.round(price * clamp(factor, 0.5, 2.0)));
+  }
+
+  private toCleanListing(
+    r: RawCandidate,
+    normalizedPrice: number,
+    weight: number,
+    make: string,
+    model: string,
+  ): CleanListingItem {
+    return {
+      id: r.sourceListingId,
+      make,
+      model,
+      variant: this.engineOf(r) || undefined,
+      trim: (r.canonicalTrim || '').trim() || undefined,
+      year: r.year,
+      // Km bilgisi yoksa UYDURULMAZ; 0 birakilir ve calculator agirligi dusurur.
+      mileageKm: r.mileageKm && r.mileageKm > 0 ? r.mileageKm : 0,
+      price: normalizedPrice,
+      fuelType: this.fuelOf(r) || undefined,
+      transmission: this.transmissionOf(r) || undefined,
+      city: r.city || undefined,
+      title: r.rawTitle || undefined,
+      isDamaged: false,
+      normalizedPrice,
+      weight,
+      listedAt: r.scrapedAt,
+    };
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Aday havuzu                                                       */
+  /* ---------------------------------------------------------------- */
+
+  private async fetchCandidates(make: string, model: string, yearMin: number, yearMax: number) {
+    const cleanMake = make.trim();
+    const cleanModel = model.trim();
+
+    const rows = (await this.prisma.rawVehicleListing.findMany({
+      where: {
+        OR: [{ rawMake: { equals: cleanMake } }, { canonicalMake: { equals: cleanMake } }],
+        year: { gte: yearMin, lte: yearMax },
+        parseStatus: 'VALID',
+        price: { gt: 0 },
+      },
+      select: {
+        sourceListingId: true,
+        rawMake: true,
+        rawModel: true,
+        canonicalModel: true,
+        rawVariant: true,
+        canonicalVariant: true,
+        canonicalTrim: true,
+        canonicalFuelType: true,
+        canonicalTransmission: true,
+        rawTitle: true,
+        year: true,
+        mileageKm: true,
+        price: true,
+        city: true,
+        isDamaged: true,
+        scrapedAt: true,
+      },
+    })) as unknown as RawCandidate[];
+
+    const target = foldTurkish(cleanModel);
+    const seen = new Set<string>();
+    const out: RawCandidate[] = [];
+    let duplicateCount = 0;
+    let damagedCount = 0;
+
+    for (const r of rows) {
+      const cm = foldTurkish(r.canonicalModel || '');
+      const rm = foldTurkish(r.rawModel || '');
+      const modelHit =
+        cm === target ||
+        rm === target ||
+        (target.length >= 3 && (cm.includes(target) || rm.includes(target)));
+      if (!modelHit) continue;
+
+      if (seen.has(r.sourceListingId)) {
+        duplicateCount++;
+        continue;
+      }
+      if (this.isDamagedListing(r)) {
+        damagedCount++;
+        continue;
+      }
+      const [minP, maxP] = PRICING_LIMITS.priceSanityRange;
+      if (r.price < minP || r.price > maxP) continue;
+
+      seen.add(r.sourceListingId);
+      out.push(r);
+    }
+
+    return { candidates: out, duplicateCount, damagedCount };
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Ana esleme                                                        */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * Kademeli emsal esleme.
+   *
+   *   marka -> model -> motor/variant -> paket/trim -> yakit -> sanziman -> yil -> km
+   *
+   * Seviye 1: birebir motor + yakit + (bilinen) sanziman + ayni yil
+   * Seviye 2: uyumlu motor (ayni yakit, yakin hacim/seri) + yil +/-1, yil normalize
+   * Seviye 3: ayni model + uyumlu yakit + yil +/-2, yil normalize, DUSUK GUVEN
+   * Seviye 4: veri yok -> fiyat uretilmez
    */
   async matchComparableListings(params: {
     make: string;
@@ -57,340 +318,329 @@ export class EmsalMatcherService {
     transmission?: string;
     isCleanCondition?: boolean;
   }): Promise<EmsalMatchResult> {
-    const { make, model, variant, trim, year, mileageKm, bodyType, fuelType, transmission } = params;
+    const { make, model, variant, trim, year } = params;
 
-    // 1. Level 1: Exact Make, Model, Variant, Trim, Year, BodyType, FuelType, Transmission (Exact String Equality)
-    const paramVariant = (variant || '').trim();
-    const paramTrim = (trim || '').trim();
-    const paramBody = (bodyType || '').trim();
-    const paramFuel = (fuelType || '').trim();
-    const paramTrans = (transmission || '').trim();
+    // Katalog variant adi motor + paket birlestirilmis gelebilir; emsal
+    // tablosuyla ayni semantige indirgenir.
+    const split = splitVariantString(variant || '');
+    const paramEngine = split.engineCode;
+    const paramTrim = (trim || '').trim() || split.trim;
+    // Yakit oncelikle MOTOR KODUNDAN turetilir: motor kodu, emsal tablosuyla
+    // birebir ayni metinden (sayfa basligi) gelir. Katalogtaki yakit etiketi
+    // yalnizca motor kodundan yakit cikarilamadiginda kullanilir; aksi halde
+    // katalog kaynakli hatali bir etiket dogru emsalleri havuzdan atabilir.
+    const paramFuel =
+      deriveFuelFromEngineCode(paramEngine) || (params.fuelType || '').trim() || '';
+    const paramTransmission = (params.transmission || '').trim();
 
-    const hasAllRequiredMetadataForL1 =
-      make.trim() !== '' &&
-      model.trim() !== '';
+    const { candidates, duplicateCount, damagedCount } = await this.fetchCandidates(
+      make,
+      model,
+      year - 2,
+      year + 2,
+    );
 
-    if (hasAllRequiredMetadataForL1) {
-      const fullModelName = `${make.trim()} ${model.trim()}`;
-      const whereL1: any = {
-        canonicalMake: { equals: make.trim() },
-        OR: [
-          { canonicalModel: { equals: model.trim() } },
-          { canonicalModel: { equals: fullModelName } }
-        ],
-        year: year,
-        snapshotVersion: 'v2.0',
-        isActive: true,
-      };
+    if (candidates.length === 0) {
+      return this.emptyResult(make, model, year, duplicateCount, damagedCount);
+    }
 
-      if (paramTrim !== '') {
-        whereL1.OR = [{ canonicalTrim: { equals: paramTrim } }, { canonicalTrim: { equals: '' } }];
-      }
+    const { rate: annualRate, source: yearAdjustmentSource } =
+      this.learnAnnualDepreciation(candidates);
 
-      if (paramBody !== '') {
-        whereL1.AND = whereL1.AND || [];
-        whereL1.AND.push({ OR: [{ canonicalBodyType: { equals: '' } }, { canonicalBodyType: { equals: paramBody } }] });
-      }
-      if (paramFuel !== '') {
-        whereL1.AND = whereL1.AND || [];
-        whereL1.AND.push({ OR: [{ canonicalFuelType: { equals: '' } }, { canonicalFuelType: { equals: paramFuel } }] });
-      }
-      if (paramTrans !== '') {
-        whereL1.AND = whereL1.AND || [];
-        whereL1.AND.push({ OR: [{ canonicalTransmission: { equals: '' } }, { canonicalTransmission: { equals: paramTrans } }] });
-      }
+    const foldedParamTrim = foldTurkish(paramTrim);
 
-      const snapshotL1 = await this.prisma.vehicleMarketSnapshot.findFirst({
-        where: whereL1
-      });
+    // Seviye kademelerini sirayla dene
+    const levels: Array<{
+      level: number;
+      yearSpan: number;
+      strictEngine: boolean;
+      requireFuel: boolean;
+      requireTransmission: boolean;
+      minCount: number;
+    }> = [
+      { level: 1, yearSpan: 0, strictEngine: true, requireFuel: true, requireTransmission: true, minCount: PRICING_LIMITS.minCompCountForPricing },
+      { level: 2, yearSpan: 1, strictEngine: false, requireFuel: true, requireTransmission: false, minCount: PRICING_LIMITS.minCompCountForPricing },
+      { level: 3, yearSpan: 2, strictEngine: false, requireFuel: true, requireTransmission: false, minCount: 4 },
+    ];
 
-      if (snapshotL1 && snapshotL1.matchedListingCount >= 5) {
-        let referenceMedianMileage: number | undefined;
-        let mileageAdjustmentSource: string | undefined;
+    let level3Snapshot: {
+      level: number;
+      selected: RawCandidate[];
+      trimMatchedCount: number;
+    } | null = null;
 
-        if (snapshotL1.snapshotDataJson) {
-          try {
-            const parsed = JSON.parse(snapshotL1.snapshotDataJson);
-            referenceMedianMileage = parsed.medianMileage;
-            mileageAdjustmentSource = parsed.mileageAdjustmentSource;
-          } catch (e) {}
+    for (const cfg of levels) {
+      const selected: RawCandidate[] = [];
+      let trimMatchedCount = 0;
+
+      for (const r of candidates) {
+        if (Math.abs(r.year - year) > cfg.yearSpan) continue;
+
+        const engine = this.engineOf(r);
+        if (paramEngine) {
+          if (!engine) continue;
+          if (!isEngineCompatible(paramEngine, engine, cfg.strictEngine)) continue;
+        } else if (cfg.strictEngine) {
+          // Hedef aracin motoru bilinmiyorsa Seviye 1 (birebir motor) uygulanamaz.
+          continue;
         }
 
-        const cleanComps = this.convertSnapshotToCleanListings(snapshotL1, mileageKm);
-        const baseScore = 95;
-        const dynamicScore = Math.min(99, Math.max(88, baseScore + Math.floor(snapshotL1.matchedListingCount / 12)));
+        if (cfg.requireFuel && paramFuel) {
+          const f = this.fuelOf(r);
+          // Yakiti bilinmeyen ilan Seviye 1'e alinmaz; alt seviyelerde
+          // agirligi dusurulerek kabul edilir.
+          if (cfg.level === 1 && !f) continue;
+          if (f && f !== paramFuel) continue;
+        }
 
-        return {
-          level: 1,
-          matchedCount: snapshotL1.matchedListingCount,
-          cleanListings: cleanComps,
-          confidenceScore: dynamicScore,
-          isLimitedComps: false,
-          explanationNote: `Seviye 1: ${make} ${model} ${variant || paramTrim || ''} (${year}) veritabanındaki ${snapshotL1.matchedListingCount} adet birebir motor ve paket emsaliyle %100 ağırlıkla hesaplandı. Farklı motor seçeneğindeki ilanlar fiyat hesabına katılmadı. (Snapshot ID: ${snapshotL1.id.slice(0, 8)})`,
-          snapshotId: snapshotL1.id,
-          contributingSnapshotIds: [snapshotL1.id],
-          weightedP5: snapshotL1.weightedP5,
-          weightedP35: snapshotL1.weightedP35,
-          weightedP50: snapshotL1.weightedP50,
-          weightedP60: snapshotL1.weightedP60,
-          weightedP95: snapshotL1.weightedP95,
-          kmDecayPer10k: snapshotL1.kmDecayPer10k || 0.0025,
-          referenceMedianMileage: referenceMedianMileage || 100000,
-          mileageAdjustmentSource: mileageAdjustmentSource || 'DEFAULT_FALLBACK',
-          yearAdjustmentSource: 'NOT_APPLICABLE_EXACT_YEAR',
-        };
+        if (cfg.requireTransmission && paramTransmission) {
+          const t = this.transmissionOf(r);
+          if (t && t !== paramTransmission) continue;
+        }
+
+        const listingTrim = foldTurkish((r.canonicalTrim || '').trim());
+        const trimHit =
+          !foldedParamTrim ||
+          !listingTrim ||
+          listingTrim === foldedParamTrim ||
+          listingTrim.includes(foldedParamTrim) ||
+          foldedParamTrim.includes(listingTrim);
+
+        if (cfg.level === 1 && foldedParamTrim && listingTrim && !trimHit) continue;
+        // Hedef aracin motoru bilinmiyorsa paketi ayni olmayan ilanlar havuza
+        // alinmaz; aksi halde tum motor secenekleri tek fiyatta birlesir.
+        if (!paramEngine && foldedParamTrim && !trimHit) continue;
+        if (trimHit) trimMatchedCount++;
+
+        selected.push(r);
+      }
+
+      if (cfg.level === 3) level3Snapshot = { level: 3, selected, trimMatchedCount };
+      if (selected.length >= cfg.minCount) {
+        return this.buildResult({
+          level: cfg.level,
+          make,
+          model,
+          paramEngine,
+          paramTrim,
+          paramFuel,
+          year,
+          selected,
+          trimMatchedCount,
+          annualRate,
+          yearAdjustmentSource,
+          duplicateCount,
+          damagedCount,
+          totalCandidates: candidates.length,
+        });
       }
     }
 
-    // 2. Level 2: Year ±1 (Exact Make, Model, Variant with Price Normalization & Weighted Aggregation)
-    let snapshotL2 = await this.queryWeightedSnapshotsFromDb({
-      make,
-      model,
-      variant,
-      yearMin: year - 1,
-      yearMax: year + 1,
-      userYear: year,
-    });
-
-    if (snapshotL2 && snapshotL2.matchedListingCount >= 5) {
-      const cleanComps = this.convertSnapshotToCleanListings(snapshotL2, mileageKm);
-      const dynamicScore = Math.min(88, Math.max(76, 78 + Math.floor(snapshotL2.matchedListingCount / 20)));
+    if (level3Snapshot && level3Snapshot.selected.length > 0) {
+      // Emsal var ama fiyat uretecek kadar degil: uydurma fiyat yerine
+      // "yetersiz veri" don. Servis katmani manuel degerlendirmeye yonlendirir.
       return {
-        level: 2,
-        matchedCount: snapshotL2.matchedListingCount,
-        cleanListings: cleanComps,
-        confidenceScore: dynamicScore,
-        isLimitedComps: false,
-        explanationNote: `Seviye 2: ${make} ${model} ${variant || ''} (${year - 1}-${year + 1}) grubundaki ${snapshotL2.matchedListingCount} adet gerçek emsal ${snapshotL2.snapshotCount} snapshot birleştirilerek ve yıllık %${(snapshotL2.yearAdjustmentRate * 100).toFixed(1)} fiyat normalizasyonu (${snapshotL2.yearAdjustmentSource}) uygulanarak hesaplandı. (Snapshot ID: ${snapshotL2.id.slice(0, 8)})`,
-        snapshotId: snapshotL2.id,
-        contributingSnapshotIds: (snapshotL2 as any).contributingSnapshotIds || [snapshotL2.id],
-        weightedP5: snapshotL2.weightedP5,
-        weightedP35: snapshotL2.weightedP35,
-        weightedP50: snapshotL2.weightedP50,
-        weightedP60: snapshotL2.weightedP60,
-        weightedP95: snapshotL2.weightedP95,
-        kmDecayPer10k: snapshotL2.kmDecayPer10k || 0.0025,
-        referenceMedianMileage: snapshotL2.medianMileage || 100000,
-        mileageAdjustmentSource: snapshotL2.mileageAdjustmentSource || 'DEFAULT_FALLBACK',
-        yearAdjustmentSource: snapshotL2.yearAdjustmentSource,
+        ...this.emptyResult(make, model, year, duplicateCount, damagedCount),
+        matchedCount: level3Snapshot.selected.length,
+        explanationNote:
+          `${make} ${model} ${paramEngine} (${year}) için veritabanında yalnızca ` +
+          `${level3Snapshot.selected.length} uyumlu emsal ilan bulundu. Güvenilir fiyat üretmek için ` +
+          `en az ${PRICING_LIMITS.minCompCountForPricing} emsal gereklidir; manuel değerlendirme yapılacaktır.`,
       };
     }
 
-    // 3. Level 3: Broader Model + Year range (Weighted Snapshot Aggregation)
-    let snapshotL3 = await this.queryWeightedSnapshotsFromDb({
-      make,
-      model,
-      yearMin: year - 2,
-      yearMax: year + 2,
-      userYear: year,
-    });
+    return this.emptyResult(make, model, year, duplicateCount, damagedCount);
+  }
 
-    if (snapshotL3 && snapshotL3.matchedListingCount >= 3) {
-      const cleanComps = this.convertSnapshotToCleanListings(snapshotL3, mileageKm);
-      const dynamicScore = Math.min(78, Math.max(62, 65 + Math.floor(snapshotL3.matchedListingCount / 25)));
-      return {
-        level: 3,
-        matchedCount: snapshotL3.matchedListingCount,
-        cleanListings: cleanComps,
-        confidenceScore: dynamicScore,
-        isLimitedComps: false,
-        explanationNote: `Seviye 3: ${make} ${model} genel model grubundaki ${snapshotL3.matchedListingCount} adet gerçek ilan emsali ağırlıklı ortalamayla hesaplandı. (Snapshot ID: ${snapshotL3.id.slice(0, 8)})`,
-        snapshotId: snapshotL3.id,
-        contributingSnapshotIds: (snapshotL3 as any).contributingSnapshotIds || [snapshotL3.id],
-        weightedP5: snapshotL3.weightedP5,
-        weightedP35: snapshotL3.weightedP35,
-        weightedP50: snapshotL3.weightedP50,
-        weightedP60: snapshotL3.weightedP60,
-        weightedP95: snapshotL3.weightedP95,
-        kmDecayPer10k: snapshotL3.kmDecayPer10k || 0.0025,
-        referenceMedianMileage: snapshotL3.medianMileage || 100000,
-        mileageAdjustmentSource: snapshotL3.mileageAdjustmentSource || 'DEFAULT_FALLBACK',
-        yearAdjustmentSource: snapshotL3.yearAdjustmentSource,
-      };
-    }
-
-    // 4. Level 4 Fallback: No real DB listings found for this vehicle
+  private emptyResult(
+    make: string,
+    model: string,
+    year: number,
+    duplicateCount: number,
+    damagedCount: number,
+  ): EmsalMatchResult {
     return {
       level: 4,
       matchedCount: 0,
       cleanListings: [],
       confidenceScore: 0,
       isLimitedComps: true,
-      explanationNote: `Seviye 4: Yetersiz Veri! ${make} ${model} (${year}) için veritabanında henüz Sahibinden ilan kaydı bulunamadı.`,
+      explanationNote: `Seviye 4: Yetersiz Veri! ${make} ${model} (${year}) için veritabanında uyumlu Sahibinden ilan kaydı bulunamadı.`,
       contributingSnapshotIds: [],
+      level1CandidateCount: 0,
+      level2CandidateCount: 0,
+      level3CandidateCount: 0,
+      actuallyUsedListingCount: 0,
+      usedEngineDistribution: {},
+      usedTrimDistribution: {},
+      excludedListingCount: duplicateCount + damagedCount,
+      exclusionReasons: [
+        `Mükerrer ilan: ${duplicateCount}`,
+        `Ağır hasarlı/pert ilan: ${damagedCount}`,
+      ],
+      listingWeights: [],
+      freshnessScore: 0,
+      engineExactShare: 0,
+      fuelKnownShare: 0,
+      transmissionKnownShare: 0,
+      uniqueListingIds: [],
     };
   }
 
-  private async queryWeightedSnapshotsFromDb(filter: {
+  private buildResult(args: {
+    level: number;
     make: string;
     model: string;
-    variant?: string;
-    yearExact?: number;
-    yearMin?: number;
-    yearMax?: number;
-    userYear: number;
-  }) {
-    const { make, model, variant, yearExact, yearMin, yearMax, userYear } = filter;
-    const whereClause: any = {
-      make: { equals: make.trim() },
-      snapshotVersion: 'v2.0',
-      isActive: true,
-    };
-    if (model) whereClause.model = { equals: model.trim() };
-    if (variant && variant.trim() !== '' && variant.trim() !== 'Standart' && variant.trim() !== 'FarkliVaryant') {
-      whereClause.variant = { equals: variant.trim() };
-    }
-    if (yearExact) whereClause.year = yearExact;
-    else if (yearMin && yearMax) whereClause.year = { gte: yearMin, lte: yearMax };
+    paramEngine: string;
+    paramTrim: string;
+    paramFuel: string;
+    year: number;
+    selected: RawCandidate[];
+    trimMatchedCount: number;
+    annualRate: number;
+    yearAdjustmentSource: string;
+    duplicateCount: number;
+    damagedCount: number;
+    totalCandidates: number;
+  }): EmsalMatchResult {
+    const {
+      level, make, model, paramEngine, paramTrim, paramFuel, year, selected,
+      trimMatchedCount, annualRate, yearAdjustmentSource, duplicateCount, damagedCount,
+    } = args;
 
-    const snapshots = await this.prisma.vehicleMarketSnapshot.findMany({
-      where: whereClause,
-      orderBy: { matchedListingCount: 'desc' },
-      take: 10,
-    });
+    const engineDist: Record<string, number> = {};
+    const trimDist: Record<string, number> = {};
+    const listings: CleanListingItem[] = [];
+    const weights: number[] = [];
+    let freshnessSum = 0;
+    let exactEngineCount = 0;
+    let fuelKnownCount = 0;
+    let transKnownCount = 0;
 
-    if (snapshots.length === 0) return null;
+    const foldedParamTrim = foldTurkish(paramTrim);
 
-    // Learn year price ratio from adjacent snapshots (Section 4 Level 2)
-    let yearAdjustmentRate = 0.08;
-    let yearAdjustmentSource = 'DEFAULT_YEAR_ADJUSTMENT';
+    for (const r of selected) {
+      const engine = this.engineOf(r) || 'Bilinmiyor';
+      const trimName = (r.canonicalTrim || '').trim() || 'Belirtilmemiş';
+      engineDist[engine] = (engineDist[engine] || 0) + 1;
+      trimDist[trimName] = (trimDist[trimName] || 0) + 1;
 
-    if (snapshots.length >= 2) {
-      const yearMap = new Map<number, number>();
-      for (const s of snapshots) {
-        if (s.weightedP50 > 0) yearMap.set(s.year, s.weightedP50);
-      }
-      const years = Array.from(yearMap.keys()).sort((a, b) => a - b);
-      if (years.length >= 2) {
-        const y1 = years[0];
-        const y2 = years[years.length - 1];
-        const p1 = yearMap.get(y1)!;
-        const p2 = yearMap.get(y2)!;
-        if (y2 > y1 && p1 > 0) {
-          const annualRatio = Math.pow(p2 / p1, 1 / (y2 - y1)) - 1;
-          if (annualRatio > 0.01 && annualRatio < 0.20) {
-            yearAdjustmentRate = annualRatio;
-            yearAdjustmentSource = 'LEARNED_YEAR_ADJUSTMENT';
-          }
-        }
-      }
-    }
+      const normalizedPrice = this.normalizeToYear(r.price, r.year, year, annualRate);
 
-    let totalWeight = 0;
-    let weightedCount = 0;
-    let sumP5 = 0;
-    let sumP35 = 0;
-    let sumP50 = 0;
-    let sumP60 = 0;
-    let sumP95 = 0;
-    let medianMileage = 100000;
-    let mileageAdjustmentSource = 'DEFAULT_FALLBACK';
-    let kmDecayPer10k = 0.0025;
+      const fresh = this.freshnessWeight(r.scrapedAt);
+      freshnessSum += fresh;
 
-    for (const snap of snapshots) {
-      const yearDiff = userYear - snap.year;
-      const yearPriceFactor = 1 + (yearDiff * yearAdjustmentRate);
-      const yearFactor = Math.pow(0.92, Math.abs(yearDiff));
-      const weight = (snap.matchedListingCount || 1) * yearFactor;
+      // Esleme kalitesi agirligi: yil farki, trim uyumu, yakit bilinmezligi
+      let quality = 1;
+      const yearDiff = Math.abs(r.year - year);
+      if (yearDiff === 1) quality *= 0.75;
+      else if (yearDiff >= 2) quality *= 0.5;
 
-      if (snap.snapshotDataJson) {
-        try {
-          const parsed = JSON.parse(snap.snapshotDataJson);
-          if (parsed.medianMileage) medianMileage = parsed.medianMileage;
-          if (parsed.mileageAdjustmentSource) mileageAdjustmentSource = parsed.mileageAdjustmentSource;
-          if (parsed.kmDecayPer10k) kmDecayPer10k = parsed.kmDecayPer10k;
-        } catch (e) {}
+      const listingTrim = foldTurkish(trimName);
+      if (foldedParamTrim && listingTrim && listingTrim !== 'belirtilmemis') {
+        const trimHit =
+          listingTrim === foldedParamTrim ||
+          listingTrim.includes(foldedParamTrim) ||
+          foldedParamTrim.includes(listingTrim);
+        if (!trimHit) quality *= 0.7;
+      } else if (foldedParamTrim) {
+        quality *= 0.85;
       }
 
-      totalWeight += weight;
-      weightedCount += snap.matchedListingCount;
-      sumP5 += (snap.weightedP5 || snap.weightedP50 * 0.85) * yearPriceFactor * weight;
-      sumP35 += (snap.weightedP35 || snap.weightedP50 * 0.92) * yearPriceFactor * weight;
-      sumP50 += snap.weightedP50 * yearPriceFactor * weight;
-      sumP60 += (snap.weightedP60 || snap.weightedP50 * 1.02) * yearPriceFactor * weight;
-      sumP95 += (snap.weightedP95 || snap.weightedP50 * 1.15) * yearPriceFactor * weight;
+      if (this.fuelOf(r)) fuelKnownCount++;
+      if (this.transmissionOf(r)) transKnownCount++;
+      if (paramFuel && !this.fuelOf(r)) quality *= 0.8;
+      const exactEngine =
+        !!paramEngine && !!this.engineOf(r) && isEngineCompatible(paramEngine, this.engineOf(r), true);
+      if (paramEngine && !exactEngine) quality *= 0.55;
+      if (exactEngine) exactEngineCount++;
+
+      const weight = fresh * quality;
+      listings.push(this.toCleanListing(r, normalizedPrice, weight, make, model));
+      weights.push(weight);
     }
 
-    if (totalWeight <= 0) return null;
+    const freshnessScore = selected.length > 0 ? freshnessSum / selected.length : 0;
+    const engineExactShare = selected.length > 0 ? exactEngineCount / selected.length : 0;
+    const fuelKnownShare = selected.length > 0 ? fuelKnownCount / selected.length : 0;
+    const transmissionKnownShare = selected.length > 0 ? transKnownCount / selected.length : 0;
+
+    const withKm = selected.filter((r) => r.mileageKm && r.mileageKm > 0);
+    const kmSorted = withKm.map((r) => r.mileageKm as number).sort((a, b) => a - b);
+    const referenceMedianMileage = kmSorted.length
+      ? kmSorted[Math.floor(kmSorted.length / 2)]
+      : undefined;
+
+    let confidenceScore: number;
+    let isLimitedComps = false;
+    let explanationNote: string;
+
+    const n = selected.length;
+    if (level === 1) {
+      confidenceScore = Math.min(97, 86 + Math.floor(n / 12));
+      explanationNote =
+        `Seviye 1: ${make} ${model} ${paramEngine} ${paramTrim} (${year}) için birebir motor, ` +
+        `yakıt ve model yılı eşleşen ${n} gerçek Sahibinden ilanı kullanıldı. ` +
+        `Farklı motor/yakıt seçenekleri fiyat hesabına katılmadı.`;
+    } else if (level === 2) {
+      // Havuzdaki birebir motor orani dustukce guven de duser.
+      const exactShare = n > 0 ? exactEngineCount / n : 0;
+      confidenceScore = Math.min(85, 72 + Math.floor(n / 15)) - Math.round((1 - exactShare) * 14);
+      if (exactShare < 0.35) isLimitedComps = true;
+      explanationNote =
+        `Seviye 2: ${make} ${model} ${paramEngine} (${year - 1}-${year + 1}) aralığındaki ` +
+        `${n} uyumlu motor/yakıt emsali, yıllık %${(annualRate * 100).toFixed(1)} değer farkı ` +
+        `normalize edilerek ${year} model yılına indirgendi.`;
+    } else {
+      confidenceScore = Math.min(68, 55 + Math.floor(n / 20));
+      isLimitedComps = true;
+      if (n > 0 && exactEngineCount / n < 0.35) confidenceScore -= 6;
+      explanationNote =
+        `Seviye 3: ${make} ${model} (${year - 2}-${year + 2}) genel model grubundaki ${n} emsal ` +
+        `kullanıldı ve yıllık %${(annualRate * 100).toFixed(1)} değer farkı normalize edildi. ` +
+        `Birebir motor/paket emsali yetersiz olduğu için güven seviyesi düşüktür.`;
+    }
+
+    if (!paramEngine) {
+      // Hedef aracin motoru bilinmiyorsa fiyat guveni ustten sinirlanir.
+      confidenceScore = Math.min(confidenceScore, 70);
+      isLimitedComps = true;
+    }
+    if (freshnessScore < 0.5) confidenceScore -= 4;
+    confidenceScore = Math.max(0, Math.min(99, confidenceScore));
 
     return {
-      id: snapshots[0].id,
-      make: snapshots[0].make,
-      model: snapshots[0].model,
-      variant: snapshots[0].variant,
-      year: userYear,
-      matchedListingCount: weightedCount,
-      weightedP5: Math.round(sumP5 / totalWeight),
-      weightedP35: Math.round(sumP35 / totalWeight),
-      weightedP50: Math.round(sumP50 / totalWeight),
-      weightedP60: Math.round(sumP60 / totalWeight),
-      weightedP95: Math.round(sumP95 / totalWeight),
-      snapshotCount: snapshots.length,
-      medianMileage,
-      mileageAdjustmentSource,
-      kmDecayPer10k,
-      yearAdjustmentRate,
+      level,
+      matchedCount: n,
+      cleanListings: listings,
+      confidenceScore,
+      isLimitedComps,
+      explanationNote,
+      kmDecayPer10k: undefined,
+      referenceMedianMileage,
+      mileageAdjustmentSource: kmSorted.length ? 'LISTING_MEDIAN' : 'NO_KM_DATA',
       yearAdjustmentSource,
-      contributingSnapshotIds: snapshots.map(s => s.id),
+      yearAdjustmentRate: annualRate,
+      level1CandidateCount: level === 1 ? n : 0,
+      level2CandidateCount: level === 2 ? n : 0,
+      level3CandidateCount: level === 3 ? n : 0,
+      actuallyUsedListingCount: n,
+      usedEngineDistribution: engineDist,
+      usedTrimDistribution: trimDist,
+      excludedListingCount: duplicateCount + damagedCount + (args.totalCandidates - n),
+      exclusionReasons: [
+        `Mükerrer ilan: ${duplicateCount}`,
+        `Ağır hasarlı/pert ilan: ${damagedCount}`,
+        `Farklı motor/yakıt/paket veya yıl aralığı dışı: ${Math.max(0, args.totalCandidates - n)}`,
+        `Paket eşleşen emsal: ${trimMatchedCount}`,
+        `Birebir motor eşleşen emsal: ${exactEngineCount}`,
+      ],
+      listingWeights: weights,
+      freshnessScore,
+      engineExactShare,
+      fuelKnownShare,
+      transmissionKnownShare,
+      uniqueListingIds: selected.map((r) => r.sourceListingId),
     };
-  }
-
-  private async querySnapshotFromDb(filter: {
-    make: string;
-    model: string;
-    variant?: string;
-    yearExact?: number;
-    yearMin?: number;
-    yearMax?: number;
-  }) {
-    const { make, model, variant, yearExact, yearMin, yearMax } = filter;
-
-    const whereClause: any = {
-      make: { equals: make.trim() },
-      snapshotVersion: 'v2.0',
-      isActive: true,
-    };
-
-    if (model) {
-      whereClause.model = { equals: model.trim() };
-    }
-    if (variant && variant.trim() !== '' && variant.trim() !== 'Standart' && variant.trim() !== 'FarkliVaryant') {
-      whereClause.variant = { equals: variant.trim() };
-    }
-    if (yearExact) {
-      whereClause.year = yearExact;
-    } else if (yearMin && yearMax) {
-      whereClause.year = { gte: yearMin, lte: yearMax };
-    }
-
-    const snapshot = await this.prisma.vehicleMarketSnapshot.findFirst({
-      where: whereClause,
-      orderBy: { matchedListingCount: 'desc' },
-    });
-
-    if (!snapshot) return null;
-
-    const hasFullMetadata = Boolean(snapshot.bodyType && snapshot.fuelType && snapshot.transmission);
-
-    return {
-      snapshot,
-      hasFullMetadata,
-    };
-  }
-
-  private convertSnapshotToCleanListings(snapshot: any, userMileageKm: number): CleanListingItem[] {
-    const p5 = snapshot.weightedP5 || Math.round(snapshot.weightedP50 * 0.85);
-    const p35 = snapshot.weightedP35 || Math.round(snapshot.weightedP50 * 0.92);
-    const p50 = snapshot.weightedP50;
-    const p60 = snapshot.weightedP60 || Math.round(snapshot.weightedP50 * 1.02);
-    const p95 = snapshot.weightedP95 || Math.round(snapshot.weightedP50 * 1.15);
-
-    return [
-      { id: `${snapshot.id}-p5`, make: snapshot.make, model: snapshot.model, variant: snapshot.variant, year: snapshot.year, mileageKm: userMileageKm, price: p5 },
-      { id: `${snapshot.id}-p35`, make: snapshot.make, model: snapshot.model, variant: snapshot.variant, year: snapshot.year, mileageKm: userMileageKm, price: p35 },
-      { id: `${snapshot.id}-p50`, make: snapshot.make, model: snapshot.model, variant: snapshot.variant, year: snapshot.year, mileageKm: userMileageKm, price: p50 },
-      { id: `${snapshot.id}-p60`, make: snapshot.make, model: snapshot.model, variant: snapshot.variant, year: snapshot.year, mileageKm: userMileageKm, price: p60 },
-      { id: `${snapshot.id}-p95`, make: snapshot.make, model: snapshot.model, variant: snapshot.variant, year: snapshot.year, mileageKm: userMileageKm, price: p95 },
-    ];
   }
 }
