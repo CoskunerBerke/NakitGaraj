@@ -24,7 +24,7 @@ import * as path from 'path';
 import { PrismaClient } from '@prisma/client';
 import { EmsalMatcherService } from '../evaluation/emsal-matcher.service';
 import { RobustPricingCalculator } from '../evaluation/robust-pricing-calculator';
-import { splitVariantString } from '../evaluation/listing-attributes';
+import { deriveFuelFromEngineCode, splitVariantString } from '../evaluation/listing-attributes';
 
 const DATA_DIR = path.join(__dirname, '..', '..', 'data', 'calibration');
 const CSV_PATH = path.join(DATA_DIR, 'calibration_cases.csv');
@@ -129,7 +129,8 @@ export function parseCsv(content: string): CalibrationCase[] {
       year,
       km: parseMoney(get('km')) ?? 0,
       damage: parseFloat(get('damage')) || 0,
-      dealerMarketValue: parseMoney(get('dealerMarketValue')),
+      // 'dealerMarketEstimate' takma adi da kabul edilir.
+      dealerMarketValue: parseMoney(get('dealerMarketValue') || get('dealerMarketEstimate')),
       dealerCashOffer: parseMoney(get('dealerCashOffer')),
       realisticListingPrice: parseMoney(get('realisticListingPrice')),
       actualSalePrice: parseMoney(get('actualSalePrice')),
@@ -145,10 +146,77 @@ export interface ErrorMetrics {
   marketValueErrorPct: number | null;
   cashErrorTl: number | null;
   cashErrorPct: number | null;
+  listingErrorTl: number | null;
+  listingErrorPct: number | null;
   salePriceErrorTl: number | null;
   salePriceErrorPct: number | null;
   dealerMarginDiff: number | null;
   customerOfferDiff: number | null;
+  /** Sistemin beklediği galeri brüt marjı (beklenen satış − nakit teklif) */
+  systemExpectedDealerSpread: number;
+  /** Galericinin gerçekleşen brüt marjı (gerçek satış − galericinin nakit alışı) */
+  realizedDealerSpread: number | null;
+  systemCashRatio: number;
+  dealerCashRatio: number | null;
+  /** Sistem teklifi galericinin teklifinden %5+ düşük veya oran < 0.88 */
+  customerLossRisk: boolean;
+  /** Sistem teklifi belirgin yüksek ve gerçekleşen marj hedefin altında */
+  dealerMarginRisk: boolean;
+}
+
+export const SEGMENT_BANDS: Array<[string, number, number]> = [
+  ['<600k', 0, 600_000],
+  ['600k-1.2M', 600_000, 1_200_000],
+  ['1.2M-2M', 1_200_000, 2_000_000],
+  ['2M-4M', 2_000_000, 4_000_000],
+  ['4M-8M', 4_000_000, 8_000_000],
+  ['8M+', 8_000_000, Number.POSITIVE_INFINITY],
+];
+
+export const CONFIDENCE_BANDS: Array<[string, number, number]> = [
+  ['90+', 90, 200],
+  ['80-89', 80, 90],
+  ['71-79', 71, 80],
+  ['<=70', -1, 71],
+];
+
+export function segmentOf(expectedSalePrice: number): string {
+  for (const [name, lo, hi] of SEGMENT_BANDS) {
+    if (expectedSalePrice >= lo && expectedSalePrice < hi) return name;
+  }
+  return SEGMENT_BANDS[SEGMENT_BANDS.length - 1][0];
+}
+
+export function confidenceBandOf(confidence: number): string {
+  for (const [name, lo, hi] of CONFIDENCE_BANDS) {
+    if (confidence >= lo && confidence < hi) return name;
+  }
+  return '<=70';
+}
+
+/** Medyan; bos dizide null */
+export function median(arr: number[]): number | null {
+  if (!arr.length) return null;
+  const s = [...arr].sort((a, b) => a - b);
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+}
+
+/** Ortalama mutlak hata */
+export function mae(arr: number[]): number | null {
+  if (!arr.length) return null;
+  return arr.reduce((t, v) => t + Math.abs(v), 0) / arr.length;
+}
+
+/**
+ * Segment bias karari. Yeterli veri yoksa asla bias iddia edilmez.
+ * Esik: medyan sapma |%3| ustu ve en az 3 vaka.
+ */
+export function biasVerdict(medianPct: number | null, n: number): string {
+  if (n < 3 || medianPct === null) return 'INSUFFICIENT DATA';
+  if (medianPct <= -3) return 'SYSTEM TOO LOW';
+  if (medianPct >= 3) return 'SYSTEM TOO HIGH';
+  return 'NO CLEAR BIAS';
 }
 
 /**
@@ -164,6 +232,7 @@ export function computeErrors(
     fairMarketValue: number;
     expectedSalePrice: number;
     cashOffer: number;
+    consignmentListingPrice?: number;
   },
   real: Pick<
     CalibrationCase,
@@ -178,22 +247,65 @@ export function computeErrors(
 
   const marketValueErrorTl = diff(sys.fairMarketValue, real.dealerMarketValue);
   const cashErrorTl = diff(sys.cashOffer, real.dealerCashOffer);
+  const listingErrorTl =
+    sys.consignmentListingPrice === undefined
+      ? null
+      : diff(sys.consignmentListingPrice, real.realisticListingPrice);
   const salePriceErrorTl = diff(sys.expectedSalePrice, saleRef);
 
-  // Galericinin gerceklesen brut marji: sattigi fiyat - aldigi fiyat
-  const dealerMargin =
+  const systemExpectedDealerSpread = sys.expectedSalePrice - sys.cashOffer;
+  const realizedDealerSpread =
+    real.actualSalePrice !== null && real.dealerCashOffer !== null
+      ? real.actualSalePrice - real.dealerCashOffer
+      : null;
+
+  // Eski davranis korunur: gerceklesen satis yoksa gercekci ilan fiyati referans.
+  const dealerMarginBase =
     saleRef !== null && real.dealerCashOffer !== null ? saleRef - real.dealerCashOffer : null;
-  const systemMargin = sys.expectedSalePrice - sys.cashOffer;
+
+  const systemCashRatio =
+    sys.expectedSalePrice > 0 ? sys.cashOffer / sys.expectedSalePrice : 0;
+  const dealerCashRatio =
+    real.dealerCashOffer !== null && real.dealerMarketValue !== null && real.dealerMarketValue > 0
+      ? real.dealerCashOffer / real.dealerMarketValue
+      : null;
+
+  // Musteri kabul riski: sistem teklifi galericininkinden %5+ dusuk VEYA oran < 0.88
+  const cashBelowDealerPct =
+    real.dealerCashOffer !== null && real.dealerCashOffer > 0
+      ? ((sys.cashOffer - real.dealerCashOffer) / real.dealerCashOffer) * 100
+      : null;
+  const customerLossRisk =
+    (cashBelowDealerPct !== null && cashBelowDealerPct < -5) || systemCashRatio < 0.88;
+
+  // Galeri riski: sistem teklifi galericininkinden belirgin yuksek VE gerceklesen
+  // satisa gore kalan marj, sistemin bekledigi marjin altinda.
+  const marginIfSystemBought =
+    saleRef !== null ? saleRef - sys.cashOffer : null;
+  const dealerMarginRisk =
+    cashBelowDealerPct !== null &&
+    cashBelowDealerPct > 5 &&
+    marginIfSystemBought !== null &&
+    marginIfSystemBought < systemExpectedDealerSpread;
 
   return {
     marketValueErrorTl,
     marketValueErrorPct: pctOf(marketValueErrorTl, real.dealerMarketValue),
     cashErrorTl,
     cashErrorPct: pctOf(cashErrorTl, real.dealerCashOffer),
+    listingErrorTl,
+    listingErrorPct: pctOf(listingErrorTl, real.realisticListingPrice),
     salePriceErrorTl,
     salePriceErrorPct: pctOf(salePriceErrorTl, saleRef),
-    dealerMarginDiff: dealerMargin === null ? null : systemMargin - dealerMargin,
+    dealerMarginDiff:
+      dealerMarginBase === null ? null : systemExpectedDealerSpread - dealerMarginBase,
     customerOfferDiff: cashErrorTl,
+    systemExpectedDealerSpread,
+    realizedDealerSpread,
+    systemCashRatio,
+    dealerCashRatio,
+    customerLossRisk,
+    dealerMarginRisk,
   };
 }
 
@@ -244,13 +356,6 @@ function writeTemplate() {
 const tl = (n: number | null) => (n === null ? '—' : `${Math.round(n).toLocaleString('tr-TR')} ₺`);
 const pc = (n: number | null) => (n === null ? '—' : `${n >= 0 ? '+' : ''}${n.toFixed(1)}%`);
 const sg = (n: number | null) => (n === null ? '—' : `${n >= 0 ? '+' : ''}${Math.round(n).toLocaleString('tr-TR')} ₺`);
-
-function median(arr: number[]): number | null {
-  if (!arr.length) return null;
-  const s = [...arr].sort((a, b) => a - b);
-  const m = Math.floor(s.length / 2);
-  return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
-}
 
 async function report() {
   if (!fs.existsSync(CSV_PATH)) {
@@ -345,17 +450,23 @@ async function report() {
 
   L.push('## 2. Sistem Değerleri');
   L.push('');
-  L.push('| # | Araç | Yıl | Km | Sv | Emsal | Güven | Piyasa Değeri | Beklenen Satış | Nakit Teklif | Konsinye İlan | Müşteri Neti | Durum |');
-  L.push('|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|');
+  L.push('| # | Araç | Yıl | Km | Yakıt | Vites | Sv | Emsal | Güven | kmExtrap | Piyasa Değeri | Beklenen Satış | Nakit Teklif | Konsinye İlan | Müşteri Neti | Durum |');
+  L.push('|---:|---|---:|---:|---|---|---:|---:|---:|---|---:|---:|---:|---:|---:|---|');
   rows.forEach((x, i) => {
     const c = x.c;
     const name = `${c.make} ${c.model} ${c.engine} ${c.trim}`.trim();
     if (!x.r) {
-      L.push(`| ${i + 1} | ${name} | ${c.year} | ${c.km.toLocaleString('tr-TR')} | 4 | 0 | — | — | — | — | — | — | YETERSİZ VERİ |`);
+      L.push(`| ${i + 1} | ${name} | ${c.year} | ${c.km.toLocaleString('tr-TR')} | — | — | 4 | 0 | — | — | — | — | — | — | — | YETERSİZ VERİ |`);
       return;
     }
+    const fuel = deriveFuelFromEngineCode(c.engine) || '—';
+    const trans =
+      x.m.transmissionKnownShare && x.m.transmissionKnownShare >= 0.5 ? 'biliniyor' : 'bilinmiyor';
+    const kmEx = x.r.pricingAudit?.kmExtrapolated
+      ? `EVET (+${Math.round(x.r.pricingAudit.distanceOutsideObservedRange / 1000)}k)`
+      : 'hayır';
     L.push(
-      `| ${i + 1} | ${name} | ${c.year} | ${c.km.toLocaleString('tr-TR')} | ${x.m.level} | ${x.m.actuallyUsedListingCount || x.m.matchedCount} | ${x.r.confidenceScore} | ${tl(x.r.fairMarketValue)} | ${tl(x.r.expectedSalePrice)} | ${tl(x.r.cashOffer)} | ${tl(x.r.consignmentListingPrice)} | ${tl(x.r.customerConsignmentNet)} | ${x.status === 'SUCCESS' ? '✓' : 'MANUEL'} |`,
+      `| ${i + 1} | ${name} | ${c.year} | ${c.km.toLocaleString('tr-TR')} | ${fuel} | ${trans} | ${x.m.level} | ${x.m.actuallyUsedListingCount || x.m.matchedCount} | ${x.r.confidenceScore} | ${kmEx} | ${tl(x.r.fairMarketValue)} | ${tl(x.r.expectedSalePrice)} | ${tl(x.r.cashOffer)} | ${tl(x.r.consignmentListingPrice)} | ${tl(x.r.customerConsignmentNet)} | ${x.status === 'SUCCESS' ? '✓' : 'MANUEL'} |`,
     );
   });
   L.push('');
@@ -364,16 +475,20 @@ async function report() {
   L.push('');
   L.push('Pozitif değer = sistem daha yüksek diyor.');
   L.push('');
-  L.push('| # | Araç | Piyasa Değeri Sapması | Nakit Sapması | Satış Fiyatı Sapması | Galeri Marj Farkı | Müşteri Teklif Farkı |');
-  L.push('|---:|---|---:|---:|---:|---:|---:|');
+  L.push('| # | Araç | Piyasa Değeri | Nakit | İlan Fiyatı | Satış Fiyatı | Sistem Marjı | Gerçekleşen Marj | Sistem c/s | Galeri c/s | Risk |');
+  L.push('|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---|');
   if (measured.length === 0) {
-    L.push('| — | *(henüz gerçek saha verisi girilmemiş)* | — | — | — | — | — |');
+    L.push('| — | *(henüz gerçek saha verisi girilmemiş)* | — | — | — | — | — | — | — | — | — |');
   }
   measured.forEach((x, i) => {
     const c = x.c;
     const e: ErrorMetrics = x.err;
+    const risk = [
+      e.customerLossRisk ? 'CUSTOMER_LOSS_RISK' : '',
+      e.dealerMarginRisk ? 'DEALER_MARGIN_RISK' : '',
+    ].filter(Boolean).join(' + ') || '—';
     L.push(
-      `| ${i + 1} | ${c.make} ${c.model} ${c.engine} ${c.year} | ${sg(e.marketValueErrorTl)} (${pc(e.marketValueErrorPct)}) | ${sg(e.cashErrorTl)} (${pc(e.cashErrorPct)}) | ${sg(e.salePriceErrorTl)} (${pc(e.salePriceErrorPct)}) | ${sg(e.dealerMarginDiff)} | ${sg(e.customerOfferDiff)} |`,
+      `| ${i + 1} | ${c.make} ${c.model} ${c.engine} ${c.year} | ${sg(e.marketValueErrorTl)} (${pc(e.marketValueErrorPct)}) | ${sg(e.cashErrorTl)} (${pc(e.cashErrorPct)}) | ${sg(e.listingErrorTl)} (${pc(e.listingErrorPct)}) | ${sg(e.salePriceErrorTl)} (${pc(e.salePriceErrorPct)}) | ${tl(e.systemExpectedDealerSpread)} | ${tl(e.realizedDealerSpread)} | ${(e.systemCashRatio * 100).toFixed(1)}% | ${e.dealerCashRatio === null ? '—' : (e.dealerCashRatio * 100).toFixed(1) + '%'} | ${risk} |`,
     );
   });
   L.push('');
@@ -402,6 +517,78 @@ async function report() {
     summarize('Nakit teklif sapması', cs, '%');
     summarize('Satış fiyatı sapması', sp, '%');
     summarize('Galeri marj farkı', dm, 'TL');
+    L.push('');
+
+    // ---- Segment bias ----
+    L.push('## 5. Segment Bazlı Bias');
+    L.push('');
+    L.push('| Segment | n | med piyasa % | med nakit % | med satış % | MAE piyasa % | MAE nakit % | MAE satış % | BIAS |');
+    L.push('|---|---:|---:|---:|---:|---:|---:|---:|---|');
+    for (const [name] of SEGMENT_BANDS) {
+      const sub = measured.filter((x) => segmentOf(x.r.expectedSalePrice) === name);
+      const pick = (f: (e: ErrorMetrics) => number | null) =>
+        sub.map((x) => f(x.err)).filter((v): v is number => v !== null);
+      const mv = pick((e) => e.marketValueErrorPct);
+      const cs = pick((e) => e.cashErrorPct);
+      const sp = pick((e) => e.salePriceErrorPct);
+      // Bias karari nakit sapmasi uzerinden verilir (musteriye giden rakam).
+      const verdict = biasVerdict(median(cs), cs.length);
+      L.push(
+        `| ${name} | ${sub.length} | ${pc(median(mv))} | ${pc(median(cs))} | ${pc(median(sp))} | ` +
+        `${mae(mv) === null ? '—' : mae(mv)!.toFixed(1) + '%'} | ${mae(cs) === null ? '—' : mae(cs)!.toFixed(1) + '%'} | ` +
+        `${mae(sp) === null ? '—' : mae(sp)!.toFixed(1) + '%'} | ${verdict} |`,
+      );
+    }
+    L.push('');
+
+    // ---- Confidence kalibrasyonu ----
+    L.push('## 6. Confidence Gerçekten Anlamlı mı?');
+    L.push('');
+    L.push('Beklenti: yüksek güven bandındaki araçların hata oranı daha düşük olmalı.');
+    L.push('');
+    L.push('| Güven bandı | n | MAE nakit % | MAE piyasa % | med nakit % |');
+    L.push('|---|---:|---:|---:|---:|');
+    const bandMae: Array<[string, number | null, number]> = [];
+    for (const [name] of CONFIDENCE_BANDS) {
+      const sub = measured.filter((x) => confidenceBandOf(x.r.confidenceScore) === name);
+      const cs = sub.map((x) => x.err.cashErrorPct).filter((v: any): v is number => v !== null);
+      const mv = sub.map((x) => x.err.marketValueErrorPct).filter((v: any): v is number => v !== null);
+      bandMae.push([name, mae(cs), sub.length]);
+      L.push(
+        `| ${name} | ${sub.length} | ${mae(cs) === null ? '—' : mae(cs)!.toFixed(1) + '%'} | ` +
+        `${mae(mv) === null ? '—' : mae(mv)!.toFixed(1) + '%'} | ${pc(median(cs))} |`,
+      );
+    }
+    L.push('');
+    const usable = bandMae.filter((b) => b[1] !== null && b[2] >= 3);
+    if (usable.length >= 2) {
+      const ordered = [...usable].sort((a, b) => CONFIDENCE_BANDS.findIndex((c) => c[0] === a[0]) - CONFIDENCE_BANDS.findIndex((c) => c[0] === b[0]));
+      let monotone = true;
+      for (let i = 1; i < ordered.length; i++) if (ordered[i][1]! < ordered[i - 1][1]!) monotone = false;
+      L.push(monotone
+        ? '> ✅ Yüksek güven bandı daha düşük hata üretiyor: confidence anlamlı.'
+        : '> ⚠️ Güven bandı ile hata oranı ters/karışık: confidence kalibrasyonu sorgulanmalı.');
+    } else {
+      L.push('> ⏳ Güven bandı başına en az 3 vaka yok; confidence kalibrasyonu değerlendirilemiyor.');
+    }
+    L.push('');
+
+    // ---- Risk ozeti ----
+    const clr = measured.filter((x) => x.err.customerLossRisk);
+    const dmr = measured.filter((x) => x.err.dealerMarginRisk);
+    L.push('## 7. Risk Bayrakları (RISK FLAG — hüküm değil)');
+    L.push('');
+    L.push('> Aşağıdakiler **analitik etikettir**: incelenmeye değer vakaları işaretler.');
+    L.push('> Bir bayrak, sistemin fiyatının YANLIŞ olduğunun kanıtı DEĞİLDİR — galericinin');
+    L.push('> tahmini de yanlış olabilir, araç özel durumda olabilir veya örneklem küçük olabilir.');
+    L.push('');
+    L.push(`- **CUSTOMER_LOSS_RISK**: ${clr.length} araç (sistem nakit teklifi galericininkinden %5+ düşük veya cash/sale < %88)`);
+    for (const x of clr) L.push(`  - ${x.c.make} ${x.c.model} ${x.c.engine} ${x.c.year} — sistem ${tl(x.r.cashOffer)} / galeri ${tl(x.c.dealerCashOffer)}`);
+    L.push(`- **DEALER_MARGIN_RISK**: ${dmr.length} araç (sistem belirgin yüksek alıyor, gerçekleşen satışa göre marj hedefin altında)`);
+    for (const x of dmr) L.push(`  - ${x.c.make} ${x.c.model} ${x.c.engine} ${x.c.year} — sistem ${tl(x.r.cashOffer)} / galeri ${tl(x.c.dealerCashOffer)}`);
+    L.push('');
+    L.push('> Bu bayraklar yalnızca ÖLÇÜMDÜR. Hiçbir fiyat otomatik değiştirilmez ve');
+    L.push('> hiçbir konfigürasyon önerisi üretilmez.');
     L.push('');
 
     if (measured.length >= MIN_CASES_FOR_CALIBRATION) {

@@ -8,6 +8,11 @@ import {
   parseCsv,
   parseMoney,
   splitCsvLine,
+  segmentOf,
+  confidenceBandOf,
+  biasVerdict,
+  median,
+  mae,
 } from '../scripts/calibration_report';
 
 describe('Kalibrasyon ölçüm sistemi', () => {
@@ -100,12 +105,141 @@ describe('Kalibrasyon ölçüm sistemi', () => {
       expect(e.customerOfferDiff).toBe(100_000);
     });
 
-    test('Eksik gerçek veri hata üretmez, null döner', () => {
+    test('Eksik gerçek veri hata UYDURMAZ; sapma alanları null kalır', () => {
       const e = computeErrors(sys, {
         dealerMarketValue: null, dealerCashOffer: null,
         realisticListingPrice: null, actualSalePrice: null,
       });
-      expect(Object.values(e).every((v) => v === null)).toBe(true);
+      // Gercek saha verisine BAGLI her alan null olmali.
+      const dealerDependent = [
+        e.marketValueErrorTl, e.marketValueErrorPct,
+        e.cashErrorTl, e.cashErrorPct,
+        e.listingErrorTl, e.listingErrorPct,
+        e.salePriceErrorTl, e.salePriceErrorPct,
+        e.dealerMarginDiff, e.customerOfferDiff,
+        e.realizedDealerSpread, e.dealerCashRatio,
+      ];
+      expect(dealerDependent.every((v) => v === null)).toBe(true);
+      // Yalnizca sistem tarafindan turetilen alanlar hesaplanabilir kalir.
+      expect(e.systemExpectedDealerSpread).toBe(200_000);
+      expect(e.systemCashRatio).toBeCloseTo(2_500_000 / 2_700_000, 4);
+      expect(e.dealerMarginRisk).toBe(false);
+    });
+  });
+
+  describe('Genişletilmiş sapma metrikleri', () => {
+    const sys = {
+      fairMarketValue: 2_800_000,
+      expectedSalePrice: 2_700_000,
+      cashOffer: 2_500_000,
+      consignmentListingPrice: 2_790_000,
+    };
+
+    test('İlan fiyatı sapması gerçekçi ilan fiyatına göre ölçülür', () => {
+      const e = computeErrors(sys, {
+        dealerMarketValue: null, dealerCashOffer: null,
+        realisticListingPrice: 2_850_000, actualSalePrice: null,
+      });
+      expect(e.listingErrorTl).toBe(-60_000);
+      expect(e.listingErrorPct).toBeCloseTo(-2.11, 1);
+    });
+
+    test('Sistem ve galeri nakit oranları ayrı ayrı hesaplanır', () => {
+      const e = computeErrors(sys, {
+        dealerMarketValue: 2_600_000, dealerCashOffer: 2_400_000,
+        realisticListingPrice: null, actualSalePrice: null,
+      });
+      expect(e.systemCashRatio).toBeCloseTo(2_500_000 / 2_700_000, 4);
+      expect(e.dealerCashRatio).toBeCloseTo(2_400_000 / 2_600_000, 4);
+    });
+
+    test('Sistem beklenen marjı ve gerçekleşen marj ayrı raporlanır', () => {
+      const e = computeErrors(sys, {
+        dealerMarketValue: null, dealerCashOffer: 2_400_000,
+        realisticListingPrice: null, actualSalePrice: 2_650_000,
+      });
+      expect(e.systemExpectedDealerSpread).toBe(200_000);
+      expect(e.realizedDealerSpread).toBe(250_000);
+    });
+
+    test('Gerçekleşen satış yoksa realizedDealerSpread null kalır', () => {
+      const e = computeErrors(sys, {
+        dealerMarketValue: null, dealerCashOffer: 2_400_000,
+        realisticListingPrice: 2_850_000, actualSalePrice: null,
+      });
+      expect(e.realizedDealerSpread).toBeNull();
+    });
+
+    test('CUSTOMER_LOSS_RISK: sistem teklifi galericiden %5+ düşükse işaretlenir', () => {
+      const e = computeErrors(
+        { ...sys, cashOffer: 2_400_000, expectedSalePrice: 2_600_000 },
+        { dealerMarketValue: null, dealerCashOffer: 2_600_000, realisticListingPrice: null, actualSalePrice: null },
+      );
+      expect(e.customerLossRisk).toBe(true);
+    });
+
+    test('CUSTOMER_LOSS_RISK: cash/sale oranı %88 altındaysa da işaretlenir', () => {
+      const e = computeErrors(
+        { ...sys, cashOffer: 2_300_000, expectedSalePrice: 2_700_000 },
+        { dealerMarketValue: null, dealerCashOffer: 2_300_000, realisticListingPrice: null, actualSalePrice: null },
+      );
+      expect(e.systemCashRatio).toBeLessThan(0.88);
+      expect(e.customerLossRisk).toBe(true);
+    });
+
+    test('Normal aralıkta hiçbir risk bayrağı yanmaz', () => {
+      const e = computeErrors(sys, {
+        dealerMarketValue: 2_750_000, dealerCashOffer: 2_480_000,
+        realisticListingPrice: 2_800_000, actualSalePrice: 2_720_000,
+      });
+      expect(e.customerLossRisk).toBe(false);
+      expect(e.dealerMarginRisk).toBe(false);
+    });
+
+    test('DEALER_MARGIN_RISK: sistem belirgin yüksek alıp marj hedefin altına düşerse', () => {
+      const e = computeErrors(
+        { fairMarketValue: 2_800_000, expectedSalePrice: 2_700_000, cashOffer: 2_650_000, consignmentListingPrice: 2_790_000 },
+        { dealerMarketValue: null, dealerCashOffer: 2_400_000, realisticListingPrice: null, actualSalePrice: 2_680_000 },
+      );
+      expect(e.dealerMarginRisk).toBe(true);
+    });
+  });
+
+  describe('Segment / güven bandı / bias sınıflandırması', () => {
+    test('Segment sınırları beklenen bantlara düşer', () => {
+      expect(segmentOf(450_000)).toBe('<600k');
+      expect(segmentOf(900_000)).toBe('600k-1.2M');
+      expect(segmentOf(1_600_000)).toBe('1.2M-2M');
+      expect(segmentOf(3_000_000)).toBe('2M-4M');
+      expect(segmentOf(6_000_000)).toBe('4M-8M');
+      expect(segmentOf(12_000_000)).toBe('8M+');
+    });
+
+    test('Güven bantları doğru ayrılır', () => {
+      expect(confidenceBandOf(93)).toBe('90+');
+      expect(confidenceBandOf(90)).toBe('90+');
+      expect(confidenceBandOf(84)).toBe('80-89');
+      expect(confidenceBandOf(72)).toBe('71-79');
+      expect(confidenceBandOf(70)).toBe('<=70');
+      expect(confidenceBandOf(35)).toBe('<=70');
+    });
+
+    test('3 vakadan az veride ASLA bias iddia edilmez', () => {
+      expect(biasVerdict(-12, 2)).toBe('INSUFFICIENT DATA');
+      expect(biasVerdict(null, 10)).toBe('INSUFFICIENT DATA');
+    });
+
+    test('Bias yönü yalnız anlamlı sapmada verilir', () => {
+      expect(biasVerdict(-8, 5)).toBe('SYSTEM TOO LOW');
+      expect(biasVerdict(7, 5)).toBe('SYSTEM TOO HIGH');
+      expect(biasVerdict(1.2, 5)).toBe('NO CLEAR BIAS');
+    });
+
+    test('median / mae yardımcıları boş veride null döner', () => {
+      expect(median([])).toBeNull();
+      expect(mae([])).toBeNull();
+      expect(median([1, 3, 2])).toBe(2);
+      expect(mae([-2, 4])).toBe(3);
     });
   });
 
