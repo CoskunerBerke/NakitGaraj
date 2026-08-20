@@ -1,4 +1,28 @@
 /**
+ * !!! KULLANIM DISI / CALISTIRILAMAZ (DEPRECATED - BLOCKED) !!!
+ *
+ * NEDEN ENGELLENDI:
+ * Bu script fiyati ilan satirinin kendi fiyat hucresinden DEGIL, sayfanin
+ * TAMAMINDAN bir TL regex'i ile topluyor. Boylece reklam/vitrin fiyati, kredi
+ * taksiti, kapora ve baska araclarin fiyatlari da "asking price" sanilabiliyor
+ * ve veritabanina yaziliyor. Calistirilmasi dogrulanmis V3 veri zincirini bozar.
+ *
+ * YERINE KULLANILACAK TEK ICE AKTARICI:
+ *   npm run rebuild:listings          (src/scripts/rebuild_raw_listings_v3.ts)
+ *   npm run rebuild:listings:dry      (veritabanina yazmadan dogrulama)
+ *
+ * Dosya, gecmis referansi icin saklanmistir; asagidaki kapi dogrudan
+ * calistirmayi veritabanina hicbir sey yazmadan durdurur.
+ */
+if (require.main === module) {
+  console.error(
+    'DEPRECATED: Bu ice aktarici devre disidir (sayfa geneli TL regex ile fiyat uretiyordu). ' +
+    'Use rebuild_raw_listings_v3.ts  ->  npm run rebuild:listings',
+  );
+  process.exit(1);
+}
+
+/**
  * !!! KULLANIM DISI (SUPERSEDED) - V3 ONCESI ICE AKTARICI !!!
  *
  * Bu script RawVehicleListing tablosuna V3 oncesi semantikle yazar

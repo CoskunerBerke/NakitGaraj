@@ -52,6 +52,49 @@ describe('İçe aktarma bütünlüğü', () => {
     });
   });
 
+  describe('Eski güvensiz HTML fiyat içe aktarıcıları devre dışıdır', () => {
+    // Bu iki script fiyati ilan satirinin kendi hucresinden DEGIL, sayfanin
+    // TAMAMINDAN bir TL regex'i ile topluyordu (reklam/vitrin fiyati, kredi
+    // taksiti, kapora, baska araclarin fiyatlari). Dosyalar gecmis referansi
+    // icin saklaniyor; dogrudan calistirilirsa DB'ye hicbir sey yazmadan
+    // hata verip cikmalilar.
+    const LEGACY = ['force_sync_desktop_folders_to_db.ts', 'import_all_26_desktop_brands.ts'];
+
+    for (const name of LEGACY) {
+      const src = () => fs.readFileSync(path.join(__dirname, '..', 'scripts', name), 'utf8');
+
+      test(`${name} doğrudan çalıştırılamaz`, () => {
+        const s = src();
+        expect(s).toMatch(/if \(require\.main === module\)/);
+        expect(s).toMatch(/DEPRECATED/);
+        expect(s).toMatch(/process\.exit\(1\)/);
+      });
+
+      test(`${name} engeli, veritabanı erişiminden ÖNCE gelir`, () => {
+        const s = src();
+        const guard = s.indexOf('process.exit(1)');
+        const firstDbUse = Math.min(
+          ...['new PrismaClient(', 'prisma.'].map((t) => {
+            const i = s.indexOf(t);
+            return i === -1 ? Number.MAX_SAFE_INTEGER : i;
+          }),
+        );
+        expect(guard).toBeGreaterThan(-1);
+        expect(guard).toBeLessThan(firstDbUse);
+      });
+    }
+
+    test('Üretim npm script’leri yalnız V3 içe aktarıcısını çağırır', () => {
+      const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8'));
+      const importScripts = Object.values(pkg.scripts as Record<string, string>)
+        .filter((v) => /import|rebuild/i.test(v));
+      expect(importScripts.length).toBeGreaterThan(0);
+      for (const cmd of importScripts) {
+        expect(cmd).not.toMatch(/force_sync_desktop_folders_to_db|import_all_26_desktop_brands/);
+      }
+    });
+  });
+
   describe('Kasa tipi (body type) türetme', () => {
     test('Yalnızca AÇIK sinyalden türetilir; model adından tahmin YAPILMAZ', () => {
       expect(deriveBodyType('3 Serisi', '320i M Sport')).toBe(''); // sedan varsayimi YOK
