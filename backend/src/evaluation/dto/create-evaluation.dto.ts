@@ -8,7 +8,9 @@ import {
   IsOptional,
   Length,
   IsEnum,
+  IsIn,
 } from 'class-validator';
+import { CANONICAL_BODY_TYPES } from '../listing-attributes';
 
 import { Transform } from 'class-transformer';
 
@@ -43,6 +45,50 @@ export class CreateEvaluationDto {
   @IsOptional()
   @IsString()
   bodyTypeId?: string;
+
+  /**
+   * GOZLENEN ARAC HEDEFI — gercek Sahibinden ilan verisinden secilen canonical
+   * degerler. Katalogda (VehicleSpecification) karsiligi olmayan gercek araclar
+   * (orn. 8.494 ilanlik Fiat Egea) bu alanlar sayesinde degerlenebilir.
+   * Verildiginde katalog kaydi ZORUNLU DEGILDIR; spec varsa yalnizca teknik
+   * zenginlestirme (hp/tork/motor hacmi) icin kullanilir.
+   */
+  @Transform(({ value }) => (typeof value === 'string' && value.trim() === '' ? undefined : value))
+  @IsOptional()
+  @IsString()
+  @Length(1, 60)
+  observedMake?: string;
+
+  @Transform(({ value }) => (typeof value === 'string' && value.trim() === '' ? undefined : value))
+  @IsOptional()
+  @IsString()
+  @Length(1, 80)
+  observedModel?: string;
+
+  @Transform(({ value }) => (typeof value === 'string' && value.trim() === '' ? undefined : value))
+  @IsOptional()
+  @IsString()
+  @Length(1, 80)
+  observedEngine?: string;
+
+  @Transform(({ value }) => (typeof value === 'string' && value.trim() === '' ? undefined : value))
+  @IsOptional()
+  @IsString()
+  @Length(1, 80)
+  observedTrim?: string;
+
+  /**
+   * Musterinin, aracin kendi ilan havuzunda GERCEKTEN gorulen kasa tipleri
+   * arasindan yaptigi secim (canonical deger). Katalogtaki BodyType sozlugu
+   * SPORTBACK / GRAN_COUPE gibi siniflari hic icermedigi ve bazi modellerde
+   * (orn. BMW 4 Serisi Cabrio) dogru kasa secilemedigi icin gereklidir.
+   * 'UNKNOWN' = musteri bilmiyor -> kasa uzerinden hicbir eleme yapilmaz.
+   */
+  @Transform(({ value }) => (typeof value === 'string' && value.trim() === '' ? undefined : value))
+  @IsOptional()
+  @IsString()
+  @IsIn([...CANONICAL_BODY_TYPES, 'UNKNOWN'], { message: 'Geçersiz kasa tipi.' })
+  observedBodyType?: string;
 
   @Transform(({ value }) => (typeof value === 'string' && value.trim() === '' ? undefined : value))
   @IsOptional()

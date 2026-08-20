@@ -67,7 +67,10 @@ const step2Schema = z.object({
       .min(1, 'Kilometre 1 veya daha büyük olmalıdır.')
   ),
   color: z.string().min(1, 'Lütfen bir renk seçiniz.'),
-  damageStatus: z.enum(['YES', 'NO', 'UNKNOWN']),
+  // Sessizlik "aracim temiz" beyani DEGILDIR: kullanici acikca secmek zorunda.
+  damageStatus: z.enum(['YES', 'NO', 'UNKNOWN'], {
+    message: 'Lütfen aracınızın boya/değişen durumunu belirtiniz. Emin değilseniz "Bilmiyorum" seçebilirsiniz.',
+  }),
   sellingTimeline: z.string().min(1, 'Lütfen satış süresi seçiniz.'),
   userDesiredPrice: z.preprocess(
     (val) => (val === '' || val === undefined || val === null || isNaN(Number(val)) ? undefined : Number(val)),
@@ -145,28 +148,36 @@ export default function ValuationWizard() {
   const [availableVariants, setAvailableVariants] = useState<any[]>([]);
   const [availablePackages, setAvailablePackages] = useState<any[]>([]);
   const [availableBodies, setAvailableBodies] = useState<any[]>([]);
+  /**
+   * GOZLENEN kasa tipleri: katalogtaki BodyType sozlugu yerine, aracin KENDI
+   * ilan havuzunda gercekten gorulen canonical kasa siniflari. Katalog
+   * SPORTBACK / GRAN_COUPE icermiyor ve bazi modellerde (BMW 4 Serisi Cabrio)
+   * dogru kasa hic secilemiyordu.
+   */
+  const [observedBodies, setObservedBodies] = useState<
+    Array<{ value: string; displayLabel: string; listingCount: number }>
+  >([]);
+  const [selectedObservedBody, setSelectedObservedBody] = useState<string>('');
   const [availableFuels, setAvailableFuels] = useState<any[]>([]);
   const [availableTransmissions, setAvailableTransmissions] = useState<any[]>([]);
 
   // Detailed Appraisal (Paint Scheme & Status)
-  const [paintParts, setPaintParts] = useState<Record<string, PartStatus>>({
-    'Motor Kaputu': 'ORIJINAL',
-    'Tavan': 'ORIJINAL',
-    'Sol Ön Çamurluk': 'ORIJINAL',
-    'Sağ Ön Çamurluk': 'ORIJINAL',
-    'Sol Ön Kapı': 'ORIJINAL',
-    'Sağ Ön Kapı': 'ORIJINAL',
-    'Sol Arka Kapı': 'ORIJINAL',
-    'Sağ Arka Kapı': 'ORIJINAL',
-    'Sol Arka Çamurluk': 'ORIJINAL',
-    'Sağ Arka Çamurluk': 'ORIJINAL',
-    'Bagaj Kapağı': 'ORIJINAL',
-  });
+  // BOS = CEVAPLANMAMIS. Paneller sessizce ORIJINAL kabul EDILMEZ; kullanici
+  // "işlem yok" derse ya da paneli acikca isaretlerse deger olusur.
+  const [paintParts, setPaintParts] = useState<Record<string, PartStatus>>({});
 
   const [chassisAction, setChassisAction] = useState(false);
   const [heavyDamage, setHeavyDamage] = useState(false);
   const [scratchDent, setScratchDent] = useState(false);
   const [crackedGlass, setCrackedGlass] = useState(false);
+  // Backend'in ZATEN okudugu, ancak formda sorulmadigi icin hicbir zaman
+  // beyan edilemeyen kritik durumlar (yeni DTO alani eklenmedi):
+  //   vehicleStatus.airbagDeployed / engineProblem / transmissionProblem
+  //   paintScheme['Podye']  -> yapisal parca
+  const [airbagDeployed, setAirbagDeployed] = useState(false);
+  const [engineProblem, setEngineProblem] = useState(false);
+  const [transmissionProblem, setTransmissionProblem] = useState(false);
+  const [podyeDamage, setPodyeDamage] = useState(false);
   const [tramerAmount, setTramerAmount] = useState<number | ''>('');
   const [modelSearchQuery, setModelSearchQuery] = useState('');
 
@@ -365,7 +376,11 @@ export default function ValuationWizard() {
       licensePlate: '',
       mileage: undefined as any,
       color: '',
-      damageStatus: 'NO' as const,
+      // ONCEDEN 'NO' idi: kullanici kondisyon bolumune hic dokunmadan
+      // "hatasiz" beyaniyla teklif alabiliyordu. UNKNOWN != CLEAN.
+      // Tip cikarimi degismesin diye literal tip korunur; RUNTIME degeri
+      // bilerek undefined'dir -> kullanici acikca secmeden form gecerli olmaz.
+      damageStatus: undefined as unknown as 'NO',
       kvkkAccepted: false as any,
       sellingTimeline: '',
       userDesiredPrice: undefined as any,
@@ -484,6 +499,33 @@ export default function ValuationWizard() {
     return () => controller.abort();
   }, [selectedVariant, selectedModel, selectedBrand, selectedYear]);
 
+  // Gozlenen kasa tiplerini getir (salt-okunur; fiyat hesabi yapilmaz)
+  useEffect(() => {
+    if (!selectedModel || !selectedBrand || !selectedYear) {
+      setObservedBodies([]);
+      setSelectedObservedBody('');
+      return;
+    }
+    const controller = new AbortController();
+    const variantQuery =
+      selectedVariant && selectedVariant !== 'UNKNOWN' ? `&variantId=${selectedVariant}` : '';
+    fetch(
+      `${API_BASE}/observed-body-types?modelId=${selectedModel}&brandId=${selectedBrand}&year=${selectedYear}${variantQuery}`,
+      { signal: controller.signal },
+    )
+      .then((res) => res.json())
+      .then((data) => {
+        const list = Array.isArray(data) ? data : [];
+        setObservedBodies(list);
+        // Tek gercek kasa varsa otomatik secilir; kaynagi UI'da acikca yazar.
+        setSelectedObservedBody(list.length === 1 ? list[0].value : '');
+      })
+      .catch((err) => {
+        if (err.name !== 'AbortError') console.error(err);
+      });
+    return () => controller.abort();
+  }, [selectedVariant, selectedModel, selectedBrand, selectedYear]);
+
   const resetSubordinateOptions = () => {
     setSelectedVariant('');
     setSelectedPackage('');
@@ -493,6 +535,8 @@ export default function ValuationWizard() {
     setAvailableVariants([]);
     setAvailablePackages([]);
     setAvailableBodies([]);
+    setObservedBodies([]);
+    setSelectedObservedBody('');
     setAvailableFuels([]);
     setAvailableTransmissions([]);
   };
@@ -775,7 +819,77 @@ function SearchableCombobox({
     }
   };
 
+  /**
+   * GERCEK ILAN VERISINDEN gelen secim (katalogda karsiligi yok) "OBS:<deger>"
+   * kimligiyle gelir. Katalog eksikligi yuzunden gercek araclarin (orn. Fiat
+   * Egea) formda kaybolmamasi icin bu secimler canonical degerleriyle
+   * gonderilir; boylece degerleme katalogdan bagimsiz calisir.
+   */
+  const OBS_PREFIX = 'OBS:';
+  const canonicalOf = (id: string, list: any[]): string => {
+    if (!id) return '';
+    if (id.startsWith(OBS_PREFIX)) return id.slice(OBS_PREFIX.length);
+    return list.find((o) => o.id === id)?.name || '';
+  };
+  const isObservedSelection = () =>
+    [selectedModel, selectedVariant, selectedPackage].some((id) => id && id.startsWith(OBS_PREFIX));
+
+  /** Katalogda karsiligi olmayan secim varsa gozlenen hedefi gonder. */
+  const buildObservedTarget = () => {
+    if (!isObservedSelection()) return {};
+    return {
+      observedMake: canonicalOf(selectedBrand, brands) || undefined,
+      observedModel: canonicalOf(selectedModel, models) || undefined,
+      observedEngine: canonicalOf(selectedVariant, availableVariants) || undefined,
+      observedTrim: canonicalOf(selectedPackage, availablePackages) || undefined,
+    };
+  };
+
+  /**
+   * Kullanicinin ACIKCA beyan ettigi bir kondisyon detayi var mi?
+   * (isaretlenmis panel, yapisal/mekanik kutu ya da Tramer tutari)
+   */
+  const hasConditionDetail = () =>
+    Object.values(paintParts).some((v) => v && v !== 'ORIJINAL') ||
+    chassisAction || heavyDamage || podyeDamage || airbagDeployed ||
+    engineProblem || transmissionProblem || scratchDent || crackedGlass ||
+    (tramerAmount !== '' && Number(tramerAmount) > 0);
+
+  /**
+   * Kaporta semasi payload'i:
+   *   NO      -> kullanici ACIKCA "islem yok" dedi; tum paneller ORIJINAL uretilir
+   *   UNKNOWN -> bilgi yok; hicbir panel beyani gonderilmez (UNKNOWN != CLEAN)
+   *   YES     -> YALNIZ kullanicinin isaretledigi paneller gonderilir;
+   *              dokunulmamis panel "orijinal" olarak UYDURULMAZ
+   */
+  const buildPaintSchemePayload = (damageStatus: string): Record<string, PartStatus> => {
+    if (damageStatus === 'NO') {
+      const all: Record<string, PartStatus> = {};
+      BODY_PARTS.forEach((part) => (all[part] = 'ORIJINAL'));
+      return all;
+    }
+    if (damageStatus === 'UNKNOWN') return {};
+    const answered: Record<string, PartStatus> = {};
+    for (const [part, status] of Object.entries(paintParts)) {
+      if (status && status !== 'ORIJINAL') answered[part] = status;
+    }
+    if (podyeDamage) answered['Podye'] = 'DEGISEN';
+    return answered;
+  };
+
   const handleStep2Submit = async (formData: any) => {
+    // Kondisyon beyani: sessizlik "temiz" sayilmaz.
+    if (!formData.damageStatus) {
+      alert('Lütfen aracınızın boya/değişen durumunu belirtiniz. Emin değilseniz "Bilmiyorum" seçebilirsiniz.');
+      document.querySelector('[data-section="condition"]')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+    if (formData.damageStatus === 'YES' && !hasConditionDetail()) {
+      alert('“İşlem var” seçtiniz. Lütfen en az bir panel ya da hasar bilgisini işaretleyin. Detayı bilmiyorsanız hasar durumunu “Bilmiyorum” olarak seçebilirsiniz.');
+      document.querySelector('[data-section="condition"]')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+
     // Stale or missing vehicle selection check
     if (!selectedBrand || !selectedYear || !selectedModel) {
       alert('Seçtiğiniz araç bilgileri güncellendi. Lütfen Motor/Versiyon ve Paket seçimini yeniden yapın.');
@@ -809,13 +923,18 @@ function SearchableCombobox({
           color: formData.color,
           damageStatus: formData.damageStatus,
           tramerAmount: formData.damageStatus === 'YES' ? (tramerAmount ? `${Number(tramerAmount).toLocaleString('tr-TR')} TL` : 'Var') : (formData.damageStatus === 'NO' ? '0 TL' : 'Bilinmiyor'),
-          paintScheme: JSON.stringify(paintParts),
+          paintScheme: JSON.stringify(buildPaintSchemePayload(formData.damageStatus)),
           chassisState: JSON.stringify({ 'Şasi': chassisAction }),
           vehicleStatus: JSON.stringify({
             heavyDamage,
             scratchOrDent: scratchDent,
             crackedGlass,
+            airbagDeployed,
+            engineProblem,
+            transmissionProblem,
           }),
+          observedBodyType: selectedObservedBody || undefined,
+          ...buildObservedTarget(),
           
           // Müşteri bilgileri
           firstName: firstName || sessionStorage.getItem('preEval_firstName') || '',
@@ -1295,31 +1414,41 @@ function SearchableCombobox({
             {/* Kasa Tipi, Yakıt Tipi ve Vites Tipi Seçim Alanı */}
             {selectedVariant && (
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6 pt-1">
-                {/* Kasa Tipi */}
+                {/* Kasa Tipi — seçenekler GERÇEK ilan havuzundan gelir */}
                 <div className="flex flex-col gap-2 p-4 rounded-2xl bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-200 dark:border-zinc-800">
                   <label className="text-xs font-semibold text-zinc-500 dark:text-zinc-400">{t('wiz.body')}</label>
-                  {availableBodies.length === 0 ? (
+                  {observedBodies.length === 0 ? (
                     <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-600 dark:text-amber-400 text-xs font-medium">
-                      Bu araç için kasa tipi bilgisi bulunamadı.
+                      Bu araç için ilan verisinde kasa tipi bilgisi bulunamadı; kasa dikkate alınmadan
+                      değerlendirilecektir.
                     </div>
-                  ) : availableBodies.length === 1 ? (
-                    <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-xs font-bold flex items-center justify-between">
-                      <span>{availableBodies[0].name}</span>
-                      <span className="text-[10px] bg-emerald-500 text-white px-2 py-0.5 rounded-full font-extrabold">Otomatik seçildi</span>
+                  ) : observedBodies.length === 1 ? (
+                    <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-xs font-bold flex items-center justify-between gap-2">
+                      <span>{observedBodies[0].displayLabel}</span>
+                      <span className="text-[10px] bg-emerald-500 text-white px-2 py-0.5 rounded-full font-extrabold whitespace-nowrap">
+                        {observedBodies[0].listingCount} gerçek ilan
+                      </span>
                     </div>
                   ) : (
                     <select
-                      value={selectedBodyType}
-                      onChange={(e) => setSelectedBodyType(e.target.value)}
+                      value={selectedObservedBody}
+                      onChange={(e) => setSelectedObservedBody(e.target.value)}
+                      data-testid="observed-body-select"
                       className="glass-input rounded-xl p-3.5 text-sm w-full font-semibold"
                     >
                       <option value="">{t('wiz.select')}</option>
-                      {availableBodies.map((b) => (
-                        <option key={b.id} value={b.id}>
-                          {b.name}
+                      {observedBodies.map((b) => (
+                        <option key={b.value} value={b.value}>
+                          {b.displayLabel} ({b.listingCount} ilan)
                         </option>
                       ))}
+                      <option value="UNKNOWN">Bilmiyorum</option>
                     </select>
+                  )}
+                  {observedBodies.length > 1 && (
+                    <span className="text-[10px] text-zinc-400 dark:text-zinc-500 font-medium">
+                      Seçenekler bu araç için gerçek ilanlarda görülen kasa tiplerinden alınmıştır.
+                    </span>
                   )}
                 </div>
 
@@ -1571,7 +1700,7 @@ function SearchableCombobox({
                 </div>
 
                 {/* Damage Record */}
-                <div className="flex flex-col gap-2">
+                <div className="flex flex-col gap-2" data-section="condition">
                   <label className="text-xs font-semibold text-zinc-500 dark:text-zinc-400">{t('wiz.damage')}</label>
                   <div className="grid grid-cols-3 gap-3">
                     {[
@@ -1597,6 +1726,11 @@ function SearchableCombobox({
                       </label>
                     ))}
                   </div>
+                  {errors.damageStatus && (
+                    <span data-testid="vehicle-form-error" className="text-[11px] text-red-500 font-medium">
+                      {errors.damageStatus.message as string}
+                    </span>
+                  )}
 
                   {/* Tramer Kaydı "VAR" Seçildiyse TL Tutar Girişi */}
                   {watch('damageStatus') === 'YES' && (
@@ -1712,6 +1846,7 @@ function SearchableCombobox({
                           const resetObj: Record<string, PartStatus> = {};
                           BODY_PARTS.forEach((p) => (resetObj[p] = 'ORIJINAL'));
                           setPaintParts(resetObj);
+                          setPodyeDamage(false);
                         }}
                         className="px-3.5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-bold transition-all shadow-sm flex items-center gap-1.5 cursor-pointer"
                       >
@@ -1806,6 +1941,10 @@ function SearchableCombobox({
                     {[
                       { label: 'Şasi İşlemi / Hasarı Var', state: chassisAction, setState: setChassisAction, icon: '🛡️' },
                       { label: 'Ağır Hasar (Pert) Kaydı', state: heavyDamage, setState: setHeavyDamage, icon: '🚨' },
+                      { label: 'Podye İşlemi / Hasarı Var', state: podyeDamage, setState: setPodyeDamage, icon: '🧱' },
+                      { label: 'Hava Yastığı Açılmış', state: airbagDeployed, setState: setAirbagDeployed, icon: '🎈' },
+                      { label: 'Ciddi Motor Arızası Var', state: engineProblem, setState: setEngineProblem, icon: '⚙️' },
+                      { label: 'Ciddi Şanzıman Arızası Var', state: transmissionProblem, setState: setTransmissionProblem, icon: '🔧' },
                       { label: 'Göçük / Çizik Var', state: scratchDent, setState: setScratchDent, icon: '🔨' },
                       { label: 'Ön Camda Kırık Var', state: crackedGlass, setState: setCrackedGlass, icon: '🔍' },
                     ].map((item, idx) => (

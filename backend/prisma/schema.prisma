@@ -168,8 +168,20 @@ model VehicleMarketPrice {
 
 model VehicleEvaluation {
   id                     String                  @id @default(uuid())
-  vehicleSpecificationId String
-  vehicleSpecification   VehicleSpecification    @relation(fields: [vehicleSpecificationId], references: [id])
+  // Gercek piyasa kaynagi RawVehicleListing'dir. Katalogda (VehicleSpecification)
+  // karsiligi olmayan gercek araclar da (orn. Fiat Egea) degerlenebildigi icin
+  // bu iliski OPSIYONELDIR. Katalog kaydi bulunursa eskisi gibi baglanir.
+  vehicleSpecificationId String?
+  vehicleSpecification   VehicleSpecification?   @relation(fields: [vehicleSpecificationId], references: [id])
+
+  // Arac kimligi anlik goruntusu: katalog kaydi olmasa da degerlemenin HANGI
+  // arac icin yapildigi kaybolmaz (canonical, gercek ilan verisinden gelir).
+  vehicleMake            String?
+  vehicleModel           String?
+  vehicleEngine          String?
+  vehicleTrim            String?
+  vehicleYear            Int?
+  vehicleBodyType        String?
   licensePlate           String
   mileage                Int
   color                  String

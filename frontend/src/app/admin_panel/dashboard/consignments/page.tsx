@@ -276,8 +276,8 @@ export default function ConsignmentsCRM() {
                   <span className="text-[10px] text-zinc-400 dark:text-zinc-500 font-mono mt-0.5">{cons.phone}</span>
                   {cons.vehicleEvaluation && (
                     <span className="text-[10px] text-zinc-500 dark:text-zinc-400 mt-1.5">
-                      Araç: {cons.vehicleEvaluation.vehicleSpecification.manufacturer.name}{' '}
-                      {cons.vehicleEvaluation.vehicleSpecification.model.name} ({cons.vehicleEvaluation.vehicleSpecification.year})
+                      Araç: {cons.vehicleEvaluation.vehicleMake || cons.vehicleEvaluation.vehicleSpecification?.manufacturer?.name || '-'}{' '}
+                      {cons.vehicleEvaluation.vehicleModel || cons.vehicleEvaluation.vehicleSpecification?.model?.name || ''} ({cons.vehicleEvaluation.vehicleYear || cons.vehicleEvaluation.vehicleSpecification?.year || '-'})
                     </span>
                   )}
                 </div>
@@ -348,8 +348,8 @@ export default function ConsignmentsCRM() {
                   <div className="bg-zinc-150/50 dark:bg-white/3 border border-zinc-200 dark:border-white/5 p-4 rounded-xl flex flex-col gap-2">
                     <span className="text-[10px] text-zinc-500 font-bold uppercase tracking-wider">Araç Bilgisi</span>
                     <span className="font-bold text-zinc-800 dark:text-white">
-                      {selectedCons.vehicleEvaluation.vehicleSpecification.manufacturer.name}{' '}
-                      {selectedCons.vehicleEvaluation.vehicleSpecification.model.name} ({selectedCons.vehicleEvaluation.vehicleSpecification.year})
+                      {selectedCons.vehicleEvaluation.vehicleMake || selectedCons.vehicleEvaluation.vehicleSpecification?.manufacturer?.name || '-'}{' '}
+                      {selectedCons.vehicleEvaluation.vehicleModel || selectedCons.vehicleEvaluation.vehicleSpecification?.model?.name || ''} ({selectedCons.vehicleEvaluation.vehicleYear || selectedCons.vehicleEvaluation.vehicleSpecification?.year || '-'})
                     </span>
                     <span className="text-[10px] text-zinc-500">
                       Plaka: <span className="text-zinc-800 dark:text-zinc-300 font-mono font-bold uppercase">{selectedCons.vehicleEvaluation.licensePlate}</span> |{' '}

@@ -1,6 +1,11 @@
 import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import { CacheService } from '../cache.service';
+import {
+  BODY_TYPE_LABELS,
+  CANONICAL_BODY_TYPES,
+  foldTurkish,
+} from '../evaluation/listing-attributes';
 
 @Injectable()
 export class VehicleService {
@@ -39,7 +44,7 @@ export class VehicleService {
       }
     } catch (e) {}
 
-    return this.withRetry(() =>
+    const catalog = await this.withRetry(() =>
       this.prisma.manufacturer.findMany({
         where: validNames.length > 0 ? {
           name: {
@@ -49,11 +54,15 @@ export class VehicleService {
         orderBy: { name: 'asc' },
       }),
     );
+    // Gercek ilani olan ama katalogda bulunmayan markalar kaybolmaz.
+    const observed = await this.getObservedMakes();
+    return this.mergeObserved(catalog, observed);
   }
 
   async getModels(brandId: string, year?: number) {
     const numYear = year ? Number(year) : null;
-    const cacheKey = numYear ? `models:${brandId}:${numYear}` : `models:${brandId}:all`;
+    // Gozlenen (gercek ilan) secenekleriyle birlestigi icin korpus surumu ile damgalanir.
+    const cacheKey = await this.versionedKey(numYear ? `models:${brandId}:${numYear}` : `models:${brandId}:all`);
     const cached = await this.cache.get<any[]>(cacheKey);
     if (cached) return cached;
 
@@ -123,13 +132,23 @@ export class VehicleService {
       );
     });
 
-    await this.cache.set(cacheKey, filtered, 3600);
-    return filtered;
+    // Gercek ilani olan ama katalogda Model kaydi bulunmayan modeller
+    // (orn. 8.494 ilanlik Fiat Egea) musteri formunda kaybolmaz.
+    const brand = await this.prisma.manufacturer.findUnique({
+      where: { id: brandId }, select: { name: true },
+    }).catch(() => null);
+    const makeName = this.decodeObservedId(brandId) || brand?.name;
+    const merged = makeName
+      ? this.mergeObserved(filtered, await this.getObservedModels({ make: makeName }))
+      : filtered;
+
+    await this.cache.set(cacheKey, merged, 3600);
+    return merged;
   }
 
   async getVariants(modelId: string, brandId?: string, year?: number) {
     const numYear = year ? Number(year) : null;
-    const cacheKey = numYear && brandId ? `variants:${brandId}:${numYear}:${modelId}` : `variants:${modelId}`;
+    const cacheKey = await this.versionedKey(numYear && brandId ? `variants:${brandId}:${numYear}:${modelId}` : `variants:${modelId}`);
     const cached = await this.cache.get<any[]>(cacheKey);
     if (cached) return cached;
 
@@ -160,6 +179,13 @@ export class VehicleService {
       );
     }
 
+    // Gercek ilanlarda gorulen motorlar (katalog variant yoksa bile)
+    const names = await this.resolveNames({ brandId, modelId });
+    const observedEngines = names.make && names.model
+      ? await this.getObservedEngines({ make: names.make, model: names.model })
+      : [];
+    variants = this.mergeObserved(variants, observedEngines);
+
     if (variants.length === 0) {
       variants = [{ id: 'UNKNOWN', name: 'UNKNOWN', modelId }];
     }
@@ -170,9 +196,9 @@ export class VehicleService {
 
   async getPackages(variantId: string, modelId?: string, brandId?: string, year?: number) {
     const numYear = year ? Number(year) : null;
-    const cacheKey = numYear && brandId && modelId
+    const cacheKey = await this.versionedKey(numYear && brandId && modelId
       ? `packages:${brandId}:${numYear}:${modelId}:${variantId}`
-      : `packages:${variantId}`;
+      : `packages:${variantId}`);
     const cached = await this.cache.get<any[]>(cacheKey);
     if (cached) return cached;
 
@@ -199,8 +225,431 @@ export class VehicleService {
       );
     }
 
-    await this.cache.set(cacheKey, packages, 3600);
-    return packages;
+    // Gercek ilanlarda gorulen paketler (katalog package yoksa bile)
+    const pkgNames = await this.resolveNames({ brandId, modelId, variantId });
+    const observedTrims = pkgNames.make && pkgNames.model
+      ? await this.getObservedTrims({ make: pkgNames.make, model: pkgNames.model, engine: pkgNames.engine })
+      : [];
+    const mergedPackages = this.mergeObserved(packages, observedTrims);
+
+    await this.cache.set(cacheKey, mergedPackages, 3600);
+    return mergedPackages;
+  }
+
+  /**
+   * MUSTERI ARAC KATALOGU — GERCEK ILAN VERISINDEN (salt-okunur)
+   *
+   * Tek gercek kaynak RawVehicleListing'dir: kullanicinin elle topladigi
+   * Sahibinden sayfalarindan turetilen canonical marka/model/motor/paket/yil/
+   * kasa degerleri. VehicleSpecification yalnizca teknik zenginlestirme
+   * (hp/tork/motor hacmi) icin kullanilir; katalogda kayit olmamasi gercek bir
+   * araci musteri formundan DUSUREMEZ.
+   *
+   * Olculen (bu surumden once): 443 gercek marka/model kombinasyonundan 151'i
+   * (40.634 ilan, %22,7) katalog eksikligi yuzunden secilemiyordu — orn. 8.494
+   * ilanlik Fiat Egea'nin katalogda hic Model kaydi yok.
+   */
+
+  /**
+   * Model adi eslesmesi — SINIR (boundary) duyarli.
+   * "A3" -> "A3 A3 Sportback" / "A3 Hatchback" eslesir (token siniri),
+   * ancak alakasiz bir dizenin ICINDEKI "a3" eslesmez.
+   * NOT: Bu kural yalnizca SECENEK KESFI icindir; emsal eslestiricinin
+   * havuz kurali bilerek DEGISTIRILMEMISTIR (fiyat motoru donduruldu).
+   */
+  private modelMatchesTarget(candidate: string, target: string): boolean {
+    const c = foldTurkish(candidate || '').trim();
+    const t = foldTurkish(target || '').trim();
+    if (!c || !t) return false;
+    if (c === t) return true;
+    if (c.startsWith(t + ' ')) return true;
+    if (c.endsWith(' ' + t)) return true;
+    return c.includes(' ' + t + ' ');
+  }
+
+  /**
+   * Canonical model adini UI etiketine cevirir.
+   *  - tekrar eden token'lari sadelestirir: "A3 A3 Sportback" -> "A3 Sportback"
+   *  - sayfa basligi artiklarini atar: "190 Fiyatlari" -> "190"
+   *
+   * NOT: Kullanicinin kaydettigi bazi DOSYA ADLARI bozuk kodlanmis karakter
+   * icerir ("Fiyatlar─▒"), bu da canonical model adina tasinmistir
+   * (138 model adi / 15.820 ilan, tamami Mercedes-Benz). Etiket bu artiklari
+   * karakter bozulmasindan BAGIMSIZ olarak temizler; eslestirmede kullanilan
+   * canonical `value` degeri ise oldugu gibi korunur.
+   */
+  private displayModelLabel(canonical: string): string {
+    const parts = (canonical || '').trim().split(/\s+/);
+    const kept: string[] = [];
+    for (const raw of parts) {
+      const t = foldTurkish(raw);
+      // basligin "Fiyatlari & Modelleri sahibinden.com'da" artigi
+      if (/^fiyatlar/.test(t) || /^modell?eri$/.test(t) || /^&$/.test(t)) continue;
+      if (/sahibinden/.test(t) || /\.html$/.test(t)) continue;
+      // bozuk kodlanmis (metin olmayan) token
+      if (/^[─-▟�]+$/.test(raw)) continue;
+      if (kept.length && foldTurkish(kept[kept.length - 1]) === t) continue;
+      kept.push(raw);
+    }
+    return (kept.join(' ') || canonical).trim();
+  }
+
+  /**
+   * Gercek ilan verisinden gelen ancak katalogda karsiligi olmayan secenekler
+   * "OBS:<canonical deger>" kimligiyle sunulur. Boylece mevcut sihirbaz akisi
+   * (id tabanli) degismeden gercek araclar secilebilir hale gelir.
+   */
+  private static readonly OBS = 'OBS:';
+
+  /**
+   * KORPUS SURUMU — dinamik veri kaynagi icin onbellek gecerliligi.
+   *
+   * Kullanici yeni marka klasorleri ve HTML dosyalari eklemeye devam ediyor.
+   * Gozlenen katalog uclarinda 1 saatlik TTL onbellek var; yeni bir marka
+   * iceri aktarildiktan sonra musteri listelerinin bir saat boyunca eski
+   * kalmamasi gerekir.
+   *
+   * Cozum: onbellek anahtarlari VERININ KENDISINDEN turetilen bir surumle
+   * damgalanir (kayit sayisi + son satir kimligi). Rebuild tabloyu silip
+   * yeniden kurdugu icin bu deger degisir ve tum gozlenen-katalog anahtarlari
+   * dogal olarak gecersizlesir. Surum degeri kisa sureli (60 sn) onbellege
+   * alinir; boylece her istekte tam tablo sorgusu yapilmaz.
+   *
+   * Basarisiz bir rebuild veritabanini degistirmediginde surum de degismez;
+   * yani "yeni veri varmis gibi" gecersizlestirme olmaz.
+   */
+  private static readonly CORPUS_VERSION_KEY = 'observed:corpusVersion';
+  private static readonly CORPUS_VERSION_TTL = 60;
+
+  async getCorpusVersion(): Promise<string> {
+    const cached = await this.cache.get<string>(VehicleService.CORPUS_VERSION_KEY);
+    if (cached) return cached;
+    let version = 'v0';
+    try {
+      const rows = (await this.prisma.$queryRawUnsafe(
+        'SELECT COUNT(*) AS c, COALESCE(MAX(rowid), 0) AS m FROM RawVehicleListing',
+      )) as any[];
+      version = `${Number(rows?.[0]?.c ?? 0)}-${Number(rows?.[0]?.m ?? 0)}`;
+    } catch {
+      version = 'v0';
+    }
+    await this.cache.set(VehicleService.CORPUS_VERSION_KEY, version, VehicleService.CORPUS_VERSION_TTL);
+    return version;
+  }
+
+  /** Korpus surumu ile damgalanmis onbellek anahtari. */
+  private async versionedKey(suffix: string): Promise<string> {
+    return `observed:${await this.getCorpusVersion()}:${suffix}`;
+  }
+  private decodeObservedId(id?: string): string | undefined {
+    if (!id) return undefined;
+    return id.startsWith(VehicleService.OBS) ? id.slice(VehicleService.OBS.length) : undefined;
+  }
+  private observedId(value: string): string {
+    return VehicleService.OBS + value;
+  }
+
+  /** Katalog listesini gozlenen (gercek ilan) secenekleriyle birlestirir. */
+  private mergeObserved(
+    catalog: any[],
+    observed: Array<{ value: string; displayLabel: string; listingCount: number }>,
+  ) {
+    const seen = new Set(catalog.map((c) => foldTurkish(String(c.name || ''))));
+    const extras = observed
+      .filter((o) => {
+        const label = foldTurkish(o.displayLabel);
+        const value = foldTurkish(o.value);
+        return !seen.has(label) && !seen.has(value);
+      })
+      .map((o) => ({
+        id: this.observedId(o.value),
+        name: o.displayLabel,
+        observed: true,
+        listingCount: o.listingCount,
+      }));
+    return [...catalog, ...extras];
+  }
+
+  private observedWhere(params: { make?: string; year?: number }): any {
+    const where: any = { parseStatus: 'VALID' };
+    if (params.make) {
+      where.OR = [{ rawMake: params.make }, { canonicalMake: params.make }];
+    }
+    if (params.year) {
+      where.year = { gte: params.year - 2, lte: params.year + 2 };
+    }
+    return where;
+  }
+
+  /** Katalog id'lerini canonical isimlere cevirir (id -> ad). */
+  private async resolveNames(params: {
+    brandId?: string; modelId?: string; variantId?: string;
+  }): Promise<{ make?: string; model?: string; engine?: string }> {
+    const obsMake = this.decodeObservedId(params.brandId);
+    const obsModel = this.decodeObservedId(params.modelId);
+    const obsEngine = this.decodeObservedId(params.variantId);
+    if (obsMake || obsModel || obsEngine) {
+      const rest = await this.resolveNames({
+        brandId: obsMake ? undefined : params.brandId,
+        modelId: obsModel ? undefined : params.modelId,
+        variantId: obsEngine ? undefined : params.variantId,
+      });
+      return {
+        make: obsMake || rest.make,
+        model: obsModel || rest.model,
+        engine: obsEngine || rest.engine,
+      };
+    }
+    const [brand, model, variant] = await Promise.all([
+      params.brandId
+        ? this.prisma.manufacturer.findUnique({ where: { id: params.brandId }, select: { name: true } })
+        : Promise.resolve(null),
+      params.modelId
+        ? this.prisma.model.findUnique({ where: { id: params.modelId }, select: { name: true } })
+        : Promise.resolve(null),
+      params.variantId && params.variantId !== 'UNKNOWN'
+        ? this.prisma.variant.findUnique({ where: { id: params.variantId }, select: { name: true } })
+        : Promise.resolve(null),
+    ]);
+    return { make: brand?.name, model: model?.name, engine: variant?.name };
+  }
+
+  /** GERCEK ilanlarda gorulen markalar. */
+  async getObservedMakes() {
+    const cacheKey = await this.versionedKey('makes');
+    const cached = await this.cache.get<any[]>(cacheKey);
+    if (cached) return cached;
+
+    const groups = await this.withRetry(() =>
+      this.prisma.rawVehicleListing.groupBy({
+        by: ['canonicalMake'],
+        where: { parseStatus: 'VALID' },
+        _count: { _all: true },
+      }),
+    );
+    const merged = new Map<string, { value: string; displayLabel: string; listingCount: number }>();
+    for (const g of groups as any[]) {
+      const raw = String(g.canonicalMake || '').trim();
+      if (!raw) continue;
+      const key = foldTurkish(raw);
+      const prev = merged.get(key);
+      if (prev) prev.listingCount += g._count._all;
+      else merged.set(key, { value: raw, displayLabel: raw, listingCount: g._count._all });
+    }
+    const out = [...merged.values()].sort((a, b) => b.listingCount - a.listingCount);
+    await this.cache.set(cacheKey, out, 3600);
+    return out;
+  }
+
+  /** Bir markanin GERCEK ilanlarda gorulen modelleri. */
+  async getObservedModels(params: { make?: string; brandId?: string }) {
+    const make = params.make || (await this.resolveNames({ brandId: params.brandId })).make;
+    if (!make) return [];
+    const cacheKey = await this.versionedKey(`models:${foldTurkish(make)}`);
+    const cached = await this.cache.get<any[]>(cacheKey);
+    if (cached) return cached;
+
+    const groups = await this.withRetry(() =>
+      this.prisma.rawVehicleListing.groupBy({
+        by: ['canonicalModel'],
+        where: this.observedWhere({ make }),
+        _count: { _all: true },
+      }),
+    );
+    const merged = new Map<string, { value: string; displayLabel: string; listingCount: number }>();
+    for (const g of groups as any[]) {
+      const raw = String(g.canonicalModel || '').trim();
+      if (!raw) continue;
+      // Ayni canonical modelin farkli yazimlari tek secenekte toplanir; FARKLI
+      // gercek modeller (A3 Sportback vs A3 Hatchback) BIRLESTIRILMEZ.
+      const key = foldTurkish(this.displayModelLabel(raw));
+      const prev = merged.get(key);
+      if (prev) prev.listingCount += g._count._all;
+      else merged.set(key, { value: raw, displayLabel: this.displayModelLabel(raw), listingCount: g._count._all });
+    }
+    // Ayristirma artigi tasiyan model adlari musteriye SUNULMAZ (sessizce
+    // yanlis model uretmemek icin; katalog listesine uygulanan filtrenin aynisi).
+    const isJunk = (name: string) => {
+      const t = foldTurkish(name);
+      return t.includes('sahibinden') || t.includes('fiyatlar') || t.includes('modelleri') ||
+        t.includes('.html') || /-\s*\d+$/.test(t) ||
+        /[─-▟�]/.test(name) || !/[a-z0-9]/.test(t);
+    };
+    const out = [...merged.values()]
+      .filter((m) => m.listingCount > 0 && !isJunk(m.displayLabel))
+      .sort((a, b) => b.listingCount - a.listingCount || a.displayLabel.localeCompare(b.displayLabel, 'tr'));
+    await this.cache.set(cacheKey, out, 3600);
+    return out;
+  }
+
+  /** make + model icin GERCEK ilanlarda gorulen motor kodlari. */
+  async getObservedEngines(params: { make?: string; brandId?: string; model?: string; modelId?: string }) {
+    const names = await this.resolveNames({ brandId: params.brandId, modelId: params.modelId });
+    const make = params.make || names.make;
+    const model = params.model || names.model;
+    if (!make || !model) return [];
+    const cacheKey = await this.versionedKey(`engines:${foldTurkish(make)}:${foldTurkish(model)}`);
+    const cached = await this.cache.get<any[]>(cacheKey);
+    if (cached) return cached;
+
+    const groups = await this.withRetry(() =>
+      this.prisma.rawVehicleListing.groupBy({
+        by: ['canonicalModel', 'canonicalVariant'],
+        where: this.observedWhere({ make }),
+        _count: { _all: true },
+      }),
+    );
+    const merged = new Map<string, { value: string; displayLabel: string; listingCount: number }>();
+    for (const g of groups as any[]) {
+      if (!this.modelMatchesTarget(g.canonicalModel, model)) continue;
+      const raw = String(g.canonicalVariant || '').trim();
+      if (!raw) continue;
+      const key = foldTurkish(raw);
+      const prev = merged.get(key);
+      if (prev) prev.listingCount += g._count._all;
+      else merged.set(key, { value: raw, displayLabel: raw, listingCount: g._count._all });
+    }
+    const out = [...merged.values()].sort((a, b) => b.listingCount - a.listingCount);
+    await this.cache.set(cacheKey, out, 3600);
+    return out;
+  }
+
+  /** make + model + motor icin GERCEK ilanlarda gorulen paketler. */
+  async getObservedTrims(params: {
+    make?: string; brandId?: string; model?: string; modelId?: string; engine?: string; variantId?: string;
+  }) {
+    const names = await this.resolveNames({ brandId: params.brandId, modelId: params.modelId, variantId: params.variantId });
+    const make = params.make || names.make;
+    const model = params.model || names.model;
+    const engine = params.engine || names.engine;
+    if (!make || !model) return [];
+    const cacheKey = await this.versionedKey(`trims:${foldTurkish(make)}:${foldTurkish(model)}:${foldTurkish(engine || '')}`);
+    const cached = await this.cache.get<any[]>(cacheKey);
+    if (cached) return cached;
+
+    const groups = await this.withRetry(() =>
+      this.prisma.rawVehicleListing.groupBy({
+        by: ['canonicalModel', 'canonicalVariant', 'canonicalTrim'],
+        where: this.observedWhere({ make }),
+        _count: { _all: true },
+      }),
+    );
+    const merged = new Map<string, { value: string; displayLabel: string; listingCount: number }>();
+    let engineHit = false;
+    for (const g of groups as any[]) {
+      if (!this.modelMatchesTarget(g.canonicalModel, model)) continue;
+      if (engine && foldTurkish(g.canonicalVariant || '') !== foldTurkish(engine)) continue;
+      engineHit = true;
+      const raw = String(g.canonicalTrim || '').trim();
+      if (!raw) continue;
+      const key = foldTurkish(raw);
+      const prev = merged.get(key);
+      if (prev) prev.listingCount += g._count._all;
+      else merged.set(key, { value: raw, displayLabel: raw, listingCount: g._count._all });
+    }
+    // Motor kirilimi hic satir vermediyse model duzeyine dus (motor kodu
+    // ilanlarin bir kisminda bostur; secenekler kaybolmasin).
+    if (!engineHit && engine) {
+      for (const g of groups as any[]) {
+        if (!this.modelMatchesTarget(g.canonicalModel, model)) continue;
+        const raw = String(g.canonicalTrim || '').trim();
+        if (!raw) continue;
+        const key = foldTurkish(raw);
+        const prev = merged.get(key);
+        if (prev) prev.listingCount += g._count._all;
+        else merged.set(key, { value: raw, displayLabel: raw, listingCount: g._count._all });
+      }
+    }
+    const out = [...merged.values()].sort((a, b) => b.listingCount - a.listingCount).slice(0, 60);
+    await this.cache.set(cacheKey, out, 3600);
+    return out;
+  }
+
+  /** make + model (+motor) icin GERCEK ilanlarda gorulen model yillari. */
+  async getObservedYears(params: {
+    make?: string; brandId?: string; model?: string; modelId?: string; engine?: string; variantId?: string;
+  }) {
+    const names = await this.resolveNames({ brandId: params.brandId, modelId: params.modelId, variantId: params.variantId });
+    const make = params.make || names.make;
+    const model = params.model || names.model;
+    const engine = params.engine || names.engine;
+    if (!make || !model) return [];
+
+    const groups = await this.withRetry(() =>
+      this.prisma.rawVehicleListing.groupBy({
+        by: ['canonicalModel', 'canonicalVariant', 'year'],
+        where: this.observedWhere({ make }),
+        _count: { _all: true },
+      }),
+    );
+    const merged = new Map<number, number>();
+    for (const g of groups as any[]) {
+      if (!this.modelMatchesTarget(g.canonicalModel, model)) continue;
+      if (engine && foldTurkish(g.canonicalVariant || '') !== foldTurkish(engine)) continue;
+      merged.set(g.year, (merged.get(g.year) || 0) + g._count._all);
+    }
+    return [...merged.entries()]
+      .map(([value, listingCount]) => ({ value, displayLabel: String(value), listingCount }))
+      .sort((a, b) => b.value - a.value);
+  }
+
+  /**
+   * GOZLENEN kasa tipleri (salt-okunur).
+   *
+   * Katalogtaki VehicleSpecification.bodyType, ilan metninden turetilen
+   * canonicalBodyType sozlugu ile ortusmez: BMW 4 Serisi katalogta
+   * "Hatchback"/"Coupe" olarak durur ama gercek ilanlarda GRAN_COUPE / COUPE /
+   * CABRIO gorunur; Audi A3/A5 katalogta "Hatchback", ilanlarda SPORTBACK'tir.
+   * Bazi modellerde (orn. BMW 4 Serisi Cabrio) katalogta karsilik hic yoktur.
+   */
+  async getObservedBodyTypes(params: {
+    brandId?: string; modelId?: string; variantId?: string; year?: number;
+    make?: string; model?: string; engine?: string;
+  }) {
+    const names = await this.resolveNames({ brandId: params.brandId, modelId: params.modelId, variantId: params.variantId });
+    const make = params.make || names.make;
+    const model = params.model || names.model;
+    const engine = params.engine || names.engine;
+    if (!model) return [];
+
+    const numYear = params.year ? Number(params.year) : null;
+    const year = numYear && Number.isFinite(numYear) ? numYear : undefined;
+    const cacheKey = await this.versionedKey(`bodies:${foldTurkish(make || '')}:${foldTurkish(model)}:${foldTurkish(engine || '')}:${year || '-'}`);
+    const cached = await this.cache.get<any[]>(cacheKey);
+    if (cached) return cached;
+
+    const groups = await this.withRetry(() =>
+      this.prisma.rawVehicleListing.groupBy({
+        by: ['canonicalModel', 'canonicalVariant', 'canonicalBodyType'],
+        where: { ...this.observedWhere({ make, year }), canonicalBodyType: { not: '' } },
+        _count: { _all: true },
+      }),
+    );
+
+    const count = (useEngine: boolean) => {
+      const m = new Map<string, number>();
+      for (const g of groups as any[]) {
+        if (!this.modelMatchesTarget(g.canonicalModel, model)) continue;
+        if (useEngine && engine && foldTurkish(g.canonicalVariant || '') !== foldTurkish(engine)) continue;
+        const body = String(g.canonicalBodyType || '').trim();
+        if (!(CANONICAL_BODY_TYPES as string[]).includes(body)) continue;
+        m.set(body, (m.get(body) || 0) + g._count._all);
+      }
+      return m;
+    };
+    let counts = count(true);
+    if (counts.size === 0 && engine) counts = count(false);
+
+    const options = [...counts.entries()]
+      .map(([value, listingCount]) => ({
+        value,
+        displayLabel: BODY_TYPE_LABELS[value as keyof typeof BODY_TYPE_LABELS],
+        listingCount,
+      }))
+      .sort((a, b) => b.listingCount - a.listingCount);
+
+    await this.cache.set(cacheKey, options, 3600);
+    return options;
   }
 
   async getYears() {

@@ -72,7 +72,36 @@ export interface EmsalMatchResult {
   transmissionKnownShare?: number;
   /** Emsal listesinin gercek ilan ID sayisi (mukerrer elendikten sonra) */
   uniqueListingIds?: string[];
+  /**
+   * Hedefin kasasi BILINMIYOR ve havuzdaki kasalar fiyat olarak anlamli
+   * ayrisiyor -> otomatik fiyat guvenilir degil (otomasyon guvenlik sinyali).
+   */
+  bodyAmbiguityRisk?: boolean;
+  /** Havuzdaki kasa dagilimi ve medyanlari (audit) */
+  bodyDistribution?: Array<{ body: string; count: number; median: number }>;
+  /** En yuksek/en dusuk kasa medyani arasindaki oransal fark */
+  bodySpread?: number;
 }
+
+/**
+ * OTOMASYON GUVENLIK ESIKLERI (fiyat orani DEGILDIR).
+ *
+ * Olculen gercek dagilim (178.931 ilan, kasasi bilinen 12.095):
+ *   cok-kasali aile (her kasa n>=5): 21
+ *   medyan farki >%5: 16 · >%8: 14 · >%10: 11 · >%15: 10 · >%20: 6 · >%30: 4
+ *   tek kasali (guvenli) aile: 157 / 252
+ *
+ * Esik %10: dogrulanmis AUTO sonuclarda galerinin toplam marji
+ * (expectedSale - cash) medyan ~%7'dir. Kasa belirsizliginin tek basina
+ * piyasa medyanini bundan fazla kaydirdigi ailelerde otomatik teklif,
+ * marjin tamamini asan bir hata tasiyabilir. Bu yuzden kasa BILINMIYORSA
+ * ve ayrisma %10'u asiyorsa fiyat manuel degerlendirmeye gider.
+ * Tek kasali ya da ayrismasi onemsiz araclar ETKILENMEZ.
+ */
+export const BODY_AMBIGUITY = {
+  minSupportPerBody: 5,
+  spreadThreshold: 0.10,
+};
 
 interface RawCandidate {
   sourceListingId: string;
@@ -642,9 +671,41 @@ export class EmsalMatcherService {
     if (freshnessScore < 0.5) confidenceScore -= 4;
     confidenceScore = Math.max(0, Math.min(99, confidenceScore));
 
+    // --- KASA BELIRSIZLIGI (otomasyon guvenligi) ---
+    // Hedefin kasasi BILINMIYORSA havuz karisik olabilir. Cabrio/Coupe gibi
+    // gruplar yuz binlerce TL ayrisabildigi icin, ayrisma olculur ve gerekirse
+    // otomatik fiyat verilmez. Kasa BILINIYORSA (CASE A/B) bu kontrol calismaz.
+    const bodyGroups = new Map<string, number[]>();
+    for (const l of listings) {
+      const b = (l.bodyType || '').trim();
+      if (!b) continue;
+      if (!bodyGroups.has(b)) bodyGroups.set(b, []);
+      bodyGroups.get(b)!.push(l.normalizedPrice ?? l.price);
+    }
+    const med = (arr: number[]) => {
+      const a = [...arr].sort((x, y) => x - y);
+      const m = Math.floor(a.length / 2);
+      return a.length % 2 ? a[m] : Math.round((a[m - 1] + a[m]) / 2);
+    };
+    const bodyDistribution = [...bodyGroups.entries()]
+      .map(([body, prices]) => ({ body, count: prices.length, median: med(prices) }))
+      .sort((a, b) => b.count - a.count);
+    const supported = bodyDistribution.filter((b) => b.count >= BODY_AMBIGUITY.minSupportPerBody);
+    let bodySpread = 0;
+    if (supported.length >= 2) {
+      const meds = supported.map((b) => b.median).filter((m) => m > 0);
+      const hi = Math.max(...meds), lo = Math.min(...meds);
+      if (lo > 0) bodySpread = (hi - lo) / lo;
+    }
+    const bodyAmbiguityRisk =
+      !paramBody && supported.length >= 2 && bodySpread > BODY_AMBIGUITY.spreadThreshold;
+
     return {
       level,
       matchedCount: n,
+      bodyAmbiguityRisk,
+      bodyDistribution,
+      bodySpread,
       cleanListings: listings,
       confidenceScore,
       isLimitedComps,

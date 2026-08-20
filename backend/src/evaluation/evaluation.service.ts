@@ -22,9 +22,19 @@ export class EvaluationService {
     }
 
     // Save Evaluation to DB
+    // vehicleSpecificationId OPSIYONELDIR: katalogda karsiligi olmayan gercek
+    // araclar (orn. Fiat Egea) da kaydedilir. Arac kimligi her durumda
+    // anlik goruntu alanlarinda saklanir, boylece katalog kaydi olmadan da
+    // degerlemenin hangi arac icin yapildigi kaybolmaz.
     const evaluation = await this.prisma.vehicleEvaluation.create({
       data: {
-        vehicleSpecificationId: res.results!.vehicleSpecificationId,
+        vehicleSpecificationId: res.results!.vehicleSpecificationId ?? null,
+        vehicleMake: res.vehicle!.brand || null,
+        vehicleModel: res.vehicle!.model || null,
+        vehicleEngine: res.vehicle!.variant || null,
+        vehicleTrim: res.vehicle!.package || null,
+        vehicleYear: res.vehicle!.year ?? null,
+        vehicleBodyType: res.vehicle!.bodyType || null,
         licensePlate: dto.licensePlate,
         mileage: dto.mileage,
         color: dto.color,
@@ -72,6 +82,7 @@ export class EvaluationService {
     return {
       status: 'SUCCESS',
       evaluationId: evaluation.id,
+      persisted: true,
       vehicle: res.vehicle,
       results: res.results,
       aiAnalysis: res.aiAnalysis,
@@ -107,11 +118,14 @@ export class EvaluationService {
   private computePricing(
     emsalResult: any,
     dto: CreateEvaluationDto,
-    spec: any,
+    targetVariant: string,
     damagePenalty: number,
     wP5: number, wP35: number, wP50: number, wP60: number, wP95: number,
   ): any {
-    const targetEngineKnown = Boolean(splitVariantString(spec.variant?.name || '').engineCode);
+    // Hedefin motoru KATALOGDAN degil, degerlemenin gercek hedefinden okunur:
+    // katalogda kaydi olmayan gercek araclarda (orn. Fiat Egea) motor kodu
+    // biliniyor olmasina ragmen guven skoru gereksiz yere tavanlaniyordu.
+    const targetEngineKnown = Boolean(splitVariantString(String(targetVariant || '')).engineCode);
     if (emsalResult.cleanListings && emsalResult.cleanListings.length > 0) {
       return RobustPricingCalculator.computeValuation({
         cleanListings: emsalResult.cleanListings,
@@ -162,10 +176,49 @@ export class EvaluationService {
   }
 
   private async calculateValuationCore(dto: CreateEvaluationDto) {
+    /**
+     * GERCEK KAYNAK: RawVehicleListing.
+     * Musteri, gercek ilan verisinden turetilen (gozlenen) marka/model/motor/
+     * paket degerlerini secmisse degerleme KATALOGDAN BAGIMSIZ yurur.
+     * VehicleSpecification yalnizca teknik zenginlestirme icin aranir;
+     * bulunamamasi degerlemeyi ENGELLEMEZ.
+     * (Olculen: 443 gercek marka/model kombinasyonundan 151'i -- 40.634 ilan,
+     *  %22,7 -- katalog eksikligi yuzunden secilemiyordu; orn. Fiat Egea.)
+     */
+    // Gozlenen secenekler istemciye "OBS:<canonical deger>" kimligiyle sunulur.
+    // Istemci ayrica observed* alanlarini gondermese bile bu kimlikler burada
+    // cozulur; aksi halde hedef sessizce rastgele bir katalog kaydina duserdi.
+    const OBS = 'OBS:';
+    const decodeObs = (id?: string) =>
+      id && id.startsWith(OBS) ? id.slice(OBS.length).trim() : '';
+    const observed = {
+      make: (dto.observedMake || '').trim(),
+      model: (dto.observedModel || decodeObs(dto.modelId) || '').trim(),
+      engine: (dto.observedEngine || decodeObs(dto.variantId) || '').trim(),
+      trim: (dto.observedTrim || decodeObs(dto.packageId) || '').trim(),
+    };
+    if (!observed.make && (observed.model || observed.engine)) {
+      const brand = await this.prisma.manufacturer.findUnique({
+        where: { id: dto.manufacturerId }, select: { name: true },
+      }).catch(() => null);
+      observed.make = decodeObs(dto.manufacturerId) || brand?.name || '';
+    }
+    // Model katalogdan, motor gozlenen listeden gelmis olabilir: model adini
+    // katalogdan tamamla ki hedef eksik kalmasin.
+    if (!observed.model && observed.engine && dto.modelId) {
+      const md = await this.prisma.model.findUnique({
+        where: { id: dto.modelId }, select: { name: true },
+      }).catch(() => null);
+      observed.model = md?.name || '';
+    }
+    const hasObservedTarget = Boolean(observed.make && observed.model);
+
     // 1. Relational Validation: Verify modelId actually belongs to manufacturerId
-    const targetModel = await this.prisma.model.findFirst({
-      where: { id: dto.modelId, manufacturerId: dto.manufacturerId },
-    });
+    const targetModel = hasObservedTarget
+      ? true
+      : await this.prisma.model.findFirst({
+          where: { id: dto.modelId, manufacturerId: dto.manufacturerId },
+        });
 
     if (!targetModel) {
       return {
@@ -229,7 +282,7 @@ export class EvaluationService {
       });
     }
 
-    if (!spec) {
+    if (!spec && !hasObservedTarget) {
       return {
         status: 'INSUFFICIENT_DATA',
         confidenceScore: 0,
@@ -241,19 +294,38 @@ export class EvaluationService {
       };
     }
 
+    // Degerlemenin hedefi: once musterinin GOZLENEN secimi, yoksa katalog.
+    const target = {
+      make: observed.make || spec?.manufacturer?.name || '',
+      model: observed.model || spec?.model?.name || '',
+      variant: observed.engine || spec?.variant?.name || '',
+      trim: observed.trim || spec?.package?.name || '',
+      bodyType:
+        dto.observedBodyType === 'UNKNOWN'
+          ? undefined
+          : dto.observedBodyType || spec?.bodyType?.name,
+      fuelType: spec?.fuelType?.name,
+      transmission: spec?.transmissionType?.name,
+    };
+
     const aiAnalysis: string[] = [];
 
     // Match Comparable Listings
     const emsalResult = await this.emsalMatcherService.matchComparableListings({
-      make: spec.manufacturer.name,
-      model: spec.model.name,
-      variant: spec.variant?.name,
-      trim: spec.package?.name,
+      make: target.make,
+      model: target.model,
+      variant: target.variant || undefined,
+      trim: target.trim || undefined,
       year: dto.year,
       mileageKm: dto.mileage,
-      bodyType: spec.bodyType?.name,
-      fuelType: spec.fuelType?.name,
-      transmission: spec.transmissionType?.name,
+      // Kasa tipi onceligi:
+      //  1) Musterinin GOZLENEN secenekler arasindan yaptigi secim (kanit),
+      //  2) 'UNKNOWN' secildiyse kasa bilgisi YOKTUR (katalog degerine dusulmez),
+      //  3) secim yoksa katalog spec degeri (eslesme motoru, havuzda hic
+      //     gorulmeyen katalog etiketlerini zaten kanit saymaz).
+      bodyType: target.bodyType,
+      fuelType: target.fuelType,
+      transmission: target.transmission,
       isCleanCondition: dto.damageStatus === 'NO',
     });
 
@@ -263,14 +335,14 @@ export class EvaluationService {
         confidenceScore: 0,
         message: 'Yeterli piyasa verisi bulunamadı',
         vehicle: {
-          year: spec.year,
-          brand: spec.manufacturer.name,
-          model: spec.model.name,
-          variant: spec.variant?.name || '',
-          package: spec.package?.name || '',
-          bodyType: spec.bodyType?.name || '',
-          fuelType: spec.fuelType?.name || '',
-          transmission: spec.transmissionType?.name || '',
+          year: dto.year,
+          brand: target.make,
+          model: target.model,
+          variant: target.variant || '',
+          package: target.trim || '',
+          bodyType: target.bodyType || '',
+          fuelType: target.fuelType || '',
+          transmission: target.transmission || '',
         },
         results: null,
         aiAnalysis: ['UYARI: Girdiğiniz araç için veritabanımızda yeterli emsal ilan verisi bulunamamıştır.'],
@@ -295,7 +367,7 @@ export class EvaluationService {
     // duzeltmesi bu degerin uzerine uygulanir. Kondisyon cezasi ile galeri kari
     // birbirinden ayri kalir.
     const priceWith = (damagePenalty: number) => this.computePricing(
-      emsalResult, dto, spec, damagePenalty, wP5, wP35, wP50, wP60, wP95,
+      emsalResult, dto, target.variant, damagePenalty, wP5, wP35, wP50, wP60, wP95,
     );
 
     const cleanEquivalent = priceWith(0);
@@ -335,14 +407,14 @@ export class EvaluationService {
         confidenceScore: 0,
         message: 'Veri bütünlüğü hatası: Düzeltilmiş P35 değeri tahmini piyasa değerini aşamaz.',
         vehicle: {
-          year: spec.year,
-          brand: spec.manufacturer.name,
-          model: spec.model.name,
-          variant: spec.variant?.name || '',
-          package: spec.package?.name || '',
-          bodyType: spec.bodyType?.name || '',
-          fuelType: spec.fuelType?.name || '',
-          transmission: spec.transmissionType?.name || '',
+          year: dto.year,
+          brand: target.make,
+          model: target.model,
+          variant: target.variant || '',
+          package: target.trim || '',
+          bodyType: target.bodyType || '',
+          fuelType: target.fuelType || '',
+          transmission: target.transmission || '',
         },
         results: null,
         aiAnalysis: ['HATA: Veri bütünlüğü doğrulanamadı.'],
@@ -357,8 +429,19 @@ export class EvaluationService {
     // Yapisal/agir hasar veya mekanik ariza beyani -> otomatik fiyat verilmez.
     const hasHeavyDamage = damagePenalty >= 0.15 || condition.requiresManualReview;
 
+    // Kasa BILINMIYOR + havuzdaki kasalar fiyat olarak anlamli ayrisiyor
+    // -> otomatik teklif guvenilir degil (bkz. BODY_AMBIGUITY).
+    const hasBodyAmbiguity = Boolean(emsalResult.bodyAmbiguityRisk);
+    if (hasBodyAmbiguity) {
+      aiAnalysis.push(
+        'Aracınızın kasa tipi belirtilmediği için emsal havuzunda farklı kasa tipleri bir arada bulunuyor ' +
+        've bu tipler arasında belirgin fiyat farkı var. Doğru fiyat için aracınız uzmanımızca değerlendirilecektir.',
+      );
+    }
+
     const requiresManual =
       hasPercentileError ||
+      hasBodyAmbiguity ||
       isLevel3 ||
       hasLimitedComps ||
       hasHeavyDamage ||
@@ -399,20 +482,21 @@ export class EvaluationService {
       confidenceScore: calc.confidenceScore,
       message: requiresManual ? 'Düşük segment veya yüksek riskli araçlarda manuel değerlendirme gereklidir' : 'Başarılı',
       vehicle: {
-        year: spec.year,
-        brand: spec.manufacturer.name,
-        model: spec.model.name,
-        variant: spec.variant?.name || '',
-        package: spec.package?.name || '',
-        bodyType: spec.bodyType?.name || '',
-        fuelType: spec.fuelType?.name || '',
-        transmission: spec.transmissionType?.name || '',
-        engineSize: spec.variant?.engineSize || null,
-        horsepower: spec.variant?.horsepower || null,
-        originalMSRP: spec.originalMSRP,
+        year: dto.year,
+        brand: target.make,
+        model: target.model,
+        variant: target.variant || '',
+        package: target.trim || '',
+        bodyType: target.bodyType || '',
+        fuelType: target.fuelType || '',
+        transmission: target.transmission || '',
+        // Teknik zenginlestirme: katalog kaydi varsa doldurulur, yoksa UNKNOWN.
+        engineSize: spec?.variant?.engineSize || null,
+        horsepower: spec?.variant?.horsepower || null,
+        originalMSRP: spec?.originalMSRP ?? null,
       },
       results: {
-        vehicleSpecificationId: spec.id,
+        vehicleSpecificationId: spec?.id ?? null,
         adjustedP35: calc.adjustedP35,
         fairMarketValue: calc.fairMarketValue,
         recommendedPublicListingPrice: calc.recommendedPublicListingPrice,
@@ -550,17 +634,20 @@ export class EvaluationService {
       throw new NotFoundException('Değerleme bulunamadı.');
     }
 
+    // Arac kimligi: once kayit anindaki anlik goruntu, yoksa katalog iliskisi.
+    // Katalogda karsiligi olmayan gercek araclarda spec NULL olabilir.
+    const spec = item.vehicleSpecification;
     return {
       evaluationId: item.id,
       vehicle: {
-        year: item.vehicleSpecification.year,
-        brand: item.vehicleSpecification.manufacturer.name,
-        model: item.vehicleSpecification.model.name,
-        variant: item.vehicleSpecification.variant.name,
-        package: item.vehicleSpecification.package?.name || '',
-        bodyType: item.vehicleSpecification.bodyType.name,
-        fuelType: item.vehicleSpecification.fuelType.name,
-        transmission: item.vehicleSpecification.transmissionType.name,
+        year: item.vehicleYear ?? spec?.year ?? null,
+        brand: item.vehicleMake || spec?.manufacturer?.name || '',
+        model: item.vehicleModel || spec?.model?.name || '',
+        variant: item.vehicleEngine || spec?.variant?.name || '',
+        package: item.vehicleTrim || spec?.package?.name || '',
+        bodyType: item.vehicleBodyType || spec?.bodyType?.name || '',
+        fuelType: spec?.fuelType?.name || '',
+        transmission: spec?.transmissionType?.name || '',
       },
       results: {
         estimatedValue: item.estimatedValue,

@@ -215,8 +215,8 @@ export default function DashboardOverview() {
                       {cons.vehicleEvaluation && (
                         <span className="text-[10px] text-zinc-500 dark:text-zinc-450 mt-1">
                           Araç:{' '}
-                          {cons.vehicleEvaluation.vehicleSpecification.manufacturer.name}{' '}
-                          {cons.vehicleEvaluation.vehicleSpecification.model.name}
+                          {cons.vehicleEvaluation.vehicleMake || cons.vehicleEvaluation.vehicleSpecification?.manufacturer?.name || '-'}{' '}
+                          {cons.vehicleEvaluation.vehicleModel || cons.vehicleEvaluation.vehicleSpecification?.model?.name || ''}
                         </span>
                       )}
                     </div>
@@ -268,8 +268,8 @@ export default function DashboardOverview() {
                         {evalItem.licensePlate}
                       </span>
                       <span className="text-[10px] text-zinc-500">
-                        {evalItem.vehicleSpecification.manufacturer.name}{' '}
-                        {evalItem.vehicleSpecification.model.name} ({evalItem.vehicleSpecification.year})
+                        {evalItem.vehicleMake || evalItem.vehicleSpecification?.manufacturer?.name || '-'}{' '}
+                        {evalItem.vehicleModel || evalItem.vehicleSpecification?.model?.name || ''} ({evalItem.vehicleYear || evalItem.vehicleSpecification?.year || '-'})
                       </span>
                       <span className="text-[9px] text-zinc-400 dark:text-zinc-500 mt-1">
                         {evalItem.mileage.toLocaleString('tr-TR')} km | {evalItem.color} | Hasar:{' '}
