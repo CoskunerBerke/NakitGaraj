@@ -42,8 +42,13 @@ export function foldTurkish(s: string): string {
 const TITLE_JUNK: RegExp[] = [
   /\s*-\s*\d+\s*$/g,
   /2\s*\.?\s*el\s+arabalar\s+ve\s+satilik\s+sifir\s+km\s+otomobil/g,
+  // Bazi dosya adlari bozuk kodlanmis karakter tasir ("Fiyatlar─▒").
+  // Bu yuzden "fiyatlar" kokunden sonraki bosluksuz artiklar da atilir;
+  // gercek model/motor tokenlari ("A 200", "C 200 d") ETKILENMEZ.
+  /fiyatlar\S*\s*&?\s*modell?eri/g,
   /fiyatlari\s*&?\s*modelleri/g,
   /fiyatlari\s*&?\s*modleri/g,
+  /(^|\s)fiyatlar\S*/g,
   /sahibinden\s*\.?\s*com\s*'?\s*da/g,
   /sahibinden\s*\.?\s*com/g,
   /\bfiyatlari\b/g,
@@ -83,7 +88,15 @@ export function cleanPageTitle(raw: string): string {
     }
   }
 
-  return workOrig.replace(/&/g, ' ').replace(/\s+/g, ' ').trim();
+  // Metin olmayan artik karakterler (kod cozme bozulmasi) atilir.
+  const cleaned = Array.from(workOrig)
+    .map((ch) => {
+      const code = ch.codePointAt(0) ?? 0;
+      const isArtifact = (code >= 0x2500 && code <= 0x259f) || code === 0xfffd;
+      return isArtifact ? ' ' : ch;
+    })
+    .join('');
+  return cleaned.replace(/&/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
 const MAKE_ALIASES: Array<[RegExp, string]> = [
@@ -117,15 +130,24 @@ const KNOWN_MAKES = [
  * Temizlenmis sayfa basliginin basindaki marka adini bulur.
  * Kullanici bir sayfayi yanlis marka klasorune kaydettiginde (orn. Honda
  * klasorunde "Hyundai Accent Era" sayfasi) dogru markayi geri kazandirir.
+ *
+ * KNOWN_MAKES statik bir liste DEGILDIR: cagiran taraf (importer) kaynak
+ * dizinde KESFEDILEN klasor adlarini `extraMakes` ile gecer. Boylece kullanici
+ * yarin yeni bir marka klasoru ekledigininde, o marka icin de yanlis-klasor
+ * duzeltmesi KOD DEGISIKLIGI OLMADAN calisir. Listede olmayan bir marka
+ * icin davranis zaten guvenlidir: klasor adina geri dusulur.
  */
-export function makeFromTitle(cleanTitle: string): string {
+export function makeFromTitle(cleanTitle: string, extraMakes: string[] = []): string {
   const folded = foldTurkish(cleanTitle || '').trim();
   if (!folded) return '';
   let best = '';
-  for (const m of KNOWN_MAKES) {
-    const fm = foldTurkish(m);
+  const candidates = extraMakes.length ? [...KNOWN_MAKES, ...extraMakes] : KNOWN_MAKES;
+  for (const m of candidates) {
+    const name = String(m || '').trim();
+    if (!name) continue;
+    const fm = foldTurkish(name);
     if (folded === fm || folded.startsWith(fm + ' ')) {
-      if (fm.length > foldTurkish(best).length) best = m;
+      if (fm.length > foldTurkish(best).length) best = name;
     }
   }
   return best;
@@ -508,18 +530,55 @@ export function deriveFromSource(params: {
   pageTitleOrFileName: string;
   listingTagTrim?: string | null;
   listingTitle?: string | null;
+  /**
+   * Ilan satirinin KENDI model hucresi.
+   * Sahibinden'in MARKA duzeyindeki arama sayfalarinda satir iki adet
+   * td.searchResultsTagAttributeValue tasir: [model, motor+paket]
+   * (orn. ["Giulietta", "1.4 TB MultiAir Distinctive"]).
+   * Model duzeyindeki sayfalarda ise tek hucre vardir ve model sayfa
+   * basligindan gelir. Marka duzeyindeki sayfalarda baslik model icermedigi
+   * icin bu hucre olmadan tum sayfa karantinaya dusuyordu.
+   */
+  listingRowModel?: string | null;
+  /**
+   * Kaynak dizinde KESFEDILEN marka klasor adlari. Statik listede olmayan
+   * yeni markalarda da "yanlis klasore kaydedilmis sayfa" duzeltmesini
+   * calistirir; verilmezse davranis degismez.
+   */
+  knownMakes?: string[];
 }): DerivedListingAttributes {
   const folderMake = normalizeMake(params.folderMake);
   const clean = cleanPageTitle(params.pageTitleOrFileName);
 
   // Sayfa basligindaki marka, klasor adindan onceliklidir: yanlis klasore
   // kaydedilmis sayfalar baska bir markanin fiyat havuzunu kirletemez.
-  const titleMake = makeFromTitle(clean);
+  const titleMake = makeFromTitle(clean, params.knownMakes || []);
   const make = titleMake || folderMake;
 
-  const { model, engineCode, trim: fileTrim } = splitModelEngineTrim(clean, make);
+  let { model, engineCode, trim: fileTrim } = splitModelEngineTrim(clean, make);
 
-  const tagTrim = (params.listingTagTrim || '').trim();
+  // Sayfa basligi model vermiyorsa (marka duzeyi sayfa), satirin kendi model
+  // hucresi kullanilir. Bu bir TAHMIN degil, sayfanin yapisal alanidir:
+  // marka duzeyi sayfalarda satirin ILK td.searchResultsTagAttributeValue
+  // hucresi modeldir (varsa ikincisi motor+paket).
+  let modelFromRow = '';
+  if (!model) {
+    const rowModel = cleanPageTitle(String(params.listingRowModel || ''));
+    if (rowModel) {
+      const fromRow = splitModelEngineTrim(`${make} ${rowModel}`, make);
+      if (fromRow.model) {
+        model = fromRow.model;
+        modelFromRow = rowModel;
+        engineCode = engineCode || fromRow.engineCode;
+        fileTrim = fileTrim || fromRow.trim;
+      }
+    }
+  }
+
+  let tagTrim = (params.listingTagTrim || '').trim();
+  // Baslik model vermedigi icin model satirdan alindiysa, ayni hucre paket
+  // olarak TEKRAR kullanilmaz (tek tag hucreli marka duzeyi sayfalar).
+  if (modelFromRow && tagTrim && foldTurkish(tagTrim) === foldTurkish(modelFromRow)) tagTrim = '';
   const trim = tagTrim || fileTrim || '';
 
   const fuelType = deriveFuelFromEngineCode(engineCode) || deriveFuelType(clean, params.listingTitle);
@@ -540,3 +599,18 @@ export function deriveFromSource(params: {
 
   return { make, model, engineCode, trim, fuelType, transmission, isValid: true };
 }
+
+/** Musteriye gosterilebilecek kasa siniflari (canonical -> Turkce etiket). */
+export const BODY_TYPE_LABELS: Record<Exclude<BodyType, ''>, string> = {
+  SEDAN: 'Sedan',
+  HATCHBACK: 'Hatchback',
+  SPORTBACK: 'Sportback',
+  COUPE: 'Coupe',
+  GRAN_COUPE: 'Gran Coupe',
+  CABRIO: 'Cabrio',
+  STATION_WAGON: 'Station Wagon',
+  SUV: 'SUV',
+};
+
+/** Izin verilen canonical kasa degerleri (API sozlesmesi icin tek kaynak). */
+export const CANONICAL_BODY_TYPES = Object.keys(BODY_TYPE_LABELS) as Array<Exclude<BodyType, ''>>;

@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { PrismaClient } from '@prisma/client';
-import { deriveBodyType, deriveBodyTypeFromSources, normalizeBodyType } from './listing-attributes';
+import { deriveBodyType, deriveBodyTypeFromSources, normalizeBodyType, cleanPageTitle, deriveFromSource } from './listing-attributes';
 import { EmsalMatcherService } from './emsal-matcher.service';
 
 /** Importer'daki Vitrin eleme kurali ile AYNI predicate. */
@@ -95,6 +95,88 @@ describe('İçe aktarma bütünlüğü', () => {
     });
   });
 
+  describe('Başlık temizleme: bozuk kodlama artıkları', () => {
+    // GERCEK BASARISIZLIK: kullanicinin kaydettigi bazi DOSYA ADLARI bozuk
+    // kodlanmis karakter tasiyor ("Fiyatlar" + kutu-cizim baytlari). Junk
+    // temizleyici "fiyatlari" bekledigi icin artik silinemiyor ve model adina
+    // tasiniyordu (138 model adi / 15.820 ilan, tamami Mercedes-Benz).
+    // Bozuk baytlar kod noktasindan uretilir (kaynak dosyada ham artik karakter tutulmaz).
+    const ARTIFACT = String.fromCharCode(0x2500) + String.fromCharCode(0x2592);
+    const CORRUPT = `Mercedes-Benz A Serisi A 180 CDI Fiyatlar${ARTIFACT} & Modelleri sahibinden.com'da - 2`;
+
+    test('Bozuk artık temizlenir, GERÇEK tokenlar korunur', () => {
+      const clean = cleanPageTitle(CORRUPT);
+      expect(clean).toBe('Mercedes-Benz A Serisi A 180 CDI');
+      expect(clean).not.toContain(ARTIFACT);
+      expect(clean.toLowerCase()).not.toContain('fiyatlar');
+    });
+
+    test('Bozuk başlıktan model/motor doğru türetilir', () => {
+      const d = deriveFromSource({ folderMake: 'Mercedes', pageTitleOrFileName: CORRUPT });
+      expect(d.isValid).toBe(true);
+      expect(d.make).toBe('Mercedes-Benz');
+      expect(d.model).toBe('A Serisi A 180');
+      expect(d.engineCode).toBe('CDI');
+    });
+
+    test('Temiz başlıklarda regresyon yok', () => {
+      expect(cleanPageTitle("Audi A3 A3 Sportback 1.6 TDI Dynamic Fiyatları & Modelleri sahibinden.com'da"))
+        .toBe('Audi A3 A3 Sportback 1.6 TDI Dynamic');
+      const d = deriveFromSource({
+        folderMake: 'Audi',
+        pageTitleOrFileName: "Audi A3 A3 Sportback 1.6 TDI Dynamic Fiyatları & Modelleri sahibinden.com'da",
+      });
+      expect(d.model).toBe('A3 A3 Sportback');
+      expect(d.engineCode).toBe('1.6 TDI');
+      expect(d.trim).toBe('Dynamic');
+    });
+  });
+
+  describe('Marka düzeyi sayfalarda model satırdan alınır', () => {
+    // GERCEK BASARISIZLIK: Sahibinden MARKA duzeyi sayfalarinda satir IKI tag
+    // hucresi tasir: [model, motor+paket]. Importer ilk hucreyi kosulsuz
+    // "paket" sayip modeli yalniz sayfa basligindan aradigi icin bu sayfalarin
+    // TAMAMI MODEL_TESPIT_EDILEMEDI ile karantinaya dusuyordu
+    // (26 marka klasoru / ~5.900 ilan; orn. Alfa Romeo 807, Mazda 950).
+    test('Sayfa başlığı modelsizse satırın model hücresi kullanılır', () => {
+      const d = deriveFromSource({
+        folderMake: 'Alfa Romeo',
+        pageTitleOrFileName: "Alfa Romeo Fiyatları & Modelleri sahibinden.com'da - 10",
+        listingRowModel: 'Giulietta',
+        listingTagTrim: '1.4 TB MultiAir Distinctive',
+      });
+      expect(d.isValid).toBe(true);
+      expect(d.make).toBe('Alfa Romeo');
+      expect(d.model).toBe('Giulietta');
+    });
+
+    test('Satır modeli yoksa uydurulmaz (UNKNOWN > WRONG)', () => {
+      const d = deriveFromSource({
+        folderMake: 'Alfa Romeo',
+        pageTitleOrFileName: "Alfa Romeo Fiyatları & Modelleri sahibinden.com'da",
+      });
+      expect(d.isValid).toBe(false);
+      expect(d.rejectReason).toBe('MODEL_TESPIT_EDILEMEDI');
+    });
+
+    test('Model düzeyi sayfalarda başlık önceliğini korur', () => {
+      const d = deriveFromSource({
+        folderMake: 'Fiat',
+        pageTitleOrFileName: "Fiat Egea 1.6 Multijet Fiyatları & Modelleri sahibinden.com'da",
+        listingRowModel: '',
+        listingTagTrim: '1.6 Multijet Urban',
+      });
+      expect(d.model).toBe('Egea');
+      expect(d.trim).toBe('1.6 Multijet Urban');
+    });
+
+    test('Üretim importer’ı satır model hücresini okur', () => {
+      const src = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'rebuild_raw_listings_v3.ts'), 'utf8');
+      expect(src).toMatch(/listingRowModel/);
+      expect(src).toMatch(/tagCells/);
+    });
+  });
+
   describe('Kasa tipi (body type) türetme', () => {
     test('Yalnızca AÇIK sinyalden türetilir; model adından tahmin YAPILMAZ', () => {
       expect(deriveBodyType('3 Serisi', '320i M Sport')).toBe(''); // sedan varsayimi YOK
@@ -132,7 +214,7 @@ describe('İçe aktarma bütünlüğü', () => {
     });
 
     test('"Cross" bir kasa adı değildir (donanım paketi) — SUV üretmez', () => {
-      // GERCEK BASARISIZLIK: /(suv|cross)/ deseni Fiat 500L "Cross Plus",
+      // GERCEK BASARISIZLIK: /(suv|cross)/ deseni Fiat 500L "Cross Plus",
       // Egea Cross gibi hatchback araclari SUV etiketliyordu.
       expect(deriveBodyType('500 Ailesi', '500L CROSS PLUS FULL 2021 ÇIKIŞLI')).toBe('');
       expect(deriveBodyType('Egea', 'Egea Cross 1.6 Multijet')).toBe('');

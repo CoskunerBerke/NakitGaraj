@@ -122,6 +122,15 @@ async function main() {
     throw new Error(`Kaynak klasör bulunamadı: ${DESKTOP_DIR}`);
   }
 
+  // Marka klasorleri DINAMIK kesfedilir: yeni bir marka klasoru eklendiginde
+  // kodda hicbir liste guncellemesi gerekmez.
+  const discoveredMakes = fs
+    .readdirSync(DESKTOP_DIR, { withFileTypes: true })
+    .filter((e) => e.isDirectory())
+    .map((e) => e.name.trim())
+    .filter(Boolean);
+  console.log(`✓ ${discoveredMakes.length} marka klasörü keşfedildi (dinamik)`);
+
   const files = scanHtmlFiles(DESKTOP_DIR);
   console.log(`✓ ${files.length} HTML dosyası tarandı: ${DESKTOP_DIR}\n`);
   if (files.length === 0) throw new Error('NO_HTML_FILES_FOUND');
@@ -253,7 +262,23 @@ async function main() {
           stats.withKm++;
         }
 
-        const tagTrim = tr.find('td.searchResultsTagAttributeValue').first().text().trim();
+        // Sahibinden MARKA duzeyindeki sayfalarda satir IKI tag hucresi tasir:
+        //   [0] model            (orn. "Giulietta")
+        //   [1] motor + paket    (orn. "1.4 TB MultiAir Distinctive")
+        // MODEL duzeyindeki sayfalarda ise tek hucre vardir ve model sayfa
+        // basligindan gelir. Ilk hucreyi kosulsuz "paket" saymak, marka duzeyi
+        // sayfalarin TAMAMINI karantinaya dusuruyordu (MODEL_TESPIT_EDILEMEDI).
+        const tagCells = tr
+          .find('td.searchResultsTagAttributeValue')
+          .map((__, cell) => $(cell).text().trim())
+          .get()
+          .filter(Boolean);
+        // Ilk hucre HER ZAMAN model adayidir; deriveFromSource bunu YALNIZCA
+        // sayfa basligi model vermediginde kullanir. Bazi marka duzeyi
+        // sayfalarda (orn. Kuba, Regal Raptor) tek hucre bulunur ve o hucre
+        // motor/paket degil MODELDIR.
+        const listingRowModel = tagCells[0] || '';
+        const tagTrim = (tagCells.length > 1 ? tagCells.slice(1).join(' ') : tagCells[0]) || '';
 
         const dateText = tr.find('td.searchResultsDateValue').first().text().trim();
         const scrapedAt = parseTurkishListingDate(dateText.replace(/\s+/g, ' '));
@@ -269,6 +294,8 @@ async function main() {
           pageTitleOrFileName: fileName,
           listingTagTrim: tagTrim,
           listingTitle: title,
+          listingRowModel,
+          knownMakes: discoveredMakes,
         });
 
         if (!derived.isValid) {
