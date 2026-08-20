@@ -5,6 +5,7 @@ import { TelegramService } from '../telegram/telegram.service';
 import { EmsalMatcherService } from './emsal-matcher.service';
 import { RobustPricingCalculator } from './robust-pricing-calculator';
 import { splitVariantString } from './listing-attributes';
+import { assessCondition } from './condition-assessment';
 
 @Injectable()
 export class EvaluationService {
@@ -99,6 +100,67 @@ export class EvaluationService {
     };
   }
 
+  /**
+   * Verilen kondisyon kesintisi ile fiyat zincirini calistirir.
+   * damagePenalty = 0 verildiginde sonuc TEMIZ ESDEGER degerdir.
+   */
+  private computePricing(
+    emsalResult: any,
+    dto: CreateEvaluationDto,
+    spec: any,
+    damagePenalty: number,
+    wP5: number, wP35: number, wP50: number, wP60: number, wP95: number,
+  ): any {
+    const targetEngineKnown = Boolean(splitVariantString(spec.variant?.name || '').engineCode);
+    if (emsalResult.cleanListings && emsalResult.cleanListings.length > 0) {
+      return RobustPricingCalculator.computeValuation({
+        cleanListings: emsalResult.cleanListings,
+        userYear: dto.year,
+        userMileage: dto.mileage,
+        damagePenalty,
+        userDesiredPrice: dto.userDesiredPrice,
+        matchedLevel: emsalResult.level,
+        baseConfidenceScore: emsalResult.confidenceScore,
+        realMatchedListingCount: emsalResult.actuallyUsedListingCount || emsalResult.matchedCount,
+        level1CandidateCount: emsalResult.level1CandidateCount,
+        level2CandidateCount: emsalResult.level2CandidateCount,
+        level3CandidateCount: emsalResult.level3CandidateCount,
+        usedEngineDistribution: emsalResult.usedEngineDistribution,
+        usedTrimDistribution: emsalResult.usedTrimDistribution,
+        excludedListingCount: emsalResult.excludedListingCount,
+        exclusionReasons: emsalResult.exclusionReasons,
+        listingWeights: emsalResult.listingWeights,
+        freshnessScore: emsalResult.freshnessScore,
+        engineExactShare: emsalResult.engineExactShare,
+        fuelKnownShare: emsalResult.fuelKnownShare,
+        transmissionKnownShare: emsalResult.transmissionKnownShare,
+        targetEngineKnown,
+      });
+    }
+    return RobustPricingCalculator.computeValuationFromSnapshot({
+      weightedP5: wP5,
+      weightedP35: wP35,
+      weightedP50: wP50,
+      weightedP60: wP60,
+      weightedP95: wP95,
+      realMatchedListingCount: emsalResult.matchedCount,
+      kmDecayPer10k: emsalResult.kmDecayPer10k || 0.0025,
+      referenceMedianMileage: emsalResult.referenceMedianMileage,
+      mileageAdjustmentSource: emsalResult.mileageAdjustmentSource || 'DEFAULT_FALLBACK',
+      userYear: dto.year,
+      userMileage: dto.mileage,
+      damagePenalty,
+      userDesiredPrice: dto.userDesiredPrice,
+      matchedLevel: emsalResult.level,
+      baseConfidenceScore: emsalResult.confidenceScore,
+      freshnessScore: emsalResult.freshnessScore,
+      engineExactShare: emsalResult.engineExactShare,
+      fuelKnownShare: emsalResult.fuelKnownShare,
+      transmissionKnownShare: emsalResult.transmissionKnownShare,
+      targetEngineKnown,
+    });
+  }
+
   private async calculateValuationCore(dto: CreateEvaluationDto) {
     // 1. Relational Validation: Verify modelId actually belongs to manufacturerId
     const targetModel = await this.prisma.model.findFirst({
@@ -179,19 +241,7 @@ export class EvaluationService {
       };
     }
 
-    // Damage Penalty
-    let damagePenalty = 0;
     const aiAnalysis: string[] = [];
-
-    if (dto.damageStatus === 'YES') {
-      damagePenalty = 0.08;
-      aiAnalysis.push('Araçta kaporta/boya hasar kaydı bildirilmiştir (%8 amortisman uygulanmıştır).');
-    } else if (dto.damageStatus === 'NO') {
-      damagePenalty = 0;
-      aiAnalysis.push('Aracın boyasız ve hatasız olması ikinci el piyasa değerini olumlu etkilemektedir.');
-    } else {
-      damagePenalty = 0.04;
-    }
 
     // Match Comparable Listings
     const emsalResult = await this.emsalMatcherService.matchComparableListings({
@@ -237,55 +287,39 @@ export class EvaluationService {
 
     const hasPercentileError = !(wP5 <= wP35 && wP35 <= wP50 && wP50 <= wP60 && wP60 <= wP95);
 
-    let calc: any;
-    if (emsalResult.cleanListings && emsalResult.cleanListings.length > 0) {
-      calc = RobustPricingCalculator.computeValuation({
-        cleanListings: emsalResult.cleanListings,
-        userYear: dto.year,
-        userMileage: dto.mileage,
-        damagePenalty,
-        userDesiredPrice: dto.userDesiredPrice,
-        matchedLevel: emsalResult.level,
-        baseConfidenceScore: emsalResult.confidenceScore,
-        realMatchedListingCount: emsalResult.actuallyUsedListingCount || emsalResult.matchedCount,
-        level1CandidateCount: emsalResult.level1CandidateCount,
-        level2CandidateCount: emsalResult.level2CandidateCount,
-        level3CandidateCount: emsalResult.level3CandidateCount,
-        usedEngineDistribution: emsalResult.usedEngineDistribution,
-        usedTrimDistribution: emsalResult.usedTrimDistribution,
-        excludedListingCount: emsalResult.excludedListingCount,
-        exclusionReasons: emsalResult.exclusionReasons,
-        listingWeights: emsalResult.listingWeights,
-        freshnessScore: emsalResult.freshnessScore,
-        engineExactShare: emsalResult.engineExactShare,
-        fuelKnownShare: emsalResult.fuelKnownShare,
-        transmissionKnownShare: emsalResult.transmissionKnownShare,
-        targetEngineKnown: Boolean(splitVariantString(spec.variant?.name || '').engineCode),
-      });
-    } else {
-      calc = RobustPricingCalculator.computeValuationFromSnapshot({
-        weightedP5: wP5,
-        weightedP35: wP35,
-        weightedP50: wP50,
-        weightedP60: wP60,
-        weightedP95: wP95,
-        realMatchedListingCount: emsalResult.matchedCount,
-        kmDecayPer10k: emsalResult.kmDecayPer10k || 0.0025,
-        referenceMedianMileage: emsalResult.referenceMedianMileage,
-        mileageAdjustmentSource: emsalResult.mileageAdjustmentSource || 'DEFAULT_FALLBACK',
-        userYear: dto.year,
-        userMileage: dto.mileage,
-        damagePenalty,
-        userDesiredPrice: dto.userDesiredPrice,
-        matchedLevel: emsalResult.level,
-        baseConfidenceScore: emsalResult.confidenceScore,
-        freshnessScore: emsalResult.freshnessScore,
-        engineExactShare: emsalResult.engineExactShare,
-        fuelKnownShare: emsalResult.fuelKnownShare,
-        transmissionKnownShare: emsalResult.transmissionKnownShare,
-        targetEngineKnown: Boolean(splitVariantString(spec.variant?.name || '').engineCode),
-      });
+    // FIYAT ZINCIRI (sira onemlidir):
+    //   EMSAL PIYASA -> TEMIZ ESDEGER DEGER -> KONDISYON DUZELTMESI ->
+    //   KONDISYONA GORE DUZELTILMIS BEKLENEN SATIS -> NAKIT -> KONSINYE
+    // Kondisyon katmani Tramer tutarini arac degerine ORANLAYARAK degerlendirir;
+    // bu yuzden once damagePenalty=0 ile temiz esdeger deger hesaplanir, kondisyon
+    // duzeltmesi bu degerin uzerine uygulanir. Kondisyon cezasi ile galeri kari
+    // birbirinden ayri kalir.
+    const priceWith = (damagePenalty: number) => this.computePricing(
+      emsalResult, dto, spec, damagePenalty, wP5, wP35, wP50, wP60, wP95,
+    );
+
+    const cleanEquivalent = priceWith(0);
+
+    const condition = assessCondition({
+      damageStatus: dto.damageStatus,
+      paintScheme: dto.paintScheme,
+      chassisState: dto.chassisState,
+      vehicleStatus: dto.vehicleStatus,
+      tramerAmount: dto.tramerAmount,
+      vehicleYear: dto.year,
+      cleanMarketValue: cleanEquivalent.fairMarketValue,
+    });
+    const damagePenalty = condition.penalty;
+
+    if (dto.damageStatus === 'NO' && damagePenalty === 0) {
+      aiAnalysis.push('Aracın boyasız ve hatasız olması ikinci el piyasa değerini olumlu etkilemektedir.');
+    } else if (damagePenalty > 0) {
+      aiAnalysis.push(
+        `Bildirdiğiniz kaporta/hasar durumu değerlendirmeye dahil edilmiştir (${(damagePenalty * 100).toFixed(1)}% kondisyon düzeltmesi).`,
+      );
     }
+
+    const calc: any = damagePenalty > 0 ? priceWith(damagePenalty) : cleanEquivalent;
 
     const isFmvTooHigh = calc.fairMarketValue >= 5000000;
     const isLevel3 = emsalResult.level === 3;
@@ -320,7 +354,8 @@ export class EvaluationService {
     // model ailesini temsil eder; otomatik teklif verilmez.
     const hasLimitedComps = Boolean(emsalResult.isLimitedComps);
     // Ağır hasar fiziksel ekspertiz gerektirir.
-    const hasHeavyDamage = damagePenalty >= 0.15;
+    // Yapisal/agir hasar veya mekanik ariza beyani -> otomatik fiyat verilmez.
+    const hasHeavyDamage = damagePenalty >= 0.15 || condition.requiresManualReview;
 
     const requiresManual =
       hasPercentileError ||
@@ -334,6 +369,9 @@ export class EvaluationService {
 
     if (calc.requiresManualApproval && calc.manualApprovalReason) {
       aiAnalysis.push(calc.manualApprovalReason);
+    }
+    if (condition.requiresManualReview && condition.manualReason) {
+      aiAnalysis.push(condition.manualReason);
     }
 
     aiAnalysis.push(emsalResult.explanationNote);
