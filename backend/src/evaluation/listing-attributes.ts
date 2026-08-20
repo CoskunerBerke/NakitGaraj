@@ -356,6 +356,99 @@ export function isEngineCompatible(a: string, b: string, strict: boolean): boole
 }
 
 /* ------------------------------------------------------------------ */
+/* Kasa tipi (body type)                                               */
+/* ------------------------------------------------------------------ */
+
+export type BodyType =
+  | 'SEDAN'
+  | 'HATCHBACK'
+  | 'SPORTBACK'
+  | 'COUPE'
+  | 'GRAN_COUPE'
+  | 'CABRIO'
+  | 'STATION_WAGON'
+  | 'SUV'
+  | '';
+
+/**
+ * Kasa tipi YALNIZCA acik (explicit) metin sinyalinden turetilir.
+ * Model adina gore tahmin YAPILMAZ ("3 Serisi -> Sedan" gibi cikarim yok).
+ * Sinyal yoksa '' (UNKNOWN) doner; celisen iki sinyal varsa da '' doner.
+ *
+ * Siralama onemli: "gran coupe" -> GRAN_COUPE, "coupe"den once denenir;
+ * "sportback" HATCHBACK'e birlestirilmez (fiyat davranisi farkli olabilir).
+ * Tum desenler fold edilmis metinde word-boundary ile calisir; "sw", "hb"
+ * gibi kisa tokenlar yalniz bagimsiz kelime olarak kabul edilir.
+ */
+const BODY_PATTERNS: Array<[BodyType, RegExp]> = [
+  ['GRAN_COUPE', /\bgran\s*coupe\b/],
+  ['SPORTBACK', /\bsportback\b/],
+  ['STATION_WAGON', /\b(station\s*wagon|stationwagon|touring|avant|variant|kombi|sw)\b/],
+  ['CABRIO', /\b(cabrio|cabriolet|convertible|roadster)\b/],
+  ['COUPE', /\bcoupe\b/],
+  ['HATCHBACK', /\b(hatchback|hb)\b/],
+  ['SEDAN', /\bsedan\b/],
+  // NOT: "Cross" bir KASA adi degil, cogu zaman donanim/paket adidir
+  // (Fiat 500L Cross Plus, Egea Cross, Polo Cross...). Kasa olarak
+  // yorumlanirsa hatchback araclar SUV etiketi alir -> yanlis eleme.
+  ['SUV', /\bsuv\b/],
+];
+
+/** Katalog/musteri girdisindeki Turkce kasa adlarini ayni siniflara indirger. */
+const BODY_ALIASES: Array<[BodyType, RegExp]> = [
+  ['STATION_WAGON', /^station\s*wagon$/],
+  ['GRAN_COUPE', /^gran\s*coupe$/],
+  ['CABRIO', /^(cabrio|cabriolet)$/],
+  ['SEDAN', /^sedan$/],
+  ['HATCHBACK', /^(hatchback|hb)$/],
+  ['SPORTBACK', /^sportback$/],
+  ['COUPE', /^coupe$/],
+  ['SUV', /^(suv|crossover|arazi.*)$/],
+];
+
+/** Serbest metinden kasa tipi. Celiskide ve sinyalsizlikte '' doner. */
+export function deriveBodyType(...parts: Array<string | null | undefined>): BodyType {
+  const folded = ' ' + parts.filter(Boolean).map((p) => foldTurkish(String(p))).join(' ') + ' ';
+  const hits: BodyType[] = [];
+  for (const [name, re] of BODY_PATTERNS) {
+    if (re.test(folded) && !hits.includes(name)) hits.push(name);
+  }
+  if (hits.length === 1) return hits[0];
+  // GRAN_COUPE metni "coupe"yi de eslestirir; bu celiski degildir.
+  if (hits.length === 2 && hits.includes('GRAN_COUPE') && hits.includes('COUPE')) return 'GRAN_COUPE';
+  return ''; // sinyal yok veya celisen sinyaller -> UNKNOWN
+}
+
+/**
+ * Kaynak onceligi ile kasa tipi:
+ *   1) model/kategori metni (sayfa basligi — Sahibinden kategorisinden gelir,
+ *      "A3 Hatchback" gibi; en guvenilir sinyal)
+ *   2) ilan basligi (satici metni — "coupe tasarim" gibi pazarlama dili
+ *      icerebilir, yalniz model sinyalsizse kullanilir)
+ * Iki kaynak celisirse model kazanir; boylece "A3 Hatchback" modelindeki bir
+ * ilan, basliginda "coupe" yazdigi icin COUPE olamaz.
+ */
+export function deriveBodyTypeFromSources(
+  modelText: string | null | undefined,
+  titleText: string | null | undefined,
+): BodyType {
+  const fromModel = deriveBodyType(modelText);
+  if (fromModel) return fromModel;
+  return deriveBodyType(titleText);
+}
+
+/** Katalog/musteri kasa adini normalize eder ("Station Wagon" -> STATION_WAGON). */
+export function normalizeBodyType(raw: string | null | undefined): BodyType {
+  const t = foldTurkish((raw || '').trim());
+  if (!t) return '';
+  for (const [name, re] of BODY_ALIASES) if (re.test(t)) return name;
+  // Zaten canonical bir deger geldiyse kabul et
+  const up = (raw || '').trim().toUpperCase().replace(/\s+/g, '_');
+  const known: BodyType[] = ['SEDAN','HATCHBACK','SPORTBACK','COUPE','GRAN_COUPE','CABRIO','STATION_WAGON','SUV'];
+  return (known as string[]).includes(up) ? (up as BodyType) : '';
+}
+
+/* ------------------------------------------------------------------ */
 /* Tarih / sehir                                                       */
 /* ------------------------------------------------------------------ */
 

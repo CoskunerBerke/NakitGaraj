@@ -28,6 +28,7 @@ import * as path from 'path';
 import * as cheerio from 'cheerio';
 import { PrismaClient } from '@prisma/client';
 import {
+  deriveBodyTypeFromSources,
   deriveFromSource,
   parseLocation,
   parseTurkishListingDate,
@@ -134,6 +135,7 @@ async function main() {
     badPrice: 0,
     badYear: 0,
     duplicateSameId: 0,
+    promoSuperSkipped: 0,
     derivationFailed: 0,
     withDate: 0,
     withCity: 0,
@@ -183,6 +185,20 @@ async function main() {
         const dataId = (tr.attr('data-id') || '').trim();
         if (!dataId) {
           stats.noDataId++;
+          return;
+        }
+
+        // "Vitrin" (searchResultsPromoSuper) satirlari ORGANIK sonuc DEGILDIR:
+        // Sahibinden bunlari farkli kategorilerdeki sayfalara reklam olarak
+        // enjekte eder ve ayni data-id farkli sayfalarda BASKA bir araci
+        // gosterir. Sayfanin model/motor/paket bilgisiyle etiketlenirlerse
+        // fiyat havuzuna yanlis arac girer.
+        // Olculen: 872 PromoSuper id'sinin 646'si (%74) celisen arac verisi
+        // tasiyor. PromoHighlight/PromoBold ise gercek organik ilanlardir
+        // (yalnizca one cikarilmis) ve KORUNUR.
+        const rowClass = tr.attr('class') || '';
+        if (/searchResultsPromoSuper/i.test(rowClass)) {
+          stats.promoSuperSkipped++;
           return;
         }
 
@@ -295,7 +311,11 @@ async function main() {
           canonicalTrim: derived.trim,
           canonicalFuelType: derived.fuelType,
           canonicalTransmission: derived.transmission,
-          canonicalBodyType: '',
+          // Kasa tipi ICE AKTARIMDA turetilir. Aksi halde her rebuild
+          // canonicalBodyType alanini sifirlar ve kasa bilgisi ancak ayri bir
+          // backfill calistirilirsa geri gelir (import idempotent olmaz).
+          // Yalniz ACIK metin sinyali kullanilir; sinyal yoksa '' (UNKNOWN).
+          canonicalBodyType: deriveBodyTypeFromSources(derived.model, title),
           year,
           mileageKm,
           price,
@@ -372,6 +392,7 @@ async function main() {
     city: records.filter((r) => r.city).length,
     km: records.filter((r) => r.mileageKm !== null).length,
     fuel: records.filter((r) => r.canonicalFuelType).length,
+    body: records.filter((r) => r.canonicalBodyType).length,
     trans: records.filter((r) => r.canonicalTransmission).length,
     engine: records.filter((r) => r.rawVariant).length,
   };
@@ -382,6 +403,7 @@ async function main() {
   console.log(`    - VALID                  : ${validCount}`);
   console.log(`    - motor kodu olmayan     : ${records.filter((r) => !r.rawVariant).length}`);
   console.log(`  Aynı data-id tekrarı       : ${stats.duplicateSameId}`);
+  console.log(`  Vitrin (PromoSuper) elenen : ${stats.promoSuperSkipped}`);
   console.log(`  Yeniden yayın mükerrer     : ${relistDuplicates.length}`);
   console.log(`  Karantina                  : ${quarantined.length}`);
   console.log(`    - geçersiz fiyat         : ${stats.badPrice}`);
@@ -396,6 +418,7 @@ async function main() {
   console.log(`  motor kodu  : ${cov.engine} (${pct(cov.engine)})`);
   console.log(`  yakıt       : ${cov.fuel} (${pct(cov.fuel)})`);
   console.log(`  şanzıman    : ${cov.trans} (${pct(cov.trans)})`);
+  console.log(`  kasa tipi   : ${cov.body} (${pct(cov.body)})`);
 
   if (dryRun) {
     console.log('\n[--dry-run] Veritabanı değiştirilmedi.');

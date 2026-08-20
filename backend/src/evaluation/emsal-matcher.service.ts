@@ -7,6 +7,7 @@ import {
   deriveTransmission,
   foldTurkish,
   isEngineCompatible,
+  normalizeBodyType,
   splitVariantString,
 } from './listing-attributes';
 
@@ -81,6 +82,7 @@ interface RawCandidate {
   rawVariant: string | null;
   canonicalVariant: string | null;
   canonicalTrim: string | null;
+  canonicalBodyType: string | null;
   canonicalFuelType: string | null;
   canonicalTransmission: string | null;
   rawTitle: string | null;
@@ -213,6 +215,7 @@ export class EmsalMatcherService {
       // Km bilgisi yoksa UYDURULMAZ; 0 birakilir ve calculator agirligi dusurur.
       mileageKm: r.mileageKm && r.mileageKm > 0 ? r.mileageKm : 0,
       price: normalizedPrice,
+      bodyType: (r.canonicalBodyType || '').trim() || undefined,
       fuelType: this.fuelOf(r) || undefined,
       transmission: this.transmissionOf(r) || undefined,
       city: r.city || undefined,
@@ -247,6 +250,7 @@ export class EmsalMatcherService {
         rawVariant: true,
         canonicalVariant: true,
         canonicalTrim: true,
+        canonicalBodyType: true,
         canonicalFuelType: true,
         canonicalTransmission: true,
         rawTitle: true,
@@ -331,6 +335,9 @@ export class EmsalMatcherService {
     // katalog kaynakli hatali bir etiket dogru emsalleri havuzdan atabilir.
     const paramFuel =
       deriveFuelFromEngineCode(paramEngine) || (params.fuelType || '').trim() || '';
+    // Kasa tipi: musteri/katalog girdisi merkezi normalizer'dan gecer.
+    // UNKNOWN ise kasa uzerinden hicbir eleme veya exactness URETILMEZ (CASE D).
+    const requestedBody = normalizeBodyType(params.bodyType);
     const paramTransmission = (params.transmission || '').trim();
 
     const { candidates, duplicateCount, damagedCount } = await this.fetchCandidates(
@@ -339,6 +346,20 @@ export class EmsalMatcherService {
       year - 2,
       year + 2,
     );
+
+    // KATALOG SOZLUGU != ILAN SOZLUGU.
+    // Katalogda bu model icin secilebilen kasa adlari ile ilan metninden
+    // turetilen kasa siniflari her zaman ortusmez (orn. BMW 4 Serisi katalogta
+    // "Hatchback"/"Coupe" olarak durur, ilanlarda ise GRAN_COUPE/COUPE/CABRIO
+    // gorunur; Audi A3/A5 katalogta "Hatchback", ilanlarda SPORTBACK'tir).
+    // Havuzda hic gorulmeyen bir kasa etiketiyle eleme yapmak, DOGRU emsalleri
+    // topluca disari atar. Boyle bir etiket kanit degildir: UNKNOWN kabul edilir
+    // ve kasa uzerinden eleme yapilmaz (UNKNOWN > WRONG).
+    const observedBodies = new Set(
+      candidates.map((c) => (c.canonicalBodyType || '').trim()).filter(Boolean),
+    );
+    const bodySignalDropped = Boolean(requestedBody) && !observedBodies.has(requestedBody);
+    const paramBody = bodySignalDropped ? '' : requestedBody;
 
     if (candidates.length === 0) {
       return this.emptyResult(make, model, year, duplicateCount, damagedCount);
@@ -385,6 +406,12 @@ export class EmsalMatcherService {
           continue;
         }
 
+        // CASE A: hedef kasa BILINIYOR + adayin kasasi BILINIYOR + FARKLI
+        // -> her seviyede dislanir (420d Cabrio, 420d Coupe'nin emsali olamaz).
+        // CASE C: adayin kasasi bilinmiyorsa BURADA dislanmaz; buildResult'ta
+        // dusuk agirlik alir. UNKNOWN != KNOWN MISMATCH.
+        if (paramBody && r.canonicalBodyType && r.canonicalBodyType !== paramBody) continue;
+
         if (cfg.requireFuel && paramFuel) {
           const f = this.fuelOf(r);
           // Yakiti bilinmeyen ilan Seviye 1'e alinmaz; alt seviyelerde
@@ -424,6 +451,7 @@ export class EmsalMatcherService {
           paramEngine,
           paramTrim,
           paramFuel,
+          paramBody,
           year,
           selected,
           trimMatchedCount,
@@ -494,6 +522,7 @@ export class EmsalMatcherService {
     paramEngine: string;
     paramTrim: string;
     paramFuel: string;
+    paramBody: string;
     year: number;
     selected: RawCandidate[];
     trimMatchedCount: number;
@@ -504,7 +533,7 @@ export class EmsalMatcherService {
     totalCandidates: number;
   }): EmsalMatchResult {
     const {
-      level, make, model, paramEngine, paramTrim, paramFuel, year, selected,
+      level, make, model, paramEngine, paramTrim, paramFuel, paramBody, year, selected,
       trimMatchedCount, annualRate, yearAdjustmentSource, duplicateCount, damagedCount,
     } = args;
 
@@ -546,6 +575,10 @@ export class EmsalMatcherService {
       } else if (foldedParamTrim) {
         quality *= 0.85;
       }
+
+      // CASE C: hedef kasa biliniyor ama adayin kasasi bilinmiyorsa hafif
+      // belirsizlik cezasi. CASE B (ayni kasa) tam agirlik alir.
+      if (paramBody && !r.canonicalBodyType) quality *= 0.9;
 
       if (this.fuelOf(r)) fuelKnownCount++;
       if (this.transmissionOf(r)) transKnownCount++;
