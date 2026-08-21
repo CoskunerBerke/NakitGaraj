@@ -30,9 +30,11 @@ import { PrismaClient } from '@prisma/client';
 import {
   deriveBodyTypeFromSources,
   deriveFromSource,
-  parseLocation,
-  parseTurkishListingDate,
   foldTurkish,
+  hasStrongDamageSignal,
+  parseLocation,
+  parseMileageCell,
+  parseTurkishListingDate,
 } from '../evaluation/listing-attributes';
 
 const DESKTOP_DIR = path.join(
@@ -48,7 +50,9 @@ const YEAR_MIN = 1980;
 const YEAR_MAX = new Date().getFullYear() + 1;
 const KM_MAX = 2_000_000;
 
-const DAMAGE_TOKENS = ['agir hasar', 'agir hasarli', 'pert', 'hasar kayitli'];
+/* Agir hasar tespiti: listing-attributes.hasStrongDamageSignal (kelime sinirli,
+   yalniz ACIK beyanlar). Eski substring listesi "EKSPERTIZ" icindeki "pert"i
+   de esliyordu. */
 
 interface ParsedListing {
   sourceListingId: string;
@@ -249,18 +253,11 @@ async function main() {
           return;
         }
 
-        let mileageKm: number | null = null;
-        const kmParsed = parseIntSafe(attrs[1] || '');
-        if (
-          Number.isFinite(kmParsed) &&
-          kmParsed >= 0 &&
-          kmParsed <= KM_MAX &&
-          kmParsed !== year &&
-          kmParsed !== price
-        ) {
-          mileageKm = kmParsed;
-          stats.withKm++;
-        }
+        // Km ve fiyat AYRI DOM hucrelerinden okunur; sayisal esitlik bir
+        // karisma belirtisi degildir (olculen: 488 gercek ilan yalnizca
+        // km == fiyat oldugu icin kilometresini kaybediyordu).
+        const mileageKm = parseMileageCell(attrs[1] || '', year, KM_MAX);
+        if (mileageKm !== null) stats.withKm++;
 
         // Sahibinden MARKA duzeyindeki sayfalarda satir IKI tag hucresi tasir:
         //   [0] model            (orn. "Giulietta")
@@ -312,8 +309,7 @@ async function main() {
           return;
         }
 
-        const rowText = foldTurkish(tr.text());
-        const isDamaged = DAMAGE_TOKENS.some((t) => rowText.includes(t));
+        const isDamaged = hasStrongDamageSignal(tr.text());
         if (isDamaged) stats.damaged++;
         if (derived.fuelType) stats.withFuel++;
         if (derived.transmission) stats.withTransmission++;

@@ -38,9 +38,16 @@ export function foldTurkish(s: string): string {
     .toLowerCase();
 }
 
+/**
+ * YALNIZCA sayfa basligi / dosya adi artigi: "... - 10" seklindeki sayfalama eki.
+ * Bu desen ILAN SATIRININ model hucresine UYGULANMAZ: gercek model adlari
+ * "-<rakam>" tasiyabilir (Saab 9-3, Saab 9-5, Proton Gen-2) ve satir hucresinde
+ * bu ek silinirse iki farkli model tek bir "9" altinda birlesir.
+ */
+const PAGE_NUMBER_JUNK: RegExp[] = [/\s*-\s*\d+\s*$/g];
+
 /** Sahibinden sayfa basligi / dosya adi artiklari (fold edilmis metne uygulanir) */
 const TITLE_JUNK: RegExp[] = [
-  /\s*-\s*\d+\s*$/g,
   /2\s*\.?\s*el\s+arabalar\s+ve\s+satilik\s+sifir\s+km\s+otomobil/g,
   // Bazi dosya adlari bozuk kodlanmis karakter tasir ("Fiyatlar─▒").
   // Bu yuzden "fiyatlar" kokunden sonraki bosluksuz artiklar da atilir;
@@ -68,11 +75,26 @@ const TITLE_JUNK: RegExp[] = [
  * metinde ayni indislerde uygulanir (fold karakter sayisini degistirmez).
  */
 export function cleanPageTitle(raw: string): string {
+  return stripJunk(raw, [...PAGE_NUMBER_JUNK, ...TITLE_JUNK]);
+}
+
+/**
+ * ILAN SATIRININ kendi model hucresini temizler.
+ * cleanPageTitle ile ayni artik sozlugunu kullanir, ANCAK sayfalama eki
+ * ("- 10") desenini UYGULAMAZ. Aksi halde satirdaki gercek model adi kirpilir:
+ *   "9-3" -> "9", "9-5" -> "9", "Gen-2" -> "Gen"
+ * ve farkli modeller tek bir emsal havuzunda birlesir.
+ */
+export function cleanRowModel(raw: string): string {
+  return stripJunk(raw, TITLE_JUNK);
+}
+
+function stripJunk(raw: string, patterns: RegExp[]): string {
   if (!raw) return '';
   let workOrig = ' ' + raw + ' ';
   let workFolded = foldTurkish(workOrig);
 
-  for (const pat of TITLE_JUNK) {
+  for (const pat of patterns) {
     pat.lastIndex = 0;
     const spans: Array<[number, number]> = [];
     let m: RegExpExecArray | null;
@@ -332,9 +354,40 @@ export function engineKey(engineCode: string): string {
   if (prem) return `${prem[1]}${(prem[2] || '').slice(0, 1)}`;
   const disp = engineDisplacement(engineCode);
   const fuel = foldTurkish(deriveFuelFromEngineCode(engineCode) || 'x');
-  // "1.6 i-DTEC" ile "1.6i DTEC" ayni motoru tanimlar; anahtar hacim + yakittir.
-  if (disp !== null) return `${disp.toFixed(1)}|${fuel}`;
+  // "1.6 i-DTEC" ile "1.6i DTEC" ayni motoru tanimlar: aile tokeni normalize
+  // edilir ("i-" oneki dusurulur), bu yuzden ikisi ayni anahtari uretir.
+  //
+  // Aile tokeni anahtarin PARCASIDIR: yalniz hacim+yakit kullanilirsa
+  // "1.0 TCe" (turbo) ile "1.0 SCe" (atmosferik) ayni motor sayilir ve
+  // birebir (strict) eslesmede tek havuzda birlesir -> yanlis L1.
+  const family = engineFamilyToken(folded);
+  if (disp !== null) return `${disp.toFixed(1)}|${fuel}|${family}`;
   return `${folded.replace(/\s+/g, '')}|${fuel}`;
+}
+
+/**
+ * Ayni motor ailesinin farkli yazimlari tek forma indirgenir.
+ * DIKKAT: yalniz YAZIM farklari birlestirilir; teknik olarak farkli aileler
+ * (TCe/SCe, TDI/TSI, GDI/TGDI) ASLA ayni forma indirgenmez.
+ */
+const ENGINE_FAMILY_ALIASES: Record<string, string> = {
+  idtec: 'dtec',
+  ivtec: 'vtec',
+  vvti: 'vvt',
+  dcvvt: 'cvvt',
+};
+
+/** Motor kodundaki acik aile tokeni ("1.6 i-DTEC" / "1.6i DTEC" -> "dtec"); yoksa ''. */
+function engineFamilyToken(foldedEngineCode: string): string {
+  const tokens = foldedEngineCode.replace(/[-_]+/g, ' ').split(/\s+/);
+  for (const raw of tokens) {
+    const t = raw.replace(/[^a-z0-9]/g, '');
+    if (!t) continue;
+    const alias = ENGINE_FAMILY_ALIASES[t];
+    if (alias) return alias;
+    if (ENGINE_WORDS.has(t)) return ENGINE_FAMILY_ALIASES[t] || t;
+  }
+  return '';
 }
 
 /** Hacim (litre) cikarir; premium kodlarda guvenilir olmadigi icin null doner. */
@@ -375,6 +428,143 @@ export function isEngineCompatible(a: string, b: string, strict: boolean): boole
   if (da !== null && db !== null) return Math.abs(da - db) <= 0.3 + 1e-9;
 
   return false;
+}
+
+/* ------------------------------------------------------------------ */
+/* Tam model (FULL MODEL) kimligi                                      */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Sahibinden satirindaki TAM MODEL hucresini karsilastirilabilir forma getirir.
+ *
+ * Normalize edilen: unicode formu, Turkce buyuk/kucuk harf, fazla bosluk,
+ * noktalama cevresindeki anlamsiz bosluk, kod cozme artiklari.
+ * KORUNAN: gercek teknik/paket tokenlari (1.6, TDI, TCe, SCe, BlueMotion,
+ * Trend, Trend X, Emotion Plus...). Hicbir token SILINMEZ.
+ */
+export function normalizeFullModel(raw: string | null | undefined): string {
+  if (!raw) return '';
+  const src = String(raw).normalize('NFKC');
+  return foldTurkish(src)
+    .replace(/[─-▟�]/g, ' ')
+    .replace(/[^a-z0-9.+-]+/g, ' ')
+    .replace(/\s*\.\s*/g, '.')
+    .replace(/\s*-\s*/g, '-')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Birebir (L1) kimlik karsilastirmasi: NORMALIZE EDILMIS ESITLIK.
+ * Substring (A.includes(B) / B.includes(A)) KULLANILMAZ:
+ *   "Trend" != "Trend X",  "Emotion" != "Emotion Plus"
+ * Iki taraftan biri bossa birebir kimlik URETILMEZ (sahte exact yok).
+ */
+export function fullModelExact(a: string | null | undefined, b: string | null | undefined): boolean {
+  const na = normalizeFullModel(a);
+  const nb = normalizeFullModel(b);
+  if (!na || !nb) return false;
+  return na === nb;
+}
+
+/**
+ * Motor kodu ile paket adini tek bir TAM MODEL string'inde birlestirir.
+ * Paket alani motor bilgisini zaten tasiyorsa tekrar eklenmez.
+ *   ("1.6 TDCi", "Trend")                 -> "1.6 TDCi Trend"
+ *   ("", "1.6 TDI BlueMotion Comfortline") -> "1.6 TDI BlueMotion Comfortline"
+ */
+export function composeFullModel(
+  variant: string | null | undefined,
+  trim: string | null | undefined,
+): string {
+  const v = (variant || '').trim();
+  const t = (trim || '').trim();
+  if (!t) return v;
+  if (!v) return t;
+  const nv = normalizeFullModel(v);
+  const nt = normalizeFullModel(t);
+  if (!nv || nt === nv || nt.startsWith(`${nv} `)) return t;
+  return `${v} ${t}`;
+}
+
+/**
+ * TAM MODEL string'inin BASINDAKI acik motor imzasi.
+ *   "1.6 TDI BlueMotion Highline" -> "1.6 TDI"
+ *   "1.0 TCe Joy"                 -> "1.0 TCe"
+ *   "Joy" / "Active Plus"         -> ''   (paket adi motor DEGILDIR)
+ *
+ * Yalniz ANCHORED (bastaki) motor tokenlari kullanilir ve sonucun hacim ya da
+ * premium motor kodu icermesi zorunludur; aksi halde '' doner. Bu bir TAHMIN
+ * degildir: bilgi zaten ilanin kendi model hucresinde ACIKCA yazilidir.
+ */
+export function explicitEngineSignature(fullModel: string | null | undefined): string {
+  const code = splitVariantString(String(fullModel || '')).engineCode.trim();
+  if (!code) return '';
+  const folded = foldTurkish(code);
+  const hasDisplacement = /\d\.\d/.test(folded);
+  const hasPremiumCode = /\b\d{3}\s?[a-z]{0,3}\b/.test(folded);
+  return hasDisplacement || hasPremiumCode ? code : '';
+}
+
+/* ------------------------------------------------------------------ */
+/* Ilan basligindaki ACIK agir hasar beyani                            */
+/* ------------------------------------------------------------------ */
+
+/**
+ * YALNIZ acik (explicit) ve guclu hasar ifadeleri. Kelime siniri ile eslesir:
+ * "EKSPERTIZ" icindeki "pert" ESLESMEZ (olculen: 343 temiz ilan yanlislikla
+ * eleniyordu).
+ *
+ * KAPSAM DISI (bilerek):
+ *  - "hasar kayitli" / "hasarli" tek basina: agir hasar ile ayni siddet DEGILDIR.
+ *  - "boya" / "lokal" / "degisen": normal ikinci el ifadeleridir.
+ *  - Fiyatin dusuk ya da yuksek olmasi: satici motivasyonu bilinemez, fiyattan
+ *    hasar cikarimi YAPILMAZ.
+ *
+ * Sinyal yoksa sonuc "temiz" DEGIL, "bilinmiyor"dur.
+ */
+const STRONG_DAMAGE_PATTERNS: RegExp[] = [
+  // Turkce ekler bitisik gelir: "agir hasarli", "agir hasarlidir", "agir hasari",
+  // "agir hasar kayitli". "agir hasarSIZ" ise HASARSIZ demektir -> haric.
+  /\bagir\s+hasar(?!siz)/,
+  /\bagir\s+kaza(?!siz)/,
+  // "ekspertiz"/"expertiz" ESLESMEZ: kelime basi siniri "pert"ten once gelmez.
+  /\bpert(li|ini|inde|den)?\b/,
+  /\bhurda(ya|dan|lik)?\b/,
+  /\bhurda\d/,
+  /\bcekme\s+belge/,
+];
+
+/** Ilan basliginda ACIK agir hasar beyani var mi? */
+export function hasStrongDamageSignal(text: string | null | undefined): boolean {
+  const t = foldTurkish(String(text || ''));
+  if (!t) return false;
+  return STRONG_DAMAGE_PATTERNS.some((re) => re.test(t));
+}
+
+/* ------------------------------------------------------------------ */
+/* Kilometre hucresi                                                   */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Ilan satirinin KM hucresini sayiya cevirir.
+ *
+ * Fiyat ve kilometre AYRI DOM hucrelerinden okunur; bu yuzden sayisal degerin
+ * fiyata esit olmasi bir karisma belirtisi DEGILDIR (olculen: 488 gercek ilan
+ * yalnizca km == fiyat oldugu icin kilometresini kaybediyordu).
+ * Yil ile karisma korumasi ve ust sinir korunur.
+ */
+export function parseMileageCell(
+  raw: string | null | undefined,
+  year: number,
+  maxKm = 2_000_000,
+): number | null {
+  const d = String(raw || '').replace(/[^\d]/g, '');
+  if (!d) return null;
+  const km = parseInt(d, 10);
+  if (!Number.isFinite(km) || km < 0 || km > maxKm) return null;
+  if (km === year) return null;
+  return km;
 }
 
 /* ------------------------------------------------------------------ */
@@ -563,7 +753,9 @@ export function deriveFromSource(params: {
   // hucresi modeldir (varsa ikincisi motor+paket).
   let modelFromRow = '';
   if (!model) {
-    const rowModel = cleanPageTitle(String(params.listingRowModel || ''));
+    // Satir hucresi SAYFA BASLIGI DEGILDIR: sayfalama eki temizligi burada
+    // uygulanmaz, aksi halde "9-3"/"Gen-2" gibi gercek model adlari kirpilir.
+    const rowModel = cleanRowModel(String(params.listingRowModel || ''));
     if (rowModel) {
       const fromRow = splitModelEngineTrim(`${make} ${rowModel}`, make);
       if (fromRow.model) {

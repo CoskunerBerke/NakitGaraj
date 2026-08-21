@@ -2,10 +2,14 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import { PRICING_LIMITS, clamp } from './pricing-config';
 import {
+  composeFullModel,
   deriveFuelFromEngineCode,
   deriveFuelType,
   deriveTransmission,
+  explicitEngineSignature,
   foldTurkish,
+  fullModelExact,
+  hasStrongDamageSignal,
   isEngineCompatible,
   normalizeBodyType,
   splitVariantString,
@@ -123,7 +127,8 @@ interface RawCandidate {
   scrapedAt: Date | null;
 }
 
-const DAMAGE_TOKENS = ['agir hasar', 'agir hasarli', 'pert', 'hasar kayitli', 'hasarli'];
+/* Agir hasar tespiti icin bkz. listing-attributes.hasStrongDamageSignal:
+   yalniz ACIK ve guclu beyanlar, kelime siniriyla ("EKSPERTIZ" eslesmez). */
 
 @Injectable()
 export class EmsalMatcherService {
@@ -142,10 +147,18 @@ export class EmsalMatcherService {
     return clamp(w, PRICING_LIMITS.freshnessFloorWeight, 1);
   }
 
+  /**
+   * Emsal havuzuna alinamayacak kadar ACIK agir hasar beyani var mi?
+   *
+   * Ilan basligi VARSA metin kazanir: `isDamaged` bayragi eski (kelime sinirsiz)
+   * kurala gore uretilmis turetilmis veridir ve "EKSPERTIZ" iceren temiz
+   * ilanlari hasarli isaretler. Baslik yoksa import bayragina dusulur.
+   * Bir sonraki rebuild'de bayrak da ayni kurali kullanacaktir.
+   */
   private isDamagedListing(r: RawCandidate): boolean {
-    if (r.isDamaged === true) return true;
-    const t = foldTurkish(r.rawTitle || '');
-    return DAMAGE_TOKENS.some((tok) => t.includes(tok));
+    const title = (r.rawTitle || '').trim();
+    if (title) return hasStrongDamageSignal(title);
+    return r.isDamaged === true;
   }
 
   /** Ilanin motor kodu: canonicalVariant > rawVariant */
@@ -153,9 +166,26 @@ export class EmsalMatcherService {
     return (r.canonicalVariant || r.rawVariant || '').trim();
   }
 
+  /** Ilanin TAM MODEL string'i (motor + paket, tekrarsiz). */
+  private fullModelOf(r: RawCandidate): string {
+    return composeFullModel(this.engineOf(r), r.canonicalTrim || '');
+  }
+
+  /**
+   * Motor KANITI: ayri bir motor kodu alani yoksa, ilanin kendi TAM MODEL
+   * hucresindeki ACIK motor imzasi kullanilir ("1.6 TDI BlueMotion Highline"
+   * -> "1.6 TDI"). Uydurma degildir; bilgi ilanda zaten yazilidir. Kalici
+   * veriye yazilmaz, yalnizca eslesme aninda kullanilir.
+   */
+  private engineEvidenceOf(r: RawCandidate): string {
+    return this.engineOf(r) || explicitEngineSignature(r.canonicalTrim || '');
+  }
+
   private fuelOf(r: RawCandidate): string {
     if (r.canonicalFuelType && r.canonicalFuelType.trim()) return r.canonicalFuelType.trim();
-    return deriveFuelFromEngineCode(this.engineOf(r)) || deriveFuelType(r.rawTitle || '');
+    return (
+      deriveFuelFromEngineCode(this.engineEvidenceOf(r)) || deriveFuelType(r.rawTitle || '')
+    );
   }
 
   private transmissionOf(r: RawCandidate): string {
@@ -358,12 +388,19 @@ export class EmsalMatcherService {
     const split = splitVariantString(variant || '');
     const paramEngine = split.engineCode;
     const paramTrim = (trim || '').trim() || split.trim;
+    // Hedefin TAM MODEL kimligi (motor + paket, tekrarsiz). Birebir (L1)
+    // eslesme bu string uzerinden NORMALIZE EDILMIS ESITLIK ile yapilir.
+    const targetFullModel = composeFullModel(paramEngine, paramTrim);
+    // Motor kodu alani bos olsa bile TAM MODEL kendi icinde motor tasiyor
+    // olabilir ("1.6 TDI BlueMotion Comfortline"). Bu ACIK kanit kullanilir.
+    const paramEngineEvidence = paramEngine || explicitEngineSignature(targetFullModel);
+    const targetHasEngineSignature = Boolean(explicitEngineSignature(targetFullModel));
     // Yakit oncelikle MOTOR KODUNDAN turetilir: motor kodu, emsal tablosuyla
     // birebir ayni metinden (sayfa basligi) gelir. Katalogtaki yakit etiketi
     // yalnizca motor kodundan yakit cikarilamadiginda kullanilir; aksi halde
     // katalog kaynakli hatali bir etiket dogru emsalleri havuzdan atabilir.
     const paramFuel =
-      deriveFuelFromEngineCode(paramEngine) || (params.fuelType || '').trim() || '';
+      deriveFuelFromEngineCode(paramEngineEvidence) || (params.fuelType || '').trim() || '';
     // Kasa tipi: musteri/katalog girdisi merkezi normalizer'dan gecer.
     // UNKNOWN ise kasa uzerinden hicbir eleme veya exactness URETILMEZ (CASE D).
     const requestedBody = normalizeBodyType(params.bodyType);
@@ -426,13 +463,35 @@ export class EmsalMatcherService {
       for (const r of candidates) {
         if (Math.abs(r.year - year) > cfg.yearSpan) continue;
 
-        const engine = this.engineOf(r);
-        if (paramEngine) {
+        // BIREBIR kimlik (Seviye 1) TAM MODEL icindeki acik motor imzasini da
+        // kanit sayar. Alt seviyeler (genis fallback) eskisi gibi YALNIZ ayri
+        // motor kodu alanina bakar; boylece motoru gercekten bilinmeyen ilanlar
+        // genis havuzlara sessizce sizmaz.
+        const targetEngine = cfg.level === 1 ? paramEngineEvidence : paramEngine;
+        const engine = cfg.level === 1 ? this.engineEvidenceOf(r) : this.engineOf(r);
+        if (targetEngine) {
           if (!engine) continue;
-          if (!isEngineCompatible(paramEngine, engine, cfg.strictEngine)) continue;
+          if (!isEngineCompatible(targetEngine, engine, cfg.strictEngine)) continue;
         } else if (cfg.strictEngine) {
-          // Hedef aracin motoru bilinmiyorsa Seviye 1 (birebir motor) uygulanamaz.
+          // Hedefin motoru ne alanda ne de TAM MODEL icinde bilinmiyorsa
+          // Seviye 1 (birebir motor) uygulanamaz.
           continue;
+        }
+
+        // BIREBIR KIMLIK: marka + seri + TAM MODEL normalize esitligi.
+        // Substring KULLANILMAZ: "Trend" != "Trend X", "Emotion" != "Emotion Plus".
+        // Hedef hic paket beyan etmediyse (yalniz motor secildi) tam model
+        // esitligi ARANMAZ; o durumda kimlik marka+seri+birebir motordur.
+        if (cfg.level === 1 && foldedParamTrim) {
+          // Taraflardan biri bossa sahte birebir kimlik URETILMEZ.
+          if (!fullModelExact(targetFullModel, this.fullModelOf(r))) continue;
+          if (!targetHasEngineSignature) {
+            // TAM MODEL motor tasimiyorsa (orn. "Joy"), motor ayrimini
+            // canonicalEngine yapmalidir: 1.0 TCe Joy != 1.0 SCe Joy.
+            const candidateEngine = this.engineOf(r);
+            if (!paramEngine || !candidateEngine) continue;
+            if (!isEngineCompatible(paramEngine, candidateEngine, true)) continue;
+          }
         }
 
         // CASE A: hedef kasa BILINIYOR + adayin kasasi BILINIYOR + FARKLI
@@ -462,9 +521,9 @@ export class EmsalMatcherService {
           listingTrim.includes(foldedParamTrim) ||
           foldedParamTrim.includes(listingTrim);
 
-        if (cfg.level === 1 && foldedParamTrim && listingTrim && !trimHit) continue;
-        // Hedef aracin motoru bilinmiyorsa paketi ayni olmayan ilanlar havuza
-        // alinmaz; aksi halde tum motor secenekleri tek fiyatta birlesir.
+        // Seviye 1'de paket kontrolu TAM MODEL esitligiyle zaten yapildi.
+        // Hedef aracin motor kodu bilinmiyorsa paketi ayni olmayan ilanlar
+        // havuza alinmaz; aksi halde tum motor secenekleri tek fiyatta birlesir.
         if (!paramEngine && foldedParamTrim && !trimHit) continue;
         if (trimHit) trimMatchedCount++;
 
@@ -477,7 +536,9 @@ export class EmsalMatcherService {
           level: cfg.level,
           make,
           model,
-          paramEngine,
+          // Motor kanitini gecer: alan bos olsa bile TAM MODEL icindeki acik
+          // imza gecerli motor bilgisidir.
+          paramEngine: paramEngineEvidence,
           paramTrim,
           paramFuel,
           paramBody,
@@ -613,7 +674,9 @@ export class EmsalMatcherService {
       if (this.transmissionOf(r)) transKnownCount++;
       if (paramFuel && !this.fuelOf(r)) quality *= 0.8;
       const exactEngine =
-        !!paramEngine && !!this.engineOf(r) && isEngineCompatible(paramEngine, this.engineOf(r), true);
+        !!paramEngine &&
+        !!this.engineEvidenceOf(r) &&
+        isEngineCompatible(paramEngine, this.engineEvidenceOf(r), true);
       if (paramEngine && !exactEngine) quality *= 0.55;
       if (exactEngine) exactEngineCount++;
 
@@ -664,7 +727,9 @@ export class EmsalMatcherService {
     }
 
     if (!paramEngine) {
-      // Hedef aracin motoru bilinmiyorsa fiyat guveni ustten sinirlanir.
+      // Hedef aracin motoru NE alanda NE DE tam model icinde biliniyorsa fiyat
+      // guveni ustten sinirlanir. Tam model acik motor imzasi tasiyorsa
+      // (orn. "1.6 TDI BlueMotion Comfortline") bu sinir uygulanmaz.
       confidenceScore = Math.min(confidenceScore, 70);
       isLimitedComps = true;
     }
