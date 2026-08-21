@@ -7,6 +7,36 @@ import {
   foldTurkish,
 } from '../evaluation/listing-attributes';
 
+/**
+ * Musteriye SUNULAMAYACAK kadar bozuk model adi mi?
+ *
+ * Yalnizca ayristirma artigi olan adlar elenir: sayfa basligi kalintilari
+ * ("... sahibinden.com'da", "Fiyatlari", "Modelleri", ".html"), kod cozme
+ * bozulmasi tasiyan tokenlar ve hic harf/rakam icermeyen adlar.
+ *
+ * MODEL ADININ SONUNDAKI "-<rakam>" ARTIK ELENMEZ. O desen sayfa numarasi
+ * ("... - 10") icin yazilmisti, ama gercek model kimliginin parcasi olabilir:
+ *   Saab 9-3 · Saab 9-5 · Proton Gen-2
+ * Olculen (final korpus, 841 marka/model): bu desen yalniz bu UC gercek modeli
+ * yakaliyordu, tek bir sayfa-numarasi artigi bile yakalamiyordu. Sayfa numarasi
+ * temizligi zaten ICE AKTARIMDA ve yalniz SAYFA BASLIGI yolunda yapilir
+ * (listing-attributes: cleanPageTitle vs cleanRowModel).
+ *
+ * Kalici `canonicalModel` degeri artik gercek arac modelidir; okuma katmani
+ * ice aktarim temizligini TEKRARLAMAZ.
+ */
+export function isUnusableModelName(name: string): boolean {
+  const raw = String(name ?? '');
+  const t = foldTurkish(raw);
+  if (!t.trim()) return true;
+  if (t.includes('sahibinden') || t.includes('fiyatlar') || t.includes('modelleri')) return true;
+  if (t.includes('.html')) return true;
+  if (/[─-▟�]/.test(raw)) return true;
+  // Hic harf/rakam tasimayan ad (orn. "_ -") gercek bir model degildir.
+  if (!/[a-z0-9]/.test(t)) return true;
+  return false;
+}
+
 @Injectable()
 export class VehicleService {
   constructor(
@@ -121,16 +151,10 @@ export class VehicleService {
       );
     }
 
-    const filtered = models.filter(m => {
-      const lower = m.name.toLowerCase();
-      return (
-        !lower.includes('sahibinden') &&
-        !lower.includes('fiyatları') &&
-        !lower.includes('.html') &&
-        !lower.includes('modelleri') &&
-        !/-\s*\d+$/.test(lower)
-      );
-    });
+    // Ayristirma artigi tasiyan katalog adlari musteriye sunulmaz. Filtre
+    // gozlenen katalogla AYNI yardimciyi kullanir: iki okuma yolunun ayrisip
+    // farkli modelleri elemesi engellenir.
+    const filtered = models.filter((m) => !isUnusableModelName(m.name));
 
     // Gercek ilani olan ama katalogda Model kaydi bulunmayan modeller
     // (orn. 8.494 ilanlik Fiat Egea) musteri formunda kaybolmaz.
@@ -469,14 +493,8 @@ export class VehicleService {
     }
     // Ayristirma artigi tasiyan model adlari musteriye SUNULMAZ (sessizce
     // yanlis model uretmemek icin; katalog listesine uygulanan filtrenin aynisi).
-    const isJunk = (name: string) => {
-      const t = foldTurkish(name);
-      return t.includes('sahibinden') || t.includes('fiyatlar') || t.includes('modelleri') ||
-        t.includes('.html') || /-\s*\d+$/.test(t) ||
-        /[─-▟�]/.test(name) || !/[a-z0-9]/.test(t);
-    };
     const out = [...merged.values()]
-      .filter((m) => m.listingCount > 0 && !isJunk(m.displayLabel))
+      .filter((m) => m.listingCount > 0 && !isUnusableModelName(m.displayLabel))
       .sort((a, b) => b.listingCount - a.listingCount || a.displayLabel.localeCompare(b.displayLabel, 'tr'));
     await this.cache.set(cacheKey, out, 3600);
     return out;
