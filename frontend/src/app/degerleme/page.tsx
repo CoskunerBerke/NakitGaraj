@@ -38,6 +38,7 @@ import { useLanguage } from '../../context/LanguageContext';
 import ShinyText from '../../components/reactbits/ShinyText';
 import { formatTL } from '../../lib/format';
 import { siteConfig } from '../../config/site-config';
+import { telHref } from '../../lib/contact';
 
 /**
  * MUSTERIYE GOSTERILECEK ACIKLAMALARI SUZ.
@@ -314,6 +315,12 @@ export default function ValuationWizard() {
     setPhone(cleanedPhone);
     setShowUserModal(false);
   };
+
+  // Isletme telefonu YAPILANDIRMADAN gelir ve zorunlu degildir.
+  // Yapilandirilmamissa arama CTA'si HIC RENDER EDILMEZ: bos `tel:`
+  // baglantisi ya da yer tutucu numara gostermek yerine ogeyi gizleriz.
+  // Her uc ekranin da telefon disi calisan ikinci bir eylemi vardir.
+  const supportTelHref = telHref(siteConfig.supportPhone);
 
   // Hata durumu yalnızca kullanıcı alana dokunduktan veya formu gönderdikten sonra gösterilir.
   const isPhoneValid = TR_PHONE_PATTERN.test(phone.replace(/[^0-9]/g, ''));
@@ -2443,13 +2450,15 @@ function SearchableCombobox({
                 </p>
                 {/* Musteri bilgileri zaten alindi; bu yuzden asil eylem iletisim. */}
                 <div className="flex flex-col sm:flex-row gap-3 mt-2 w-full max-w-sm">
-                  <a
-                    data-testid="insufficient-contact-cta"
-                    href={`tel:${siteConfig.supportPhone}`}
-                    className="flex-1 bg-brand-orange hover:bg-brand-orange/90 text-white text-xs font-bold px-6 py-3 rounded-xl transition-all cursor-pointer text-center"
-                  >
-                    Uzmanımızı Arayın
-                  </a>
+                  {supportTelHref && (
+                    <a
+                      data-testid="insufficient-contact-cta"
+                      href={supportTelHref}
+                      className="flex-1 bg-brand-orange hover:bg-brand-orange/90 text-white text-xs font-bold px-6 py-3 rounded-xl transition-all cursor-pointer text-center"
+                    >
+                      Uzmanımızı Arayın
+                    </a>
+                  )}
                   <button
                     type="button"
                     onClick={() => setStep(1)}
@@ -2491,13 +2500,15 @@ function SearchableCombobox({
                   Bıraktığınız telefon numarası üzerinden ekibimiz sizinle iletişime geçecek.
                 </p>
                 <div className="flex flex-col sm:flex-row gap-3 mt-2 w-full max-w-sm">
-                  <a
-                    data-testid="manual-contact-cta"
-                    href={`tel:${siteConfig.supportPhone}`}
-                    className="flex-1 bg-brand-orange hover:bg-brand-orange/90 text-white text-xs font-bold px-6 py-3 rounded-xl transition-all cursor-pointer text-center"
-                  >
-                    Hemen Uzmanımızı Arayın
-                  </a>
+                  {supportTelHref && (
+                    <a
+                      data-testid="manual-contact-cta"
+                      href={supportTelHref}
+                      className="flex-1 bg-brand-orange hover:bg-brand-orange/90 text-white text-xs font-bold px-6 py-3 rounded-xl transition-all cursor-pointer text-center"
+                    >
+                      Hemen Uzmanımızı Arayın
+                    </a>
+                  )}
                   <button
                     type="button"
                     onClick={() => setStep(1)}
@@ -2557,10 +2568,10 @@ function SearchableCombobox({
                   >
                     Tekrar Dene
                   </button>
-                  {!valuationResult.networkError && (
+                  {!valuationResult.networkError && supportTelHref && (
                     <a
                       data-testid="error-contact-cta"
-                      href={`tel:${siteConfig.supportPhone}`}
+                      href={supportTelHref}
                       className="flex-1 border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-white/5 text-zinc-700 dark:text-zinc-200 text-xs font-bold px-6 py-3 rounded-xl transition-all cursor-pointer text-center"
                     >
                       Uzmanımızı Arayın
@@ -3160,7 +3171,7 @@ function SearchableCombobox({
                       Numara 5 ile başlamalı ve 10 veya 11 haneli olmalıdır.
                     </p>
                   ) : (
-                    <p id="welcome-phone-hint" className="text-[10px] text-zinc-500 dark:text-zinc-400 mt-1">Örnek: 0532 123 45 67</p>
+                    <p id="welcome-phone-hint" className="text-[10px] text-zinc-500 dark:text-zinc-400 mt-1">Örnek: 05XX XXX XX XX</p>
                   )}
                 </div>
 

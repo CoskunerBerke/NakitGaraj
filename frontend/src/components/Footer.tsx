@@ -4,13 +4,19 @@ import React from 'react';
 import Link from 'next/link';
 import { MapPin, Phone } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
+import { siteConfig } from '../config/site-config';
+import { formatPhoneDisplay, telHref } from '../lib/contact';
 
 export default function Footer() {
   const { t } = useLanguage();
+  const phoneHref = telHref(siteConfig.supportPhone);
+  // Iletisim sutunu yapilandirilmamissa hic render edilmez; grid de
+  // bos sutun birakmamak icin daralir.
+  const showContact = Boolean(siteConfig.address || phoneHref);
 
   return (
     <footer id="contact" className="w-full bg-[#070709] border-t border-zinc-800/80 py-12 px-4 md:px-8 mt-auto text-white">
-      <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-8">
+      <div className={`max-w-7xl mx-auto grid grid-cols-1 gap-8 ${showContact ? 'md:grid-cols-3' : 'md:grid-cols-2'}`}>
         <div className="flex flex-col gap-4">
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 rounded-lg bg-brand-orange flex items-center justify-center">
@@ -79,30 +85,47 @@ export default function Footer() {
           UYDURULMAZ.
         */}
 
-        <div>
-          <h4 className="text-sm font-bold text-white uppercase tracking-wider mb-4">İLETİŞİM</h4>
-          <ul className="flex flex-col gap-3.5 text-xs">
-            <li className="flex items-start gap-2.5 text-zinc-300">
-              <div className="w-7 h-7 rounded-lg bg-brand-orange/10 flex items-center justify-center text-brand-orange border border-brand-orange/20 shrink-0 mt-0.5">
-                <MapPin className="w-4 h-4" />
-              </div>
-              <span className="font-medium text-xs text-zinc-300 leading-relaxed">
-                Mevlana Bulvarı Kızılırmak Mahallesi 150/2 Çukurambar, Ankara, Turkey
-              </span>
-            </li>
-            <li className="flex items-center gap-2.5">
-              <div className="w-7 h-7 rounded-lg bg-brand-orange/10 flex items-center justify-center text-brand-orange border border-brand-orange/20 shrink-0">
-                <Phone className="w-4 h-4" />
-              </div>
-              <a
-                href="tel:+905521529292"
-                className="text-white font-black text-base hover:text-brand-orange transition-colors tracking-tight"
-              >
-                +90 552 152 92 92
-              </a>
-            </li>
-          </ul>
-        </div>
+        {/*
+          ILETISIM BLOGU ARTIK YAPILANDIRMADAN GELIR.
+
+          Onceki surumde adres ve telefon Footer icine SABIT yazilmisti; ustelik
+          adres siteConfig.address ile celisiyordu. Bu urun baska isletmelere
+          satildigi icin hicbir gercek iletisim verisi kaynak koda gomulmez.
+
+          Yapilandirilmamis alan GOSTERILMEZ: yer tutucu numara/adres
+          URETILMEZ ve bos `tel:` baglantisi render EDILMEZ.
+        */}
+        {showContact && (
+          <div>
+            <h4 className="text-sm font-bold text-white uppercase tracking-wider mb-4">İLETİŞİM</h4>
+            <ul className="flex flex-col gap-3.5 text-xs">
+              {siteConfig.address && (
+                <li className="flex items-start gap-2.5 text-zinc-300">
+                  <div className="w-7 h-7 rounded-lg bg-brand-orange/10 flex items-center justify-center text-brand-orange border border-brand-orange/20 shrink-0 mt-0.5">
+                    <MapPin className="w-4 h-4" />
+                  </div>
+                  <span className="font-medium text-xs text-zinc-300 leading-relaxed">
+                    {siteConfig.address}
+                  </span>
+                </li>
+              )}
+              {phoneHref && (
+                <li className="flex items-center gap-2.5">
+                  <div className="w-7 h-7 rounded-lg bg-brand-orange/10 flex items-center justify-center text-brand-orange border border-brand-orange/20 shrink-0">
+                    <Phone className="w-4 h-4" />
+                  </div>
+                  <a
+                    data-testid="footer-phone"
+                    href={phoneHref}
+                    className="text-white font-black text-base hover:text-brand-orange transition-colors tracking-tight"
+                  >
+                    {formatPhoneDisplay(siteConfig.supportPhone)}
+                  </a>
+                </li>
+              )}
+            </ul>
+          </div>
+        )}
       </div>
       <div className="max-w-7xl mx-auto border-t border-zinc-800/60 mt-8 pt-6 flex flex-col sm:flex-row justify-between items-center gap-4">
         <p className="text-[11px] text-zinc-400">

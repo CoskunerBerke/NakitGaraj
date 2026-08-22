@@ -29,7 +29,7 @@ async function main() {
         licensePlate: '34ABC123',
         firstName: 'Test',
         lastName: 'Musteri',
-        phone: '05350379074',
+        phone: '05550000000', // kurgusal test numarasi (gercek numara kullanilmaz)
         userDesiredPrice: desiredPrice,
         sellingTimeline: 'hemen'
       });
