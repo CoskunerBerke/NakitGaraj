@@ -34,7 +34,52 @@ export function isUnusableModelName(name: string): boolean {
   if (/[─-▟�]/.test(raw)) return true;
   // Hic harf/rakam tasimayan ad (orn. "_ -") gercek bir model degildir.
   if (!/[a-z0-9]/.test(t)) return true;
+
+  // SAYFA BASLIGI KALINTI SINIFI (olculdu, asagida).
+  //
+  // Sahibinden sayfa basligi "<Model> 2.El Arabalar ve Satılık Sıfır Km
+  // Otomobil ..." bicimindedir. Eski bir katalog tohumlama yolu bu basligi
+  // farkli noktalardan kirparak Model SATIRLARI uretmis:
+  //   "500e 2.El Arabalar ve S"
+  //   "500e 2.El Arabalar ve Satılık Sıfır Km Otomobil"
+  //   "500e ve"            (baslik "ve" baglacindan hemen sonra kirpilmis)
+  //   "Qute RE 60 ve"
+  // Ham ilan verisi (RawVehicleListing.canonicalModel) TEMIZDIR: ayni
+  // araclar orada dogru adla durur (Abarth -> "500e", Bajaj -> "Qute RE 60").
+  //
+  // Olculen (382 katalog Model adi + 841 gozlenen marka/model cifti):
+  // asagidaki imzalar TAM OLARAK bu 4 katalog artigini yakalar; gozlenen
+  // veride 0 isabet, mesru kayip 0 (Saab 9-3/9-5, Proton Gen-2, 500e,
+  // Qute RE 60 dahil hicbiri takilmaz).
+  if (t.includes('2.el') || t.includes('satilik') || t.includes('sifir km') || t.includes('arabalar')) {
+    return true;
+  }
+
+  // Kirpilmis baglac artigi: COK tokenli adin SON tokeni YALIN "ve"/"&" ise.
+  // Bu, yukaridaki baslik sinifinin baglactan hemen sonra kirpilmis halidir.
+  // Genel bir "ve ile biten kelime" yasagi DEGILDIR: token esitligi arandigi
+  // icin "Evoque" gibi -ve/-e ile biten adlar ya da tek tokenli adlar
+  // etkilenmez. Hicbir gercek arac modeli yalin bir baglacla bitmez.
+  const tokens = t.trim().split(/\s+/);
+  const last = tokens[tokens.length - 1];
+  if (tokens.length > 1 && (last === 've' || last === '&')) return true;
+
   return false;
+}
+
+/**
+ * Ad, TEK BASINA bir kasa etiketi mi? ("Coupe", "Sedan", "Cabrio", ...)
+ *
+ * Kasa adi tek basina model OLMAYABILIR ama OLABILIR de: ayni katalogda hem
+ * Abarth "Coupe" (artik: 500e'nin donanimi model sanilmis, ham veride 0 ilan)
+ * hem Fiat "Coupe" (GERCEK tarihi model, ham veride 8 ilan) var. Bu yuzden bu
+ * yardimci tek basina eleme YAPMAZ; okuma katmani gercek ilan destegiyle
+ * birlikte karar verir (bkz. getModels). Ada bakip "Coupe'yi sil" demek
+ * Fiat'in gercek modelini yok ederdi.
+ */
+export function isBodyTypeOnlyModelName(name: string): boolean {
+  const t = foldTurkish(String(name ?? '')).trim();
+  return Object.values(BODY_TYPE_LABELS).some((label) => foldTurkish(label) === t);
 }
 
 @Injectable()
@@ -153,8 +198,8 @@ export class VehicleService {
 
     // Ayristirma artigi tasiyan katalog adlari musteriye sunulmaz. Filtre
     // gozlenen katalogla AYNI yardimciyi kullanir: iki okuma yolunun ayrisip
-    // farkli modelleri elemesi engellenir.
-    const filtered = models.filter((m) => !isUnusableModelName(m.name));
+    // farkli modelleri elemesi engellenmis olur.
+    let filtered = models.filter((m) => !isUnusableModelName(m.name));
 
     // Gercek ilani olan ama katalogda Model kaydi bulunmayan modeller
     // (orn. 8.494 ilanlik Fiat Egea) musteri formunda kaybolmaz.
@@ -162,9 +207,31 @@ export class VehicleService {
       where: { id: brandId }, select: { name: true },
     }).catch(() => null);
     const makeName = this.decodeObservedId(brandId) || brand?.name;
-    const merged = makeName
-      ? this.mergeObserved(filtered, await this.getObservedModels({ make: makeName }))
-      : filtered;
+
+    let merged = filtered;
+    if (makeName) {
+      const observed = await this.getObservedModels({ make: makeName });
+
+      // KASA ADI TEK BASINA MODEL DEGILSE GIZLENIR — GERCEK ILAN DESTEGIYLE.
+      //
+      // Ayni tohumlama hatasi, donanim seviyesini model sanip "Coupe" adinda
+      // katalog satiri da uretmis (Abarth: tek spec, ham veride model olarak
+      // 0 ilan; "Coupe" orada 500e'nin DONANIMI). Ada bakarak eleme YAPILMAZ,
+      // cunku ayni ad gercek model de olabilir: Fiat "Coupe" tarihi bir
+      // modeldir ve ham veride 8 gercek ilani vardir.
+      //
+      // Kural bu yuzden veri gudumludur: kasa etiketiyle AYNI ada sahip
+      // katalog modeli, o marka icin gozlenen (gercek ilan) modeller arasinda
+      // YOKSA gizlenir. Olculen: tum katalogda adi tam kasa etiketi olan
+      // yalniz 2 satir var — Abarth "Coupe" (0 ilan -> gizlenir) ve
+      // Fiat "Coupe" (8 ilan -> kalir). Marka adi kodda GECMEZ.
+      const observedNames = new Set(observed.map((o: any) => foldTurkish(String(o.value ?? ''))));
+      filtered = filtered.filter(
+        (m) => !(isBodyTypeOnlyModelName(m.name) && !observedNames.has(foldTurkish(m.name))),
+      );
+
+      merged = this.mergeObserved(filtered, observed);
+    }
 
     await this.cache.set(cacheKey, merged, 3600);
     return merged;
