@@ -80,7 +80,26 @@ export class EvaluationService {
     }).catch((err) => console.error('Telegram notification error:', err));
 
     return {
-      status: 'SUCCESS',
+      /**
+       * HESAPLANAN DURUM AYNEN AKTARILIR.
+       *
+       * Onceki surumde burada 'SUCCESS' SABIT yaziliyordu; boylece guvenlik
+       * katmaninin MANUEL'e kapattigi arac (yapisal hasar, airbag, motor/
+       * sanziman arizasi, Tramer >= %20, 3+ degisen panel, kasa belirsizligi,
+       * Seviye 3, dusuk emsal/guven, musteri tabani catismasi) musteriye
+       * TAMAMLANMIS OTOMATIK TEKLIF olarak gosteriliyordu: istemci yalnizca
+       * `status` alanina bakar ve MANUAL_EVALUATION_REQUIRED ekrani hic
+       * calismazdi. `results.requiresManualApproval` yanitin icinde tasiniyor
+       * olsa da hicbir istemci bu alani okumuyor.
+       *
+       * Kayit ve bildirim davranisi DEGISMEZ: degerleme yine kaydedilir ve
+       * `evaluationId` doner; yalnizca durum sozlesmesi geri gelir.
+       *
+       * `message` BILEREK aktarilmaz: cekirdekteki metin dahili ("dusuk
+       * segment veya yuksek riskli...") ve musteriye gosterilecek dille
+       * yazilmamistir. Istemci kendi musteri dostu metnini kullanir.
+       */
+      status: res.status,
       evaluationId: evaluation.id,
       persisted: true,
       vehicle: res.vehicle,
@@ -294,18 +313,46 @@ export class EvaluationService {
       };
     }
 
-    // Degerlemenin hedefi: once musterinin GOZLENEN secimi, yoksa katalog.
+    /**
+     * DEGERLEMENIN HEDEFI = MUSTERININ GERCEKTEN BEYAN ETTIGI ARAC.
+     *
+     * Katalog (VehicleSpecification) yalnizca TEKNIK ZENGINLESTIRME kaynagidir
+     * (hp/tork/motor hacmi). Musteri bir motoru/paketi SECMEDIYSE o alan
+     * BILINMIYOR'dur; katalogtan doldurulmaz.
+     *
+     * Onceki surumde `spec?.variant?.name` / `spec?.package?.name` kosulsuz
+     * yedek olarak kullaniliyordu. Spec ise arama zincirinin son basamaginda
+     * (Fallback 3: `findFirst({ manufacturerId, modelId })`) o modele ait
+     * RASTGELE bir satirdi. Sonuc, olculmus gercek veriyle:
+     *   - Renault Megane 2017 (1.243 ilan) icin musteriye motor
+     *     "Megane E-Tech Electric" gosteriliyor, 937.707 TL piyasa /
+     *     860.000 TL nakit uretiliyordu (arac elektrikli DEGIL).
+     *   - Hyundai i20 / Citroen C-Elysee / Tesla Model Y -> paket
+     *     "AMG / M / Sport Line"; BMW 3 Serisi -> motor "Premium".
+     *   - Uydurma etiket emsal motorunda SERT FILTRE gibi calisip tum gercek
+     *     emsalleri eledigi icin Opel Astra 2012 (1.498 gercek ilan)
+     *     "Yeterli piyasa verisi bulunamadi" donuyordu. Korpusta >=20 emsali
+     *     olan 146 hedefin %47,3'u bu yuzden fiyat alamiyordu.
+     *
+     * Emsal motoru ayni ilkeyi KASA TIPI icin zaten uyguluyor
+     * (emsal-matcher.service.ts `bodySignalDropped`: "havuzda gorulmeyen
+     * etiket kanit degildir"). Burasi ayni ilkeyi motor/paket/yakit/sanziman
+     * icin kaynaginda uygular: kanit yoksa UNKNOWN, uydurma YOK.
+     *
+     * Marka/model DISARIDA kalir: musteri onlari acikca secti ve arama
+     * zincirinin her basamagi manufacturerId + modelId ile filtrelenir.
+     */
     const target = {
       make: observed.make || spec?.manufacturer?.name || '',
       model: observed.model || spec?.model?.name || '',
-      variant: observed.engine || spec?.variant?.name || '',
-      trim: observed.trim || spec?.package?.name || '',
+      variant: observed.engine || (dto.variantId ? spec?.variant?.name : '') || '',
+      trim: observed.trim || (dto.packageId ? spec?.package?.name : '') || '',
       bodyType:
         dto.observedBodyType === 'UNKNOWN'
           ? undefined
-          : dto.observedBodyType || spec?.bodyType?.name,
-      fuelType: spec?.fuelType?.name,
-      transmission: spec?.transmissionType?.name,
+          : dto.observedBodyType || (dto.bodyTypeId ? spec?.bodyType?.name : undefined),
+      fuelType: dto.fuelTypeId ? spec?.fuelType?.name : undefined,
+      transmission: dto.transmissionTypeId ? spec?.transmissionType?.name : undefined,
     };
 
     const aiAnalysis: string[] = [];
