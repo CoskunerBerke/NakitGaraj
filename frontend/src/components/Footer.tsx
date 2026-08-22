@@ -10,7 +10,7 @@ export default function Footer() {
 
   return (
     <footer id="contact" className="w-full bg-[#070709] border-t border-zinc-800/80 py-12 px-4 md:px-8 mt-auto text-white">
-      <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-4 gap-8">
+      <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-3 gap-8">
         <div className="flex flex-col gap-4">
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 rounded-lg bg-brand-orange flex items-center justify-center">
@@ -60,21 +60,24 @@ export default function Footer() {
           </ul>
         </div>
 
-        <div>
-          <h4 className="text-sm font-semibold text-white mb-4">Kurumsal</h4>
-          <ul className="flex flex-col gap-2.5 text-xs text-zinc-400">
-            <li>
-              <a href="#" className="hover:text-brand-orange transition-colors">
-                Hakkımızda
-              </a>
-            </li>
-            <li>
-              <a href="#" className="hover:text-brand-orange transition-colors">
-                Kullanım Şartları
-              </a>
-            </li>
-          </ul>
-        </div>
+        {/*
+          "Kurumsal" sutunu KALDIRILDI.
+
+          Icerdigi iki baglanti da olu hedefe (bos capa) gidiyordu:
+          "Hakkimizda" ve "Kullanim Sartlari". Projede bu iceriklerin HICBIRI
+          yok — ne sayfa/route ne de metin (dogrulandi: yalnizca /, /degerleme,
+          /konsinye public route). Olu baglanti gostermek yerine
+          baglanti gosterilmiyor.
+
+          Var olan TEK gercek hukuki metin KVKK Aydinlatma Metni'dir ve
+          /degerleme ile /konsinye sihirbazlarinda modal olarak sunulur; ayri
+          bir route'u yoktur. KVKK, "Kullanim Sartlari" DEGILDIR — biri
+          digerinin yerine baglanamaz.
+
+          GERCEK icerik yazildiginda (Hakkimizda sayfasi, Kullanim Sartlari,
+          istenirse KVKK icin ayri route) bu sutun geri eklenmelidir. Icerik
+          UYDURULMAZ.
+        */}
 
         <div>
           <h4 className="text-sm font-bold text-white uppercase tracking-wider mb-4">İLETİŞİM</h4>
