@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { HelpCircle, Check, X, Search, Clock, RefreshCw, Car } from 'lucide-react';
+import { formatKm } from '../../../../lib/format';
 
 const API_BASE = typeof window !== 'undefined'
   ? `http://${window.location.hostname}:3001/api`
@@ -83,6 +84,8 @@ export default function VehicleRequestsPage() {
       req.brand.toLowerCase().includes(searchTerm.toLowerCase()) ||
       req.model.toLowerCase().includes(searchTerm.toLowerCase()) ||
       (req.email && req.email.toLowerCase().includes(searchTerm.toLowerCase())) ||
+      (req.firstName && req.firstName.toLowerCase().includes(searchTerm.toLowerCase())) ||
+      (req.lastName && req.lastName.toLowerCase().includes(searchTerm.toLowerCase())) ||
       (req.phone && req.phone.includes(searchTerm));
 
     const matchesStatus =
@@ -101,7 +104,9 @@ export default function VehicleRequestsPage() {
             Araç Ekleme Talepleri
           </h1>
           <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">
-            Kullanıcıların sitemizde bulamayıp talep ettiği marka ve modeller.
+            Kullanıcıların sitemizde bulamayıp talep ettiği marka ve modeller ile
+            yeterli piyasa verisi bulunamadığı için uzman değerlendirmesi bekleyen
+            değerleme talepleri.
           </p>
         </div>
 
@@ -178,16 +183,40 @@ export default function VehicleRequestsPage() {
                     className="hover:bg-zinc-50/50 dark:hover:bg-white/2 transition-colors"
                   >
                     <td className="py-4 px-6 font-bold text-zinc-900 dark:text-white">
-                      {req.brand} {req.model}
+                      <div>{req.brand} {req.model}</div>
+                      {/*
+                        KAYIT KAYNAGI. Yetersiz veri lead'i, musterinin kendi
+                        katalog talebiyle ayni listede durur ama AYNI SEY
+                        DEGILDIR: burada musteri degerleme yapti ve piyasa
+                        verisi yetmedi. Dahili eslesme kodlari GOSTERILMEZ.
+                      */}
+                      {req.source === 'INSUFFICIENT_VALUATION' && (
+                        <div
+                          data-testid="lead-source-badge"
+                          className="mt-1 inline-block text-[9px] font-extrabold px-2 py-0.5 rounded-md uppercase border bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20"
+                        >
+                          Yeterli piyasa verisi bulunamadı — uzman değerlendirmesi gerekli
+                        </div>
+                      )}
+                      {req.mileage != null && (
+                        <div className="text-[10px] text-zinc-500 font-normal font-mono mt-0.5">
+                          {formatKm(req.mileage)}
+                        </div>
+                      )}
                     </td>
                     <td className="py-4 px-6 text-zinc-600 dark:text-zinc-300">
                       {req.year || '-'}
                     </td>
                     <td className="py-4 px-6 text-zinc-600 dark:text-zinc-300 max-w-xs">
+                      {(req.firstName || req.lastName) && (
+                        <div className="font-bold text-zinc-900 dark:text-white">
+                          {[req.firstName, req.lastName].filter(Boolean).join(' ')}
+                        </div>
+                      )}
                       {req.email && <div className="font-mono">{req.email}</div>}
                       {req.phone && <div className="font-mono">{req.phone}</div>}
                       {req.note && <div className="text-[11px] text-zinc-400 italic mt-0.5">{req.note}</div>}
-                      {!req.email && !req.phone && !req.note && '-'}
+                      {!req.email && !req.phone && !req.note && !req.firstName && !req.lastName && '-'}
                     </td>
                     <td className="py-4 px-6 text-zinc-400 font-mono text-[11px]">
                       {new Date(req.createdAt).toLocaleDateString('tr-TR', {

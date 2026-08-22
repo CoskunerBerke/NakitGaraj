@@ -9,15 +9,127 @@ import { assessCondition } from './condition-assessment';
 
 @Injectable()
 export class EvaluationService {
+  /** Yetersiz veri lead'ini musterinin kendi katalog talebinden ayirir. */
+  private static readonly INSUFFICIENT_LEAD_SOURCE = 'INSUFFICIENT_VALUATION';
+
+  /** Ayni denemeyi tekrarlamak lead spam'i URETMEZ. */
+  private static readonly LEAD_DEDUP_WINDOW_MS = 24 * 60 * 60 * 1000;
+
   constructor(
     private prisma: PrismaService,
     private telegramService: TelegramService,
     private emsalMatcherService: EmsalMatcherService,
   ) {}
 
+  /**
+   * Lead icin arac kimligi. YALNIZCA dogrulanmis ya da musterinin kendi
+   * bildirdigi deger kullanilir; hicbir sey UYDURULMAZ.
+   *
+   * Sira: cekirdegin dogruladigi hedef -> musterinin gozlenen secimi ->
+   * katalogdaki marka/model adi. Hicbiri cozulemezse lead ACILMAZ, cunku
+   * `VehicleRequest.brand/model` zorunludur ve yer tutucu yazmak veriyi
+   * kirletirdi.
+   */
+  private async resolveLeadIdentity(
+    dto: CreateEvaluationDto,
+    res: any,
+  ): Promise<{ brand: string; model: string } | null> {
+    const brandFromResult = res?.vehicle?.brand;
+    const modelFromResult = res?.vehicle?.model;
+    if (brandFromResult && modelFromResult) {
+      return { brand: brandFromResult, model: modelFromResult };
+    }
+
+    if (dto.observedMake && dto.observedModel) {
+      return { brand: dto.observedMake, model: dto.observedModel };
+    }
+
+    const [manufacturer, model] = await Promise.all([
+      this.prisma.manufacturer.findUnique({ where: { id: dto.manufacturerId } }),
+      this.prisma.model.findUnique({ where: { id: dto.modelId } }),
+    ]);
+    if (manufacturer?.name && model?.name) {
+      return { brand: manufacturer.name, model: model.name };
+    }
+
+    return null;
+  }
+
+  /**
+   * Yetersiz veri donen degerlemeyi uzman degerlendirmesi talebi olarak saklar.
+   *
+   * Saklanan her alan MUSTERININ KENDI BEYANIDIR. Motor, paket, piyasa degeri,
+   * nakit teklif, konsinye fiyati ve guven skoru YAZILMAZ: bunlar hic
+   * hesaplanmadi.
+   *
+   * Hata durumunda musteri yaniti BOZULMAZ; lead kaybi loglanir.
+   */
+  private async preserveInsufficientLead(dto: CreateEvaluationDto, res: any): Promise<void> {
+    try {
+      const identity = await this.resolveLeadIdentity(dto, res);
+      if (!identity) {
+        console.warn('Yetersiz veri lead atlandi: arac kimligi cozulemedi (UYDURULMADI).');
+        return;
+      }
+
+      const phone = (dto.phone || '').trim() || null;
+      const year = typeof dto.year === 'number' ? dto.year : null;
+
+      // Ayni musteri/arac icin yakin zamanda acilmis bekleyen talep varsa
+      // yenisi ACILMAZ: "Tekrar Dene" lead spam'ine donusmemeli.
+      const duplicate = await this.prisma.vehicleRequest.findFirst({
+        where: {
+          source: EvaluationService.INSUFFICIENT_LEAD_SOURCE,
+          status: 'PENDING',
+          phone,
+          brand: identity.brand,
+          model: identity.model,
+          year,
+          createdAt: { gte: new Date(Date.now() - EvaluationService.LEAD_DEDUP_WINDOW_MS) },
+        },
+      });
+      if (duplicate) return;
+
+      await this.prisma.vehicleRequest.create({
+        data: {
+          source: EvaluationService.INSUFFICIENT_LEAD_SOURCE,
+          brand: identity.brand,
+          model: identity.model,
+          year,
+          mileage: Number.isFinite(dto.mileage) ? dto.mileage : null,
+          firstName: dto.firstName?.trim() || null,
+          lastName: dto.lastName?.trim() || null,
+          phone,
+        },
+      });
+    } catch (err) {
+      console.error('Yetersiz veri lead kaydedilemedi:', err);
+    }
+  }
+
   async evaluateVehicle(dto: CreateEvaluationDto, userIp?: string) {
     const res = await this.calculateValuationCore(dto);
     if (res.status === 'INSUFFICIENT_DATA' || res.status === 'DATA_INTEGRITY_ERROR') {
+      /**
+       * YETERSIZ VERI BIR SATIS FIRSATIDIR, TEKNIK HATA DEGIL.
+       *
+       * `VehicleEvaluation` yine ACILMAZ ve bu dogrudur: ortada gercek bir
+       * degerleme yoktur; o tablonun fiyat alanlari zorunlu Float'tir ve 0
+       * yazmak PARA UYDURMAK olurdu.
+       *
+       * Ancak musterinin verdigi bilgiler de kayboluyordu: ad, telefon ve arac
+       * kimligi hicbir yerde saklanmiyordu (olculen: 1.593 hedefin 180'i,
+       * %11,3). Musteri kendisi aramazsa galeri bu denemeden HABERSIZ kaliyordu.
+       * Artik mevcut "Arac Talepleri" akisinda uzman degerlendirmesi talebi
+       * olarak korunur.
+       *
+       * DATA_INTEGRITY_ERROR BILEREK DISARIDA: o bozuk istek/hesap koruma
+       * durumudur (modelId markaya ait degil, ya da adjustedP35 > FMV), piyasa
+       * kapsama sorunu DEGILDIR ve satis talebi uretmemelidir.
+       */
+      if (res.status === 'INSUFFICIENT_DATA') {
+        await this.preserveInsufficientLead(dto, res);
+      }
       return res;
     }
 

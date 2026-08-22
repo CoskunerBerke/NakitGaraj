@@ -280,6 +280,31 @@ model VehicleRequest {
   status    String   @default("PENDING") // PENDING, ADDED, REJECTED
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  // MUSTERI ADI (EKLEMELI, NULLABLE)
+  //
+  // Katalog talebi modali ad/soyad TOPLAMAZ; bu alanlar yalnizca degerleme
+  // akisindan gelen kayitlarda dolar (musteri bu bilgiyi zaten karsilama
+  // modalinde vermistir). Eski kayitlarda NULL kalir ve NULL DOGRU cevaptir.
+  firstName String?
+  lastName  String?
+
+  /// Musterinin beyan ettigi kilometre (yalnizca degerleme kaynakli kayitlar).
+  mileage   Int?
+
+  // KAYIT KAYNAGI (EKLEMELI, NULLABLE)
+  //
+  // "INSUFFICIENT_VALUATION" -> musteri degerleme yapti, yeterli piyasa
+  //   verisi bulunamadi. Once bu deneme HICBIR YERDE saklanmiyordu: ad,
+  //   telefon ve arac kimligi tamamen kayboluyordu (olculen: 1.593 hedefin
+  //   180'i, %11,3). Artik uzman degerlendirmesi talebi olarak korunur.
+  //
+  // NULL -> eski kayitlar ve musterinin kendi katalog talebi (marka/model
+  //   sistemde yok). Davranisi DEGISMEDI, GERIYE DOLDURMA YAPILMADI.
+  //
+  // DATA_INTEGRITY_ERROR bu kaynagi URETMEZ: o teknik/veri butunlugu
+  // hatasidir, satis talebi degildir.
+  source    String?
 }
 
 model RawVehicleListing {
