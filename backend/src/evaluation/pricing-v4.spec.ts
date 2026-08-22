@@ -12,7 +12,7 @@
  * Testler saf fonksiyon uzerinde calisir; DB gerekmez.
  */
 import { RobustPricingCalculator } from './robust-pricing-calculator';
-import { PRICING_LIMITS, getSegment } from './pricing-config';
+import { PRICING_LIMITS, getSegment, targetProfitFor } from './pricing-config';
 
 /** Verilen merkez etrafinda, istenen yayilimda sentetik emsal havuzu. */
 function pool(center: number, n: number, spread: number) {
@@ -79,15 +79,13 @@ describe('Fiyatlama V4', () => {
       expect(dusuk.pricingAudit.riskProfitUplift).toBe(1);
     });
 
-    test('hedef kar yalniz segment basamagindan gelir, belirsizlikten buyumez', () => {
+    test('hedef kar yalniz kar egrisinden gelir, belirsizlikten buyumez', () => {
       // Tek sayili havuz: agirlikli medyan tam merkeze denk gelir, boylece iki
       // senaryonun beklenen satisi ayni olur ve yalniz belirsizlik degisir.
-      // Her iki senaryoda da hedef kar, segment basamaginin BIREBIR kendisidir:
+      // Her iki senaryoda da hedef kar, kar egrisinin BIREBIR kendisidir:
       // guven/yayilim degisse bile kar carpani devreye girmez.
       for (const r of [value(1_000_000, 41, 0.10, 95), value(1_000_000, 41, 0.30, 60)] as any[]) {
-        const seg = getSegment(r.expectedSalePrice);
-        const beklenen = Math.round(Math.max(seg.targetProfit.min, seg.targetProfit.rate * r.expectedSalePrice));
-        expect(r.pricingAudit.targetProfit).toBe(beklenen);
+        expect(r.pricingAudit.targetProfit).toBe(targetProfitFor(r.expectedSalePrice));
       }
     });
 

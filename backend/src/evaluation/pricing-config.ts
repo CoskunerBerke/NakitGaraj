@@ -175,6 +175,75 @@ export const PRICING_LIMITS = {
   priceSanityRange: [50_000, 150_000_000] as [number, number],
 };
 
+/**
+ * SUREKLI EKONOMI EGRILERI (V5)
+ *
+ * Hedef kar ve operasyon maliyeti artik SEGMENT BASAMAKLARIYLA degil, surekli
+ * ve monoton egrilerle hesaplanir. Basamakli tablo iki uctan bozuyordu:
+ *
+ *  - Ucuz araclarda `targetProfit.min` mutlak tabani ile operasyon tabani
+ *    birlesince oran cok yukseliyordu.
+ *  - Pahali araclarda kar ORANI neredeyse sabit kaldigi icin mutlak TL marj
+ *    dogrusal buyuyordu (50M araca 1.750.000 TL hedef kar).
+ *  - Segment sinirlarinda (4M, 8M) arac degeri 10.000 TL artinca musterinin
+ *    ham nakdi 10.150 ve 50.520 TL DUSUYORDU (olculen ucurumlar).
+ *
+ * Egriler mevcut tablonun kendi capa noktalarina oturtulmustur; orta pazar
+ * (750K-2,5M) davranisi BIREBIR korunur. Segment tablosu musteri tabani,
+ * komisyon, ilan uplift'i ve satis suresi icin kullanilmaya devam eder.
+ */
+export const PRICING_ECONOMICS = {
+  /** Kar egrisinin capa noktasi: bu degerde hedef kar tam referenceProfit'tir. */
+  referenceValue: 1_000_000,
+
+  /**
+   * Hedef kar (galerinin TICARI kari):
+   *   profit(V) = max(minimum, referenceProfit * (V / referenceValue)^exponent)
+   * exponent < 1 oldugu icin TL kari artmaya devam eder ama dogrusal degil.
+   * `minimum`, cok ucuz araclarda galeriyi anlamsiz kara birakmayan tabandir
+   * ve mevcut ekonomik segment tabaniyla AYNI tutulmustur (degistirilmedi).
+   */
+  targetProfit: {
+    referenceProfit: 40_000, // mevcut 1M davranisi ile birebir
+    exponent: 0.8,
+    minimum: 20_000,
+  },
+
+  /**
+   * Operasyon + elde tutma maliyeti:
+   *   base(V) = fixedFloor * max(1, V / floorUpTo)^baseExponent
+   *   rate(V) = rateMin + (rateMax - rateMin) * V / (V + rateHalfValue)
+   *   operating(V) = base(V) + rate(V) * V
+   * `fixedFloor` gercek sabit maliyettir (ekspertiz, detayli temizlik,
+   * noter/plaka, ilan) ve ucuz araclarda KUCULTULMEZ.
+   */
+  operating: {
+    fixedFloor: 14_000,
+    floorUpTo: 600_000,
+    baseExponent: 0.42,
+    rateMin: 0.008,
+    rateMax: 0.012,
+    rateHalfValue: 10_000_000,
+  },
+};
+
+/** Hedef kar: surekli, monoton artan, alt-dogrusal. */
+export function targetProfitFor(expectedSalePrice: number): number {
+  const { referenceValue, targetProfit: T } = PRICING_ECONOMICS;
+  const v = Math.max(0, expectedSalePrice);
+  const curve = T.referenceProfit * Math.pow(v / referenceValue, T.exponent);
+  return Math.round(Math.max(T.minimum, curve));
+}
+
+/** Operasyon maliyeti: surekli, monoton artan; sabit taban korunur. */
+export function operatingCostFor(expectedSalePrice: number): number {
+  const { operating: O } = PRICING_ECONOMICS;
+  const v = Math.max(0, expectedSalePrice);
+  const base = O.fixedFloor * Math.pow(Math.max(1, v / O.floorUpTo), O.baseExponent);
+  const rate = O.rateMin + (O.rateMax - O.rateMin) * (v / (v + O.rateHalfValue));
+  return Math.round(base + rate * v);
+}
+
 export function getSegment(expectedSalePrice: number): PricingSegment {
   for (const seg of PRICING_SEGMENTS) {
     if (expectedSalePrice <= seg.maxExpectedSale) return seg;

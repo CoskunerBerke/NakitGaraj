@@ -1,5 +1,12 @@
 import { CleanListingItem } from './emsal-matcher.service';
-import { PRICING_LIMITS, PricingSegment, clamp, getSegment } from './pricing-config';
+import {
+  PRICING_LIMITS,
+  PricingSegment,
+  clamp,
+  getSegment,
+  operatingCostFor,
+  targetProfitFor,
+} from './pricing-config';
 
 export interface PricingEngineOutput {
   adjustedP35: number;
@@ -311,9 +318,10 @@ export class RobustPricingCalculator {
     const segment: PricingSegment = getSegment(expectedSalePrice);
 
     // 5) Maliyet + risk + hedef kar
-    const operatingCost = Math.round(
-      segment.operatingCost.base + segment.operatingCost.rate * expectedSalePrice,
-    );
+    // Operasyon maliyeti SUREKLI egriden gelir: segment basamaklari, arac
+    // degeri sinirin bir tik ustune ciktiginda musterinin nakdini asagi
+    // ziplatiyordu. Sabit taban (gercek islem maliyeti) korunur.
+    const operatingCost = operatingCostFor(expectedSalePrice);
 
     /**
      * BELIRSIZLIK TEK KEZ FIYATLANIR.
@@ -344,11 +352,11 @@ export class RobustPricingCalculator {
      * Belirsizlik yukarida riskCost olarak bir kez alindigi icin kar basamagi
      * ayrica buyutulmez. Alan denetim sozlesmesinde korunur ve 1 doner.
      */
+    // Kar basamagi yerine SUREKLI, alt-dogrusal kar egrisi: TL kari arac
+    // degeriyle artmaya devam eder ama dogrusal buyumez; cok ucuz araclarda
+    // da anlamli bir taban birakir.
     const riskProfitUplift = 1;
-    const targetProfit = Math.round(
-      Math.max(segment.targetProfit.min, segment.targetProfit.rate * expectedSalePrice) *
-        riskProfitUplift,
-    );
+    const targetProfit = Math.round(targetProfitFor(expectedSalePrice) * riskProfitUplift);
 
     // 6) Nakit teklif
     const rawCashOffer = expectedSalePrice - operatingCost - riskCost - targetProfit;
