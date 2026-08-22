@@ -282,22 +282,32 @@ export class RobustPricingCalculator {
     // 2) Hasar amortismani -> gercekci piyasa degeri (musteriye gosterilen)
     const fairMarketValue = Math.round(askingP50 * (1 - damagePenalty));
 
-    // 3) Pazarlik payi: dagilim genisligi + likidite + tazelik
+    // 3) Belirsizlik sinyalleri (yayilim / likidite / tazelik).
+    // Bunlar TEK BIR yerde -- risk rezervinde -- fiyatlanir (bkz. adim 5).
     const dispersion = askingP50 > 0 ? (askingP75 - askingP25) / askingP50 : 0;
     const liquidityPenalty =
       realMatchedListingCount >= 25 ? 0 :
       realMatchedListingCount >= PRICING_LIMITS.lowCompCountThreshold ? 0.004 : 0.010;
     const stalePenalty = (1 - clamp(freshnessScore, 0, 1)) * 0.010;
 
-    const provisionalSegment = getSegment(fairMarketValue);
-    const negotiationRate = clamp(
-      provisionalSegment.baseNegotiationRate + dispersion * 0.05 + liquidityPenalty + stalePenalty,
-      PRICING_LIMITS.negotiationRateRange[0],
-      PRICING_LIMITS.negotiationRateRange[1],
-    );
+    /**
+     * GENEL PAZARLIK KIRIMI YOK.
+     *
+     * Onceki surumde her araca "ilan fiyati -> satis fiyati" varsayimiyla
+     * %3,5-7,5 (medyan %4,62) sabit bir kirim uygulaniyordu. Elimizde bunu
+     * dogrulayan KAPANIS FIYATI verisi yok: korpus yalnizca ilan (asking)
+     * fiyatlarini icerir. Kanitsiz bir kirim, gercek emsali bol olan araclarda
+     * musteriye sistematik olarak dusuk teklif uretiyordu.
+     *
+     * Bu yuzden temiz arac icin piyasa referansi DOGRUDAN emsal merkezidir.
+     * Alan API/denetim sozlesmesinde korunur ve 0 doner.
+     * Ileride gercek NakitGaraj alim/satis verisi biriktiginde bu katsayi
+     * OLCULMUS bir degerle geri acilabilir.
+     */
+    const negotiationRate = 0;
 
-    // 4) Beklenen gercekci satis fiyati (ilan fiyati degil!)
-    const expectedSalePrice = Math.round(fairMarketValue * (1 - negotiationRate));
+    // 4) Piyasa referansi = emsal merkezi (kondisyon duzeltmesi ayri katmandir)
+    const expectedSalePrice = fairMarketValue;
     const segment: PricingSegment = getSegment(expectedSalePrice);
 
     // 5) Maliyet + risk + hedef kar
@@ -305,20 +315,36 @@ export class RobustPricingCalculator {
       segment.operatingCost.base + segment.operatingCost.rate * expectedSalePrice,
     );
 
+    /**
+     * BELIRSIZLIK TEK KEZ FIYATLANIR.
+     *
+     * Onceki surumde ayni sinyal iki kez tahsil ediliyordu:
+     *   - yayilim (dispersion): hem pazarlik oranina hem kar carpanina,
+     *   - dusuk guven: hem risk maliyetine hem kar carpanina.
+     * Artik tek ekonomik rezerv burasidir; destek, yayilim ve tazelik de
+     * pazarlik oraninda degil BURADA fiyatlanir. Aralik degismedi
+     * (PRICING_LIMITS.riskRateRange), yani rezerv ust siniri ayni.
+     */
     const dataConfidence = clamp(baseConfidenceScore / 100, 0, 1);
     const riskRate = clamp(
-      0.003 + (1 - dataConfidence) * 0.022 + damagePenalty * 0.25 + (matchedLevel >= 3 ? 0.006 : 0),
+      0.003 +
+        (1 - dataConfidence) * 0.022 +
+        damagePenalty * 0.25 +
+        (matchedLevel >= 3 ? 0.006 : 0) +
+        dispersion * 0.010 +
+        liquidityPenalty +
+        stalePenalty,
       PRICING_LIMITS.riskRateRange[0],
       PRICING_LIMITS.riskRateRange[1],
     );
     const riskCost = Math.round(expectedSalePrice * riskRate);
 
-    // Hedef kar: progressive ladder + yuksek fiyat/risk otomatik buyutmesi
-    const riskProfitUplift = clamp(
-      1 + (1 - dataConfidence) * 0.35 + dispersion * 0.25,
-      1,
-      1.6,
-    );
+    /**
+     * Hedef kar = galerinin TICARI karidir; belirsizlik rezervi DEGILDIR.
+     * Belirsizlik yukarida riskCost olarak bir kez alindigi icin kar basamagi
+     * ayrica buyutulmez. Alan denetim sozlesmesinde korunur ve 1 doner.
+     */
+    const riskProfitUplift = 1;
     const targetProfit = Math.round(
       Math.max(segment.targetProfit.min, segment.targetProfit.rate * expectedSalePrice) *
         riskProfitUplift,

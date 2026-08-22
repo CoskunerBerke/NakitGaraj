@@ -371,10 +371,14 @@ describe('NakitGaraj Fiyatlama Motoru V3', () => {
       expect(r.expectedSalePrice - r.cashOffer).toBeGreaterThanOrEqual(minProfit);
     });
 
-    test('F2. Yüksek fiyat ve düşük veri güveninde hedef kâr otomatik büyür', () => {
+    // V4: belirsizlik TEK KEZ, risk rezervinde fiyatlanir. Hedef kar galerinin
+    // ticari karidir ve belirsizlik yuzunden ayrica buyutulmez (cifte tahsil).
+    test('F2. Düşük veri güveni risk rezervini büyütür, hedef kârı değil', () => {
       const confident = priceIt(comps(40, 6_000_000), { baseConfidenceScore: 95 });
       const risky = priceIt(comps(40, 6_000_000), { baseConfidenceScore: 60, matchedLevel: 3 });
-      expect(risky.pricingAudit.targetProfit).toBeGreaterThan(confident.pricingAudit.targetProfit);
+      expect(risky.pricingAudit.riskCost).toBeGreaterThan(confident.pricingAudit.riskCost);
+      expect(risky.pricingAudit.targetProfit).toBe(confident.pricingAudit.targetProfit);
+      expect(risky.pricingAudit.riskProfitUplift).toBe(1);
       expect(risky.cashOffer).toBeLessThan(confident.cashOffer);
     });
 
@@ -426,22 +430,24 @@ describe('NakitGaraj Fiyatlama Motoru V3', () => {
       expect(l3.confidenceScore).toBeLessThan(l1.confidenceScore);
     });
 
-    test('G3. Bayat emsal güveni düşürür ve pazarlık payını artırır', () => {
+    // V4: genel pazarlik kirimi kaldirildi (kanitlanmis kapanis fiyati verisi
+    // yok). Tazelik/yayilim artik piyasa referansini dusurmez; belirsizlik
+    // rezervini (riskCost) bir kez artirir.
+    test('G3. Bayat emsal güveni düşürür ve risk rezervini artırır', () => {
       const fresh = priceIt(comps(40, 1_200_000), { freshnessScore: 1 });
       const stale = priceIt(comps(40, 1_200_000), { freshnessScore: 0.25 });
       expect(stale.confidenceScore).toBeLessThan(fresh.confidenceScore);
-      expect(stale.pricingAudit.negotiationRate).toBeGreaterThan(
-        fresh.pricingAudit.negotiationRate,
-      );
+      expect(stale.pricingAudit.negotiationRate).toBe(0);
+      expect(stale.pricingAudit.riskRate).toBeGreaterThan(fresh.pricingAudit.riskRate);
       expect(stale.cashOffer).toBeLessThan(fresh.cashOffer);
     });
 
-    test('G4. Dağılımı geniş piyasada pazarlık payı artar', () => {
+    test('G4. Dağılımı geniş piyasada risk rezervi artar, piyasa referansı düşmez', () => {
       const tight = priceIt(comps(40, 1_500_000, { spread: 0.03 }));
       const wide = priceIt(comps(40, 1_500_000, { spread: 0.35 }));
-      expect(wide.pricingAudit.negotiationRate).toBeGreaterThan(
-        tight.pricingAudit.negotiationRate,
-      );
+      expect(wide.pricingAudit.riskRate).toBeGreaterThan(tight.pricingAudit.riskRate);
+      expect(wide.expectedSalePrice).toBe(wide.fairMarketValue);
+      expect(tight.expectedSalePrice).toBe(tight.fairMarketValue);
     });
   });
 
