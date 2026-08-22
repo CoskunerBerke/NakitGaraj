@@ -320,7 +320,9 @@ async function main() {
 
   lines.push('## 4. Galeri Kârlılığı (müşteriye gösterilmez)');
   lines.push('');
-  lines.push('| # | Araç | Segment | Pazarlık | Operasyon | Risk | **Hedef Kâr** | Nakit Brüt Marj | Konsinye Komisyonu |');
+  // "Pazarlık kırımı" V4'ten beri YAPISAL OLARAK 0'dır (kanıtlanmamış
+  // ilan->satış varsayımı kaldırıldı); sütun denetim amacıyla korunur.
+  lines.push('| # | Araç | Segment | Pazarlık Kırımı (V4: 0) | Operasyon | Risk | **Hedef Kâr** | Nakit Brüt Marj | Konsinye Komisyonu |');
   lines.push('|---:|---|---|---:|---:|---:|---:|---:|---:|');
   ok.concat(manual).forEach((x, i) => {
     const a = x.r.pricingAudit;
@@ -360,20 +362,20 @@ async function main() {
   lines.push('');
   lines.push('```');
   lines.push('NAKİT ALIŞ');
-  lines.push('  beklenen gerçek satış fiyatı  (emsal medyanı − pazarlık payı)');
+  lines.push('  beklenen satış fiyatı  (emsal merkezi; genel pazarlık kırımı YOK)');
   lines.push('  − operasyon / elde tutma maliyeti');
   lines.push('  − risk maliyeti (veri kalitesi + hasar)');
-  lines.push('  − hedef galeri kârı (segment basamağı)');
+  lines.push('  − hedef galeri kârı (V5: sürekli, alt-doğrusal eğri)');
   lines.push('  = nakit alış teklifi');
   lines.push('');
   lines.push('KONSİNYE');
-  lines.push('  konsinye ilan fiyatı  (beklenen satış + pazarlık payı)');
+  lines.push('  konsinye ilan fiyatı  (beklenen satış + segment ilan uplifti)');
   lines.push('  → beklenen satış fiyatı');
   lines.push('  − galeri komisyonu (segment bazlı, nakit marjının altında)');
   lines.push('  = müşteriye kalan net');
   lines.push('```');
   lines.push('');
-  lines.push('Hedef kâr basamakları `src/evaluation/pricing-config.ts` içinde merkezi olarak tanımlıdır.');
+  lines.push('Hedef kâr ve operasyon maliyeti eğrileri `src/evaluation/pricing-config.ts` içinde merkezi olarak tanımlıdır (V5: sürekli eğri, segment basamağı değil).');
   lines.push('');
 
   const md = lines.join('\n');

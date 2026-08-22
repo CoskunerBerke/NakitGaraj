@@ -439,6 +439,29 @@ export class VehicleService {
   }
 
   /** GERCEK ilanlarda gorulen markalar. */
+  /**
+   * MUSTERIYE SUNULAN MARKA LISTESI — YALNIZ TAMAMLANABILIR MARKALAR.
+   *
+   * Sihirbaz zorunlu bir zincirdir: marka -> model -> ... Bir markanin
+   * gorulen TUM model adlari ayristirma artigi ise (musteriye sunulamaz),
+   * o marka secildiginde model listesi BOS gelir ve musteri CIKMAZA duser.
+   * Olculen: `Nieve` markasinin tek model adi "_ -" (33 ilan) ve katalogda
+   * hic Model kaydi yok; marka listede gorunuyor ama secilince devam
+   * edilemiyordu.
+   *
+   * Kural GENELDIR ve marka adina bakmaz: bir marka, ancak EN AZ BIR
+   * kullanilabilir gozlenen modeli varsa musteriye sunulur. Model
+   * kullanilabilirlik testi, model listesinin kullandigi yardimcilarin
+   * AYNISIDIR (displayModelLabel + isUnusableModelName); iki okuma yolunun
+   * ayrisip farkli sonuc vermesi engellenir.
+   *
+   * KAYNAK VERI DEGISMEZ: hicbir ilan silinmez, DB yeniden yazilmaz.
+   * Bu yuzden KAYNAK canonical marka sayisi ile MUSTERIYE SECILEBILIR marka
+   * sayisi mesru olarak farkli olabilir.
+   *
+   * `listingCount` markanin TOPLAM ilan sayisidir (anlam degismedi);
+   * kullanilabilirlik yalnizca DAHIL ETME olcutudur.
+   */
   async getObservedMakes() {
     const cacheKey = await this.versionedKey('makes');
     const cached = await this.cache.get<any[]>(cacheKey);
@@ -446,21 +469,35 @@ export class VehicleService {
 
     const groups = await this.withRetry(() =>
       this.prisma.rawVehicleListing.groupBy({
-        by: ['canonicalMake'],
+        by: ['canonicalMake', 'canonicalModel'],
         where: { parseStatus: 'VALID' },
         _count: { _all: true },
       }),
     );
-    const merged = new Map<string, { value: string; displayLabel: string; listingCount: number }>();
+    const merged = new Map<
+      string,
+      { value: string; displayLabel: string; listingCount: number; hasUsableModel: boolean }
+    >();
     for (const g of groups as any[]) {
       const raw = String(g.canonicalMake || '').trim();
       if (!raw) continue;
+      const modelName = String(g.canonicalModel || '').trim();
+      const usable = Boolean(modelName) && !isUnusableModelName(this.displayModelLabel(modelName));
       const key = foldTurkish(raw);
       const prev = merged.get(key);
-      if (prev) prev.listingCount += g._count._all;
-      else merged.set(key, { value: raw, displayLabel: raw, listingCount: g._count._all });
+      if (prev) {
+        prev.listingCount += g._count._all;
+        prev.hasUsableModel = prev.hasUsableModel || usable;
+      } else {
+        merged.set(key, {
+          value: raw, displayLabel: raw, listingCount: g._count._all, hasUsableModel: usable,
+        });
+      }
     }
-    const out = [...merged.values()].sort((a, b) => b.listingCount - a.listingCount);
+    const out = [...merged.values()]
+      .filter((m) => m.hasUsableModel)
+      .map(({ value, displayLabel, listingCount }) => ({ value, displayLabel, listingCount }))
+      .sort((a, b) => b.listingCount - a.listingCount);
     await this.cache.set(cacheKey, out, 3600);
     return out;
   }

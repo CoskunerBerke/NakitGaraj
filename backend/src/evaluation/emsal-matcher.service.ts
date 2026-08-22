@@ -404,7 +404,6 @@ export class EmsalMatcherService {
     bodyType?: string;
     fuelType?: string;
     transmission?: string;
-    isCleanCondition?: boolean;
   }): Promise<EmsalMatchResult> {
     const { make, model, variant, trim, year } = params;
 

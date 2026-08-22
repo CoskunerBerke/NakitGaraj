@@ -397,7 +397,6 @@ export class EvaluationService {
       bodyType: target.bodyType,
       fuelType: target.fuelType,
       transmission: target.transmission,
-      isCleanCondition: dto.damageStatus === 'NO',
     });
 
     if (emsalResult.level === 4 || emsalResult.matchedCount === 0 || !emsalResult.cleanListings || emsalResult.cleanListings.length === 0) {
@@ -679,17 +678,6 @@ export class EvaluationService {
     } catch (e) {
       console.error('Error fetching real comparable listings:', e);
       return [];
-    }
-  }
-
-  private roundToCleanGalleryPrice(val: number): number {
-    if (!val || val <= 0) return 0;
-    if (val >= 2000000) {
-      return Math.round(val / 50000) * 50000;
-    } else if (val >= 500000) {
-      return Math.round(val / 10000) * 10000;
-    } else {
-      return Math.round(val / 5000) * 5000;
     }
   }
 

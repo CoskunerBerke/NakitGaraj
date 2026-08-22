@@ -56,6 +56,33 @@ export const PART_CLASS: Record<string, PartClass> = {
  * her ad PART_CLASS icinde ACIKCA siniflandirilmis olmali, aksi halde parca
  * varsayilan sinifa duser ve yanlis fiyatlanir.
  */
+/**
+ * AYNI FIZIKSEL PARCANIN ARAYUZLERDEKI ES ADLARI.
+ *
+ * Degerleme formu bagaj kapagini "Bagaj Kapağı", konsinye formu ise "Bagaj"
+ * adiyla gonderir. Ikisi de AYNI fiziksel paneldir. Normalizasyon yapilmazsa
+ * ayni panel iki ayri anahtar olarak sayilir ve:
+ *   - tek fiziksel kusura IKI KEZ ceza verilir (olculen: %3,4 yerine %4,6),
+ *   - degisen/boyali panel SAYIMI siser ve 3+ degisen manuel kapisi bir panel
+ *     erken tetiklenebilir.
+ *
+ * Bugun her iki form da adlardan YALNIZ BIRINI kullandigi icin durum
+ * ulasilamazdir; bu katman savunma amaclidir ve formlarin biri degistiginde
+ * sessiz bir fiyat hatasi olusmasini engeller.
+ *
+ * SADECE mevcut formlarla KANITLANMIS es adlar burada yer alir; genis/tahmini
+ * es ad uretilmez. Cezalarda hicbir degisiklik yoktur.
+ */
+export const PART_ALIASES: Record<string, string> = {
+  'Bagaj': 'Bagaj Kapağı',
+};
+
+/** Parca adini KANONIK fiziksel parca adina indirger. */
+export function canonicalPartName(part: string): string {
+  const t = String(part ?? '').trim();
+  return PART_ALIASES[t] ?? t;
+}
+
 export const UI_PART_NAMES: string[] = [
   'Motor Kaputu', 'Tavan', 'Bagaj', 'Bagaj Kapağı', 'Ön Tampon', 'Arka Tampon',
   'Sol Ön Çamurluk', 'Sağ Ön Çamurluk', 'Sol Ön Kapı', 'Sağ Ön Kapı',
@@ -286,9 +313,12 @@ export function assessCondition(input: ConditionInput): ConditionResult {
 
   // --- 1) Parca bazli kaporta: ayni parcaya TEK ceza (en agir durum baskin) ---
   const perPart = new Map<string, PartStatus>();
-  for (const [part, raw] of Object.entries(paint)) {
+  for (const [rawPart, raw] of Object.entries(paint)) {
     const st = normalizeStatus(raw);
     if (!st) continue;
+    // Es adlar KANONIK parcaya indirgenir: ayni fiziksel panel iki anahtarla
+    // gelse bile TEK ceza alir (en agir durum baskin).
+    const part = canonicalPartName(rawPart);
     const prev = perPart.get(part);
     if (prev) {
       ignoredDuplicates.push(`${part}: ${prev}+${st} -> ${SEVERITY[st] > SEVERITY[prev] ? st : prev}`);

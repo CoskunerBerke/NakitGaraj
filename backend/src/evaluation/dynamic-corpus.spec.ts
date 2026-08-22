@@ -82,8 +82,42 @@ describe('Dinamik korpus (yeni marka/model güvenliği)', () => {
       const dbMakes = (await prisma.$queryRawUnsafe(
         "SELECT COUNT(DISTINCT canonicalMake) AS c FROM RawVehicleListing WHERE canonicalMake <> ''",
       )) as any[];
-      expect(makes.length).toBe(Number(dbMakes[0].c));
+      const sourceMakeCount = Number(dbMakes[0].c);
+
+      /**
+       * Müşteriye sunulan marka listesi, KAYNAK marka kümesinin bir alt
+       * kümesidir; sabit bir sayı değildir ve kaynakla birebir eşit olmak
+       * ZORUNDA da değildir.
+       *
+       * Sihirbaz zorunlu bir zincirdir: tüm model adları ayrıştırma artığı
+       * olan bir marka seçildiğinde model listesi boş gelir ve müşteri
+       * çıkmaza düşer (ölçülen: `Nieve`, tek model adı "_ -", 33 ilan).
+       * Böyle markalar müşteriye sunulmaz; kaynak veri ise DEĞİŞMEZ.
+       */
       expect(makes.length).toBeGreaterThan(0);
+      expect(makes.length).toBeLessThanOrEqual(sourceMakeCount);
+      // Aradaki fark yalnızca "hiç kullanılabilir modeli olmayan" markalardır.
+      expect(sourceMakeCount - makes.length).toBeLessThan(sourceMakeCount);
+    }, 60_000);
+
+    test('Müşteriye sunulan HER marka en az bir seçilebilir model döndürür', async () => {
+      const svc = new VehicleService(prisma as any, noopCache());
+      const makes = await svc.getObservedMakes();
+      const deadEnds: string[] = [];
+      for (const m of makes as any[]) {
+        const models = await svc.getObservedModels({ make: m.value });
+        if (models.length === 0) deadEnds.push(m.value);
+      }
+      expect(deadEnds).toEqual([]);
+    }, 180_000);
+
+    test('Kullanılabilir modeli olan markalar görünür kalır', async () => {
+      const svc = new VehicleService(prisma as any, noopCache());
+      const makes = await svc.getObservedMakes();
+      const names = (makes as any[]).map((m) => m.value);
+      for (const expected of ['Saab', 'Proton', 'Volkswagen', 'Fiat']) {
+        expect(names).toContain(expected);
+      }
     }, 60_000);
 
     test('Kaynak kodunda sabit marka/model sayısı sınırı yok', () => {
