@@ -41,6 +41,10 @@ export class EvaluationService {
         damageStatus: dto.damageStatus,
         damageDetails: dto.damageStatus === 'NO' ? 'Hatasız / Orijinal' : 'Hasarlı',
         estimatedValue: res.results!.cashOffer,
+        // GERCEK piyasa degerleri artik SAKLANIR: galeri paneli bunlari
+        // nakit teklifden sabit carpanlarla yeniden URETMEZ.
+        marketReferenceValue: res.results!.marketReferenceValue ?? null,
+        conditionAdjustedSaleValue: res.results!.conditionAdjustedSaleValue ?? null,
         minExpectedValue: res.results!.cashOfferMin,
         maxExpectedValue: res.results!.consignmentListingPrice,
         quickSaleValue: res.results!.cashOfferMin,
@@ -141,10 +145,30 @@ export class EvaluationService {
     damagePenalty: number,
     wP5: number, wP35: number, wP50: number, wP60: number, wP95: number,
   ): any {
-    // Hedefin motoru KATALOGDAN degil, degerlemenin gercek hedefinden okunur:
-    // katalogda kaydi olmayan gercek araclarda (orn. Fiat Egea) motor kodu
-    // biliniyor olmasina ragmen guven skoru gereksiz yere tavanlaniyordu.
-    const targetEngineKnown = Boolean(splitVariantString(String(targetVariant || '')).engineCode);
+    /**
+     * MOTOR KIMLIGI KANITI EMSAL MOTORUNDAN OKUNUR — TEKRAR TURETILMEZ.
+     *
+     * Emsal motoru hedefin motorunu iki yoldan taniyabilir: musterinin sectigi
+     * motor alanindan (CUSTOMER_FIELD) ya da TAM MODEL icindeki acik imzadan
+     * (FULL_MODEL_SIGNATURE, orn. "1.5 BlueHDi Performance Line"). Eslesmeyi
+     * bu kanitla yapar ve kendi guven tavanini da buna gore uygular.
+     *
+     * Onceki surumde burada AYNI GERCEK ikinci kez, yalnizca motor ALANINA
+     * bakan ayri bir ayristirmayla turetiliyordu. Alan bos oldugunda kanit
+     * gercekte VARKEN "motor bilinmiyor" sayiliyor ve guven 60'a tavanlanip
+     * arac MANUEL'e gidiyordu. Olculen: 1.413 fiyatlanan hedefin 349'u
+     * (%24,7) bu durumdaydi; 349/349 MANUAL, 205'i L1 birebir eslesme,
+     * 140'i L1 + >=8 emsal (orn. DS 4 2023 "1.5 BlueHDi Performance Line",
+     * L1, 54 emsal, guven 60).
+     *
+     * Kanit YOKSA (NONE) eski guvenlik davranisi AYNEN korunur. Bu deger
+     * kalici veriye YAZILMAZ ve tek basina AUTO uretmez: diger tum guven
+     * cezalari ve manuel kapilari degismeden calisir.
+     */
+    const targetEngineKnown: boolean =
+      emsalResult?.engineEvidence
+        ? Boolean(emsalResult.engineEvidence.strong)
+        : Boolean(splitVariantString(String(targetVariant || '')).engineCode);
     if (emsalResult.cleanListings && emsalResult.cleanListings.length > 0) {
       return RobustPricingCalculator.computeValuation({
         cleanListings: emsalResult.cleanListings,
@@ -546,6 +570,16 @@ export class EvaluationService {
         vehicleSpecificationId: spec?.id ?? null,
         adjustedP35: calc.adjustedP35,
         fairMarketValue: calc.fairMarketValue,
+        /**
+         * GERCEK PIYASA REFERANSI (kondisyon ONCESI temiz esdeger emsal merkezi).
+         *
+         * `fairMarketValue` kondisyon duzeltmesinden SONRAKI degerdir; galeri
+         * paneli ise "piyasa degeri" olarak temiz referansi gostermek ister.
+         * Bu deger daha once hicbir yerde saklanmiyordu ve panel onu nakit
+         * teklifden sabit bir carpanla (cash / 0,88) URETIYORDU.
+         */
+        marketReferenceValue: cleanEquivalent.fairMarketValue,
+        conditionAdjustedSaleValue: calc.expectedSalePrice,
         recommendedPublicListingPrice: calc.recommendedPublicListingPrice,
         expectedSalePrice: calc.expectedSalePrice,
         customerDesiredNet: calc.customerDesiredNet,

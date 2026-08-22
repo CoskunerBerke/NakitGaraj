@@ -149,6 +149,13 @@ model VehicleSpecification {
   evaluations        VehicleEvaluation[]
   createdAt          DateTime            @default(now())
   updatedAt          DateTime            @updatedAt
+
+  // Degerleme cekirdegi bu tabloda 4 kademeli arama yapar (yil + variant
+  // daraltmasiyla baslayip modele kadar genisler). Olculen (118.916 satir):
+  //   marka+model+yil  SCAN 39,6ms -> 0,1ms
+  //   marka+model      SCAN 43,8ms -> 0,1ms
+  //   marka+yil        SCAN 41,3ms -> 0,0ms (covering)
+  @@index([manufacturerId, modelId, year])
 }
 
 model VehicleMarketPrice {
@@ -209,6 +216,21 @@ model VehicleEvaluation {
 
   // Detaylı donanım özellikleri checklist (JSON string)
   features               String?
+
+  // GERCEK PIYASA DEGERI ANLIK GORUNTUSU (degerleme aninda hesaplanan).
+  //
+  // Galeri paneli bu degerleri daha once nakit teklifden SABIT carpanlarla
+  // (cash / 0,88 ; cash * 0,94 ; cash * 0,96-1,30) URETIYORDU. Olculen gercek
+  // nakit/piyasa orani bantlara gore 0,843-0,942 arasinda degisir; sabit
+  // carpan yanlis bir "Sahibinden piyasa degeri" gosteriyordu.
+  //
+  // ESKI KAYITLARDA BU ALANLAR NULL KALIR VE NULL DOGRU CEVAPTIR: gecmis
+  // degerlemelerin gercek piyasa referansi hicbir yerde saklanmadi, sentetik
+  // olarak GERIYE DOLDURULMAZ. UNKNOWN > UYDURMA.
+  /// Temiz esdeger emsal merkezi (kondisyon oncesi piyasa referansi), TL.
+  marketReferenceValue       Float?
+  /// Kondisyon duzeltmesi sonrasi beklenen satis degeri, TL.
+  conditionAdjustedSaleValue Float?
 }
 
 model ConsignmentApplication {
@@ -271,6 +293,18 @@ model RawVehicleListing {
   lastSeenAt              DateTime @default(now())
 
   @@unique([source, sourceListingId])
+
+  // SICAK SORGU INDEKSLERI — yalnizca GERCEK yuklemlerden turetildi.
+  // Olculen (280.738 satir, EXPLAIN QUERY PLAN, tutarli DB kopyasi uzerinde):
+  //   emsal havuzu   (rawMake|canonicalMake + year araligi)  SCAN 111,8ms -> 8,2ms
+  //   emsal gosterim (sourceListingId IN ...)                SCAN 109,2ms -> 0,1ms
+  //   gozlenen model (marka kirilimi + groupBy)              SCAN 127,5ms -> 1,0ms
+  // Mevcut UNIQUE(source, sourceListingId) yalniz sourceListingId sorgusu icin
+  // KULLANILAMAZ (bilesik indeksin bas sutunu 'source').
+  // Sorgu metinleri ve semantigi DEGISMEDI; yalnizca erisim yolu iyilesti.
+  @@index([canonicalMake, year])
+  @@index([rawMake, year])
+  @@index([sourceListingId])
 }
 
 model QuarantinedListing {

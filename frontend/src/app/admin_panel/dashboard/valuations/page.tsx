@@ -7,12 +7,46 @@ const API_BASE = typeof window !== 'undefined'
   ? `http://${window.location.hostname}:3001/api`
   : 'http://127.0.0.1:3001/api';
 
+/**
+ * MUSTERI ARAC KIMLIGI — TEK KAYNAK.
+ *
+ * Oncelik SIRASI:
+ *   1) Degerleme aninda yazilan DEGISMEZ snapshot alanlari
+ *      (vehicleMake / vehicleModel / vehicleEngine / vehicleTrim / vehicleYear)
+ *   2) VehicleSpecification iliskisi — yalnizca ESKI kayitlar icin yedek
+ *
+ * Bulunan hata: panel kimligi YALNIZCA vehicleSpecification'dan okuyordu.
+ * Katalogda karsiligi olmayan gercek araclarda bu iliski NULL'dur (olculen:
+ * %57,1) ve galeri listede "Araç" + bos model/yil goruyordu; musteriye giden
+ * WhatsApp sablonunda arac adi BOS gidiyordu.
+ *
+ * Ikisi de yoksa kimlik UYDURULMAZ; acik "bulunamadi" etiketi gosterilir.
+ */
+const vehicleIdentity = (item: any) => {
+  const spec = item?.vehicleSpecification;
+  const make = item?.vehicleMake || spec?.manufacturer?.name || '';
+  const model = item?.vehicleModel || spec?.model?.name || '';
+  const engine = item?.vehicleEngine || spec?.variant?.name || '';
+  const trim = item?.vehicleTrim || spec?.package?.name || '';
+  const year = item?.vehicleYear ?? spec?.year ?? null;
+  const bodyType = item?.vehicleBodyType || spec?.bodyType?.name || '';
+  const fuelType = spec?.fuelType?.name || '';
+  const known = Boolean(make || model);
+  return {
+    make, model, engine, trim, year, bodyType, fuelType, known,
+    /** Liste/baslik etiketi */
+    label: known ? [year, make, model].filter(Boolean).join(' ') : 'Araç bilgisi bulunamadı',
+    /** Motor + paket satiri */
+    detail: [engine, trim].filter(Boolean).join(' '),
+  };
+};
+
 const getSahibindenSearchUrl = (item: any) => {
-  const spec = item?.vehicleSpecification || {};
-  const brand = spec?.manufacturer?.name || item?.brandName || '';
-  const model = spec?.model?.name || item?.modelName || '';
-  const variant = spec?.variant?.name || item?.variantName || '';
-  const year = spec?.year || item?.year;
+  const id = vehicleIdentity(item);
+  const brand = id.make || item?.brandName || '';
+  const model = id.model || item?.modelName || '';
+  const variant = id.engine || item?.variantName || '';
+  const year = id.year || item?.year;
 
   const cleanVariant = (variant && !variant.includes('Standard') && !variant.includes('Base')) ? variant : '';
   const queryText = `${brand} ${model} ${cleanVariant}`.replace(/\s+/g, ' ').trim();
@@ -95,8 +129,9 @@ export default function ValuationsList() {
   const filteredEvaluations = evaluations.filter((item) => {
     if (!searchFilter.trim()) return true;
     const query = searchFilter.toLowerCase();
-    const brand = item.vehicleSpecification?.manufacturer?.name?.toLowerCase() || '';
-    const model = item.vehicleSpecification?.model?.name?.toLowerCase() || '';
+    const ident = vehicleIdentity(item);
+    const brand = ident.make.toLowerCase();
+    const model = ident.model.toLowerCase();
     const plate = (item.licensePlate || '').toLowerCase();
     const phone = (item.phone || '').toLowerCase();
     const name = `${item.firstName || ''} ${item.lastName || ''}`.toLowerCase();
@@ -168,9 +203,10 @@ export default function ValuationsList() {
                 </tr>
               ) : (
                 filteredEvaluations.map((item) => {
-                  const mfgName = item.vehicleSpecification?.manufacturer?.name || 'Araç';
-                  const modelName = item.vehicleSpecification?.model?.name || '';
-                  const year = item.vehicleSpecification?.year || '';
+                  const ident = vehicleIdentity(item);
+                  const mfgName = ident.make;
+                  const modelName = ident.model;
+                  const year = ident.year ?? '';
                   const logoUrl = getBrandLogoUrl(mfgName);
                   const isDamaged = item.damageStatus && item.damageStatus !== 'NO' && item.damageStatus !== 'UNKNOWN';
 
@@ -199,10 +235,10 @@ export default function ValuationsList() {
                           </div>
                           <div className="flex flex-col">
                             <span className="font-bold text-sm text-zinc-900 dark:text-white group-hover:text-brand-orange transition-colors">
-                              {mfgName} {modelName}
+                              {ident.known ? `${mfgName} ${modelName}`.trim() : 'Araç bilgisi bulunamadı'}
                             </span>
                             <span className="text-[10px] text-zinc-500 font-mono">
-                              Model Yılı: {year} | {item.vehicleSpecification?.fuelType?.name || ''}
+                              Model Yılı: {year || '—'}{ident.detail ? ` | ${ident.detail}` : (ident.fuelType ? ` | ${ident.fuelType}` : '')}
                             </span>
                           </div>
                         </div>
@@ -317,10 +353,10 @@ export default function ValuationsList() {
             <div className="flex items-center justify-between border-b border-zinc-200 dark:border-white/10 pb-4">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 shrink-0 rounded-2xl bg-zinc-100 dark:bg-white/5 border border-zinc-200 dark:border-white/10 p-2 flex items-center justify-center">
-                  {getBrandLogoUrl(selectedEval.vehicleSpecification?.manufacturer?.name || '') ? (
+                  {getBrandLogoUrl(vehicleIdentity(selectedEval).make) ? (
                     <img
-                      src={getBrandLogoUrl(selectedEval.vehicleSpecification?.manufacturer?.name || '')!}
-                      alt={selectedEval.vehicleSpecification?.manufacturer?.name || ''}
+                      src={getBrandLogoUrl(vehicleIdentity(selectedEval).make)!}
+                      alt={vehicleIdentity(selectedEval).make}
                       className="w-full h-full object-contain filter dark:invert-0"
                     />
                   ) : (
@@ -329,7 +365,8 @@ export default function ValuationsList() {
                 </div>
                 <div>
                   <h3 className="text-lg font-black text-zinc-900 dark:text-white">
-                    {selectedEval.vehicleSpecification?.manufacturer?.name} {selectedEval.vehicleSpecification?.model?.name} ({selectedEval.vehicleSpecification?.year})
+                    {vehicleIdentity(selectedEval).label}
+                    {vehicleIdentity(selectedEval).detail ? ` · ${vehicleIdentity(selectedEval).detail}` : ''}
                   </h3>
                   <span className="text-xs font-mono text-brand-orange font-bold uppercase">
                     Plaka: {selectedEval.licensePlate || '34ABC123'}
@@ -358,7 +395,7 @@ export default function ValuationsList() {
                 </span>
                 {selectedEval.phone && (
                   <a
-                    href={`https://wa.me/${selectedEval.phone.replace(/\D/g, '').replace(/^0/, '90')}?text=${encodeURIComponent(`Merhaba ${selectedEval.firstName || ''} Bey/Hanım, NakitGaraj üzerinden ${selectedEval.vehicleSpecification?.manufacturer?.name || ''} ${selectedEval.vehicleSpecification?.model?.name || ''} aracınız için yaptığınız değerleme ile ilgili yazıyorum.`)}`}
+                    href={`https://wa.me/${selectedEval.phone.replace(/\D/g, '').replace(/^0/, '90')}?text=${encodeURIComponent(`Merhaba ${selectedEval.firstName || ''} Bey/Hanım, NakitGaraj üzerinden ${vehicleIdentity(selectedEval).known ? `${vehicleIdentity(selectedEval).make} ${vehicleIdentity(selectedEval).model}`.trim() : 'aracınız'} için yaptığınız değerleme ile ilgili yazıyorum.`)}`}
                     target="_blank"
                     rel="noreferrer"
                     className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs transition-all mt-1 w-fit cursor-pointer"
@@ -401,35 +438,79 @@ export default function ValuationsList() {
                 📊 Galeri İçin Detaylı Piyasa & Taban Analizi
               </span>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div className="p-3.5 rounded-xl bg-white/5 border border-white/10">
-                  <span className="text-[11px] text-zinc-400 font-bold block">📊 Sahibinden Piyasa Satış Değeri (Mod)</span>
-                  <div className="text-lg font-black text-amber-400 mt-1">
-                    {Math.round((selectedEval.finalOfferedPrice || selectedEval.estimatedValue) / 0.88).toLocaleString('tr-TR')} ₺
-                  </div>
-                  <span className="text-[10px] text-zinc-500 block mt-0.5">En yoğun emsal araç satış tepe değeri (Mod)</span>
-                </div>
+              {/*
+                GERCEK DEGERLER — nakit teklifden SABIT carpanla URETILMEZ.
+                Onceki surumde burada cash/0,88 "Sahibinden Piyasa Değeri",
+                cash*0,94 "Acil Nakit Tabanı" ve cash*0,96-1,30 "Piyasa Aralığı"
+                gosteriliyordu. Olculen gercek nakit/piyasa orani bantlara gore
+                0,843-0,942 arasinda degisir; sabit carpan yanlis sayi uretiyordu.
+                Degerler artik degerleme aninda saklanan gercek Fiyatlama V5
+                ciktilarindan gelir. ESKI kayitlarda saklanmadigi icin NULL'dur
+                ve UYDURULMAZ.
+              */}
+              {(selectedEval.marketReferenceValue || selectedEval.conditionAdjustedSaleValue) ? (
+                <>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="p-3.5 rounded-xl bg-white/5 border border-white/10">
+                      <span className="text-[11px] text-zinc-400 font-bold block">📊 Piyasa Referansı (emsal merkezi)</span>
+                      <div className="text-lg font-black text-amber-400 mt-1">
+                        {selectedEval.marketReferenceValue != null
+                          ? `${Math.round(selectedEval.marketReferenceValue).toLocaleString('tr-TR')} ₺`
+                          : 'Saklanmamış'}
+                      </div>
+                      <span className="text-[10px] text-zinc-500 block mt-0.5">Temiz eşdeğer Sahibinden emsal merkezi</span>
+                    </div>
 
-                <div className="p-3.5 rounded-xl bg-white/5 border border-white/10">
-                  <span className="text-[11px] text-zinc-400 font-bold block">⚡ Acil Nakit Alım Taban Fiyatı</span>
-                  <div className="text-lg font-black text-white mt-1">
-                    {Math.round((selectedEval.finalOfferedPrice || selectedEval.estimatedValue) * 0.94).toLocaleString('tr-TR')} ₺
+                    <div className="p-3.5 rounded-xl bg-white/5 border border-white/10">
+                      <span className="text-[11px] text-zinc-400 font-bold block">🔧 Kondisyon Sonrası Beklenen Değer</span>
+                      <div className="text-lg font-black text-white mt-1">
+                        {selectedEval.conditionAdjustedSaleValue != null
+                          ? `${Math.round(selectedEval.conditionAdjustedSaleValue).toLocaleString('tr-TR')} ₺`
+                          : 'Saklanmamış'}
+                      </div>
+                      <span className="text-[10px] text-zinc-500 block mt-0.5">Bildirilen hasar/kondisyon düzeltmesi sonrası</span>
+                    </div>
                   </div>
-                  <span className="text-[10px] text-zinc-500 block mt-0.5">En hızlı 15 dakikada nakit alım tabanı</span>
-                </div>
-              </div>
 
-              <div className="flex flex-col gap-1.5 pt-1 border-t border-white/10">
-                <div className="flex justify-between text-xs font-semibold text-zinc-300">
-                  <span>Piyasa Kıyaslama Değer Aralığı:</span>
-                  <span className="text-amber-400 font-extrabold">
-                    {Math.round((selectedEval.finalOfferedPrice || selectedEval.estimatedValue) * 0.96).toLocaleString('tr-TR')} ₺ - {Math.round((selectedEval.finalOfferedPrice || selectedEval.estimatedValue) * 1.30).toLocaleString('tr-TR')} ₺
+                  <div className="flex flex-col gap-1.5 pt-1 border-t border-white/10">
+                    <div className="flex justify-between text-xs font-semibold text-zinc-300">
+                      <span>Nakit Teklif:</span>
+                      <span className="text-emerald-400 font-extrabold">
+                        {Math.round(selectedEval.finalOfferedPrice || selectedEval.estimatedValue).toLocaleString('tr-TR')} ₺
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-xs font-semibold text-zinc-300">
+                      <span>Konsinye İlan Fiyatı:</span>
+                      <span className="text-amber-400 font-extrabold">
+                        {Math.round(selectedEval.maxExpectedValue || 0).toLocaleString('tr-TR')} ₺
+                      </span>
+                    </div>
+                    {selectedEval.conditionAdjustedSaleValue != null && (
+                      <div className="flex justify-between text-xs font-semibold text-zinc-400">
+                        <span>Galeri Brüt Marjı:</span>
+                        <span className="font-extrabold">
+                          {Math.round(selectedEval.conditionAdjustedSaleValue - (selectedEval.finalOfferedPrice || selectedEval.estimatedValue)).toLocaleString('tr-TR')} ₺
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <div className="p-3.5 rounded-xl bg-white/5 border border-white/10">
+                  <span className="text-[11px] text-zinc-400 font-bold block">📊 Piyasa Referansı</span>
+                  <div className="text-sm font-bold text-zinc-300 mt-1">Eski kayıtta piyasa değeri saklanmamış</div>
+                  <span className="text-[10px] text-zinc-500 block mt-1">
+                    Bu değerleme, gerçek piyasa değeri kaydedilmeye başlanmadan önce oluşturuldu.
+                    Nakit teklifden geriye dönük piyasa değeri üretilmez.
                   </span>
+                  <div className="flex justify-between text-xs font-semibold text-zinc-300 mt-3 pt-3 border-t border-white/10">
+                    <span>Nakit Teklif:</span>
+                    <span className="text-emerald-400 font-extrabold">
+                      {Math.round(selectedEval.finalOfferedPrice || selectedEval.estimatedValue).toLocaleString('tr-TR')} ₺
+                    </span>
+                  </div>
                 </div>
-                <div className="w-full bg-zinc-800 h-2 rounded-full overflow-hidden relative">
-                  <div className="absolute left-[15%] right-[15%] bg-gradient-to-r from-amber-500 to-emerald-500 h-full rounded-full" />
-                </div>
-              </div>
+              )}
             </div>
 
             {/* Sahibinden Live Verification Banner */}
@@ -444,7 +525,7 @@ export default function ValuationsList() {
                     <span className="bg-amber-500 text-black text-[9px] font-black px-2 py-0.5 rounded-full uppercase">AI & Galeri Kontrolü</span>
                   </h4>
                   <p className="text-[11px] text-zinc-600 dark:text-zinc-400 mt-0.5">
-                    Müşterinin girdiği <strong>{selectedEval.vehicleSpecification?.manufacturer?.name} {selectedEval.vehicleSpecification?.model?.name} {selectedEval.vehicleSpecification?.variant?.name} ({selectedEval.vehicleSpecification?.year})</strong> aracının Sahibinden'deki aktif ilanlarını doğrudan canlı filtreleyip inceleyin.
+                    Müşterinin girdiği <strong>{vehicleIdentity(selectedEval).label}{vehicleIdentity(selectedEval).detail ? ` ${vehicleIdentity(selectedEval).detail}` : ''}</strong> aracının Sahibinden'deki aktif ilanlarını doğrudan canlı filtreleyip inceleyin.
                   </p>
                 </div>
               </div>

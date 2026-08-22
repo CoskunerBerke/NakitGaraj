@@ -85,6 +85,31 @@ export interface EmsalMatchResult {
   bodyDistribution?: Array<{ body: string; count: number; median: number }>;
   /** En yuksek/en dusuk kasa medyani arasindaki oransal fark */
   bodySpread?: number;
+  /**
+   * HEDEF ARACIN MOTOR KIMLIGI KANITI — TEK DOGRU KAYNAK.
+   *
+   * Emsal motoru, hedefin motorunu iki yoldan taniyabilir:
+   *   CUSTOMER_FIELD        musterinin sectigi motor alani zaten acik bir
+   *                         motor imzasi tasiyor ("1.5 dCi", "320d")
+   *   FULL_MODEL_SIGNATURE  motor alani bos ama TAM MODEL kendi icinde acik
+   *                         imza tasiyor ("1.5 BlueHDi Performance Line")
+   *   NONE                  guvenilir motor kimligi YOK
+   *
+   * Ayni gercek, fiyat/guven katmaninda TEKRAR turetilmemelidir: onceki
+   * surumde `computePricing` yalnizca motor ALANINA bakiyor, TAM MODEL
+   * imzasini gormuyor ve guveni gereksiz yere 60'a tavanliyordu (olculen:
+   * 1.413 fiyatlanan hedefin 349'u, 349/349 MANUAL, 205'i L1 birebir).
+   *
+   * `strong`, projenin dogrulanmis `explicitEngineSignature` yardimcisiyla
+   * belirlenir; paket-only ifadeler (AMG, M, Premium, Luxury, Comfort,
+   * Highline) kanit SAYILMAZ. Bu deger KALICI VERIYE YAZILMAZ; yalnizca
+   * degerleme anindaki kanit durumunu bildirir.
+   */
+  engineEvidence?: {
+    source: 'CUSTOMER_FIELD' | 'FULL_MODEL_SIGNATURE' | 'NONE';
+    signature: string;
+    strong: boolean;
+  };
 }
 
 /**
@@ -395,6 +420,31 @@ export class EmsalMatcherService {
     // olabilir ("1.6 TDI BlueMotion Comfortline"). Bu ACIK kanit kullanilir.
     const paramEngineEvidence = paramEngine || explicitEngineSignature(targetFullModel);
     const targetHasEngineSignature = Boolean(explicitEngineSignature(targetFullModel));
+
+    /**
+     * Motor kimligi kaniti TEK YERDE belirlenir ve sonuca eklenir; fiyat/guven
+     * katmani ayni gercegi ikinci bir ayristiriciyla TEKRAR turetmez.
+     *
+     * Kural KESINLIKLE EKLEMELIDIR: daha once "biliniyor" sayilan hicbir durum
+     * "bilinmiyor"a DUSMEZ.
+     *
+     *  - CUSTOMER_FIELD: musterinin sectigi MOTOR ALANI dolu. Bu alan zaten
+     *    motor olarak beyan edilmistir ve emsal motoru eslemeyi BUNUNLA
+     *    kisitlar; dolayisiyla kanittir. Hacim testi burada UYGULANMAZ, cunku
+     *    hacim model adinda olabilir ("Kia Rio 1.25" + "CVVT", "A6 40" + "TDI",
+     *    "C 180" + "BlueEfficiency"). Olculen: bu test alana uygulandiginda 37
+     *    arac gereksiz yere AUTO -> MANUAL'e dusuyordu.
+     *  - FULL_MODEL_SIGNATURE: motor alani BOS; kanit yalnizca TAM MODEL
+     *    icindeki ACIK imzadan gelebilir. Burada `explicitEngineSignature`
+     *    testi ZORUNLUDUR, aksi halde paket metni (AMG / Premium / Comfort /
+     *    Highline) motor sanilir.
+     */
+    const fullModelSignature = explicitEngineSignature(targetFullModel);
+    const engineEvidence: EmsalMatchResult['engineEvidence'] = paramEngine
+      ? { source: 'CUSTOMER_FIELD', signature: paramEngine, strong: true }
+      : fullModelSignature
+        ? { source: 'FULL_MODEL_SIGNATURE', signature: fullModelSignature, strong: true }
+        : { source: 'NONE', signature: '', strong: false };
     // Yakit oncelikle MOTOR KODUNDAN turetilir: motor kodu, emsal tablosuyla
     // birebir ayni metinden (sayfa basligi) gelir. Katalogtaki yakit etiketi
     // yalnizca motor kodundan yakit cikarilamadiginda kullanilir; aksi halde
@@ -428,7 +478,7 @@ export class EmsalMatcherService {
     const paramBody = bodySignalDropped ? '' : requestedBody;
 
     if (candidates.length === 0) {
-      return this.emptyResult(make, model, year, duplicateCount, damagedCount);
+      return { ...this.emptyResult(make, model, year, duplicateCount, damagedCount), engineEvidence };
     }
 
     const { rate: annualRate, source: yearAdjustmentSource } =
@@ -532,7 +582,7 @@ export class EmsalMatcherService {
 
       if (cfg.level === 3) level3Snapshot = { level: 3, selected, trimMatchedCount };
       if (selected.length >= cfg.minCount) {
-        return this.buildResult({
+        return { ...this.buildResult({
           level: cfg.level,
           make,
           model,
@@ -550,7 +600,7 @@ export class EmsalMatcherService {
           duplicateCount,
           damagedCount,
           totalCandidates: candidates.length,
-        });
+        }), engineEvidence };
       }
     }
 
@@ -559,6 +609,7 @@ export class EmsalMatcherService {
       // "yetersiz veri" don. Servis katmani manuel degerlendirmeye yonlendirir.
       return {
         ...this.emptyResult(make, model, year, duplicateCount, damagedCount),
+        engineEvidence,
         matchedCount: level3Snapshot.selected.length,
         explanationNote:
           `${make} ${model} ${paramEngine} (${year}) için veritabanında yalnızca ` +
@@ -567,7 +618,7 @@ export class EmsalMatcherService {
       };
     }
 
-    return this.emptyResult(make, model, year, duplicateCount, damagedCount);
+    return { ...this.emptyResult(make, model, year, duplicateCount, damagedCount), engineEvidence };
   }
 
   private emptyResult(
