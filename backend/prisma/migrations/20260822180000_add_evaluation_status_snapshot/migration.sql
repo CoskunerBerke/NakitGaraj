@@ -1,0 +1,17 @@
+-- DEGERLENDIRME DURUMU ANLIK GORUNTUSU (EKLEMELI, NULLABLE)
+--
+-- Galeri paneli her degerlemeyi "otomatik teklif" gibi gosteriyordu: arka ucun
+-- hesapladigi gercek durum (SUCCESS / MANUAL_EVALUATION_REQUIRED) hicbir yerde
+-- saklanmiyordu. Bu yuzden manuel incelemeye dusen arac ile otomatik teklif
+-- alan arac panelde ayirt edilemiyordu.
+--
+-- Durum `aiAnalysis`, `confidenceScore` ya da fiyat alanlarindan TURETILMEZ;
+-- bunlar durumun nedeni olabilir ama durumun kendisi degildir.
+--
+-- ESKI KAYITLAR NULL KALIR ve bu DOGRU cevaptir: gecmis degerlemelerin gercek
+-- durumu hicbir yerde saklanmadi; sentetik GERIYE DOLDURMA YAPILMAZ. Panel bu
+-- kayitlar icin "Durum Kaydedilmemis" gosterir.
+--
+-- Not: yalnizca kayit URETEN durumlar bu sutunda gorunur. INSUFFICIENT_DATA ve
+-- DATA_INTEGRITY_ERROR eskisi gibi HIC KAYIT ACMADAN doner.
+ALTER TABLE "VehicleEvaluation" ADD COLUMN "evaluationStatus" TEXT;

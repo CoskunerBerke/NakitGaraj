@@ -231,6 +231,25 @@ model VehicleEvaluation {
   marketReferenceValue       Float?
   /// Kondisyon duzeltmesi sonrasi beklenen satis degeri, TL.
   conditionAdjustedSaleValue Float?
+
+  // DEGERLENDIRME DURUMU ANLIK GORUNTUSU (degerleme aninda arka ucun donen
+  // yetkili durumu).
+  //
+  // Galeri paneli daha once her kaydi "otomatik teklif" gibi gosteriyordu:
+  // gercek durum hicbir yerde saklanmadigi icin manuel incelemeye dusen arac
+  // ile otomatik teklif alan arac ayirt edilemiyordu. Durum `aiAnalysis`,
+  // `confidenceScore` ya da fiyat alanlarindan TURETILMEZ; bunlar durumun
+  // nedeni olabilir ama durumun kendisi degildir.
+  //
+  // ESKI KAYITLARDA NULL KALIR VE NULL DOGRU CEVAPTIR: gecmis degerlemelerin
+  // gercek durumu hicbir yerde saklanmadi, sentetik olarak GERIYE DOLDURULMAZ.
+  // Panel bu kayitlar icin "Durum Kaydedilmemis" gosterir. UNKNOWN > UYDURMA.
+  //
+  // Not: yalnizca kayit URETEN durumlar burada gorunur. INSUFFICIENT_DATA ve
+  // DATA_INTEGRITY_ERROR eskisi gibi HIC KAYIT ACMADAN doner (bkz.
+  // evaluation-status-contract.spec.ts), bu yuzden bu sutunda olusmazlar.
+  /// Arka ucun donen durumu: "SUCCESS" | "MANUAL_EVALUATION_REQUIRED".
+  evaluationStatus           String?
 }
 
 model ConsignmentApplication {

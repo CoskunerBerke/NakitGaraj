@@ -42,6 +42,57 @@ const vehicleIdentity = (item: any) => {
   };
 };
 
+/**
+ * DEGERLENDIRME DURUMU — TEK KAYNAK.
+ *
+ * Durum YALNIZCA degerleme aninda yazilan `evaluationStatus` anlik goruntusundan
+ * okunur. `aiAnalysis`, `confidenceScore`, nakit teklif ya da eslesme seviyesi
+ * gibi alanlardan TURETILMEZ: bunlar durumun NEDENI olabilir ama durumun kendisi
+ * degildir; turetme yanlis rozet uretir.
+ *
+ * Bu alan eklenmeden once kaydedilen degerlemelerde NULL'dur ve NULL DOGRU
+ * cevaptir; sentetik geriye doldurma YAPILMADI. Ham enum panele BASILMAZ.
+ *
+ * Not: INSUFFICIENT_DATA ve DATA_INTEGRITY_ERROR arka ucta HIC KAYIT ACMADAN
+ * doner, bu yuzden pratikte listede gorunmezler; eksiksizlik icin eslendiler.
+ */
+const REVIEW_STATUS_BADGES: Record<string, { label: string; className: string }> = {
+  SUCCESS: {
+    label: 'Otomatik Teklif',
+    className: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/20',
+  },
+  MANUAL_EVALUATION_REQUIRED: {
+    label: 'Uzman İncelemesi',
+    className: 'bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/20',
+  },
+  INSUFFICIENT_DATA: {
+    label: 'Yetersiz Veri',
+    className: 'bg-zinc-500/10 text-zinc-600 dark:text-zinc-400 border-zinc-500/20',
+  },
+  DATA_INTEGRITY_ERROR: {
+    label: 'Veri Tutarsızlığı',
+    className: 'bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/20',
+  },
+};
+
+/** Alan hic yazilmamis (eski kayit) — durum UYDURULMAZ. */
+const STATUS_NOT_RECORDED = {
+  label: 'Durum Kaydedilmemiş',
+  className: 'bg-zinc-500/5 text-zinc-500 border-zinc-500/20 border-dashed',
+};
+
+/** Kayitli ama panelin tanimadigi bir durum — ham enum yine BASILMAZ. */
+const STATUS_UNRECOGNIZED = {
+  label: 'Tanınmayan Durum',
+  className: 'bg-zinc-500/5 text-zinc-500 border-zinc-500/20 border-dashed',
+};
+
+const reviewStatusBadge = (item: any) => {
+  const raw = item?.evaluationStatus;
+  if (typeof raw !== 'string' || raw.trim() === '') return STATUS_NOT_RECORDED;
+  return REVIEW_STATUS_BADGES[raw] ?? STATUS_UNRECOGNIZED;
+};
+
 const getSahibindenSearchUrl = (item: any) => {
   const id = vehicleIdentity(item);
   const brand = id.make || item?.brandName || '';
@@ -260,6 +311,17 @@ export default function ValuationsList() {
                           >
                             {isDamaged ? 'Hasarlı' : 'Hatasız / Orijinal'}
                           </span>
+                          {/*
+                            DEGERLENDIRME DURUMU: saklanan gercek arka uc
+                            durumu. Eski kayitlarda alan yok; durum TURETILMEZ,
+                            acikca "Durum Kaydedilmemis" gosterilir.
+                          */}
+                          <span
+                            data-testid="eval-status-badge"
+                            className={`text-[9px] font-extrabold px-2 py-0.5 rounded-md uppercase border ${reviewStatusBadge(item).className}`}
+                          >
+                            {reviewStatusBadge(item).label}
+                          </span>
                         </div>
                       </td>
 
@@ -377,9 +439,17 @@ export default function ValuationsList() {
                     {vehicleIdentity(selectedEval).label}
                     {vehicleIdentity(selectedEval).detail ? ` · ${vehicleIdentity(selectedEval).detail}` : ''}
                   </h3>
-                  <span className="text-xs font-mono text-brand-orange font-bold uppercase">
-                    Plaka: {selectedEval.licensePlate || '34ABC123'}
-                  </span>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs font-mono text-brand-orange font-bold uppercase">
+                      Plaka: {selectedEval.licensePlate || '34ABC123'}
+                    </span>
+                    <span
+                      data-testid="eval-status-detail"
+                      className={`text-[9px] font-extrabold px-2 py-0.5 rounded-md uppercase border ${reviewStatusBadge(selectedEval).className}`}
+                    >
+                      {reviewStatusBadge(selectedEval).label}
+                    </span>
+                  </div>
                 </div>
               </div>
 

@@ -45,6 +45,10 @@ export class EvaluationService {
         // nakit teklifden sabit carpanlarla yeniden URETMEZ.
         marketReferenceValue: res.results!.marketReferenceValue ?? null,
         conditionAdjustedSaleValue: res.results!.conditionAdjustedSaleValue ?? null,
+        // GERCEK DURUM AYNEN SAKLANIR: galeri paneli durumu artik
+        // `aiAnalysis`/`confidenceScore`/fiyat alanlarindan TURETMEZ.
+        // Istemciye donen `status` ile birebir ayni deger yazilir.
+        evaluationStatus: res.status,
         minExpectedValue: res.results!.cashOfferMin,
         maxExpectedValue: res.results!.consignmentListingPrice,
         quickSaleValue: res.results!.cashOfferMin,
