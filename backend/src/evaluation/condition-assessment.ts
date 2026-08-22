@@ -88,10 +88,38 @@ export const CONDITION_CONFIG = {
   maxTotalPenalty: 0.28,
 
   /**
-   * Yas/km duyarliligi: ayni kusur yeni ve dusuk km araclarda daha cok,
-   * eski ve yuksek km araclarda daha az konusur.
+   * Yas duyarliligi: ayni kusur yeni araclarda daha cok, eski araclarda daha az
+   * konusur. Egri SUREKLI ve monotondur (lojistik); basamak YOKTUR.
+   *
+   *   m(age) = oldMultiplier + (newMultiplier - oldMultiplier) / (1 + e^((age - a0)/steepness))
+   *   a0, referenceAge'te m = 1 olacak sekilde turetilir.
+   *
+   * Onceki basamakli surumde 3->4 yasta -%20, 11->12 yasta -%30 sicrama vardi
+   * (komsu yil arasi en buyuk atlama 0,30). Yeni egride bu 0,068'e iner ve
+   * referans nokta (yas 5) BIREBIR korunur.
    */
-  ageSensitivity: { newVehicleYears: 3, newMultiplier: 1.25, oldVehicleYears: 12, oldMultiplier: 0.7 },
+  ageSensitivity: { newMultiplier: 1.25, oldMultiplier: 0.7, referenceAge: 5, steepness: 2.0 },
+
+  /**
+   * Deger duyarliligi (YALNIZ yapisal olmayan kaporta kalemleri).
+   *
+   * Saf yuzde, pahali araclarda mutlak TL cezasini patlatiyordu (1 boya:
+   * 1M'de 16.000 TL, 5M'de 80.000 TL). Kozmetik onarim maliyeti arac degeriyle
+   * DOGRU ORANTILI degildir; sabit TL'ye daha yakindir. Bu yuzden ceza
+   * degere gore ALT-DOGRUSAL olceklenir:
+   *
+   *   multiplier = clamp((value / referenceValue)^(exponent - 1), range)
+   *   -> TL cezasi ~ value^exponent (monoton artar, dogrusal artmaz)
+   *
+   * referenceValue'da carpan 1'dir; yani mevcut yuzde anchor'i BIREBIR korunur.
+   * Yapisal/mekanik/tramer kalemlerine UYGULANMAZ (onlar zaten manuel kapisi
+   * acar ya da kendi orani uzerinden calisir).
+   */
+  valueSensitivity: {
+    referenceValue: 1_000_000,
+    exponent: 0.7,
+    multiplierRange: [0.5, 2.0] as [number, number],
+  },
 
   /** Mekanik ariza taban etkileri */
   mechanical: { engineProblem: 0.06, transmissionProblem: 0.05, otherMechanical: 0.02 },
@@ -100,7 +128,20 @@ export const CONDITION_CONFIG = {
    * Tramer tutari: dogrusal TL kirimi YAPILMAZ. Arac degerine oranlanir ve
    * yumusatilir; ayrica ust sinirlanir.
    */
-  tramer: { ratioWeight: 0.35, maxPenalty: 0.10 },
+  tramer: {
+    ratioWeight: 0.35,
+    maxPenalty: 0.10,
+    /**
+     * HAM tramer/deger orani bu esige ulasirsa otomatik fiyat verilmez.
+     *
+     * Kapi CEZA uzerinden degil HAM ORAN uzerinden calisir: ceza tavanlandigi
+     * icin (maxPenalty) gercek agirlik oldugundan kucuk gorunuyordu. Olculen
+     * bosluk: oran %20-%28,6 arasinda kalan araclar (orn. 1.000.000 TL deger +
+     * 250.000 TL tramer = %25, ceza yalnizca %8,75) otomatik fiyatlaniyordu.
+     * %28,6 ustu zaten TRAMER_ABOVE_MODEL_RANGE ile manuele gidiyordu.
+     */
+    manualRatio: 0.20,
+  },
 
   /**
    * Hasar BEYAN EDILDI ama detay verilmedi: kusurun buyuklugu bilinmiyor.
@@ -160,6 +201,8 @@ export interface ConditionResult {
     mechanicalPenalty: number;
     tramerPenalty: number;
     ageMultiplier: number;
+    /** Arac degerine gore alt-dogrusal kaporta olcekleyicisi (1 = referans deger) */
+    valueMultiplier: number;
     changedPanelCount: number;
     paintedPanelCount: number;
     localPanelCount: number;
@@ -205,6 +248,32 @@ const SEVERITY: Record<PartStatus, number> = { ORIJINAL: 0, LOKAL: 1, BOYALI: 2,
  * Not: Yuzdeler gercek saha kalibrasyonu ile ayarlanmak uzere muhafazakar
  * secilmistir; agir durumlarda otomatik fiyat yerine manuel kapisi kullanilir.
  */
+/**
+ * Yas carpani: SUREKLI, monoton azalan, sinirli lojistik egri.
+ * referenceAge'te tam 1.0 verir; genc araca dogru newMultiplier'a, eski araca
+ * dogru oldMultiplier'a yaklasir. Basamak/ucurum YOKTUR.
+ */
+export function ageSensitivityMultiplier(age: number): number {
+  const { newMultiplier: hi, oldMultiplier: lo, referenceAge, steepness } =
+    CONDITION_CONFIG.ageSensitivity;
+  const a = Math.max(0, age);
+  // referenceAge'te m = 1 olacak sekilde egrinin orta noktasi:
+  const mid = referenceAge - Math.log((hi - 1) / (1 - lo)) * steepness;
+  return lo + (hi - lo) / (1 + Math.exp((a - mid) / steepness));
+}
+
+/**
+ * Deger carpani: kaporta cezasini arac degerine gore ALT-DOGRUSAL olceklendirir.
+ * referenceValue'da 1.0 doner (mevcut yuzde anchor'i korunur).
+ */
+export function valueSensitivityMultiplier(cleanMarketValue: number): number {
+  const { referenceValue, exponent, multiplierRange } = CONDITION_CONFIG.valueSensitivity;
+  const v = Math.max(1, Number(cleanMarketValue) || 0);
+  if (!Number.isFinite(v) || v <= 0) return 1;
+  const m = Math.pow(v / referenceValue, exponent - 1);
+  return Math.min(multiplierRange[1], Math.max(multiplierRange[0], m));
+}
+
 export function assessCondition(input: ConditionInput): ConditionResult {
   const C = CONDITION_CONFIG;
   const flags: string[] = [];
@@ -228,12 +297,13 @@ export function assessCondition(input: ConditionInput): ConditionResult {
     perPart.set(part, st);
   }
 
-  // --- 2) Yas duyarliligi ---
+  // --- 2) Yas duyarliligi: SUREKLI egri (basamak yok) ---
   const year = input.currentYear ?? new Date().getFullYear();
   const age = Math.max(0, year - input.vehicleYear);
-  let ageMultiplier = 1;
-  if (age <= C.ageSensitivity.newVehicleYears) ageMultiplier = C.ageSensitivity.newMultiplier;
-  else if (age >= C.ageSensitivity.oldVehicleYears) ageMultiplier = C.ageSensitivity.oldMultiplier;
+  const ageMultiplier = ageSensitivityMultiplier(age);
+
+  // --- 2b) Deger duyarliligi: alt-dogrusal olcekleme (yalniz kaporta) ---
+  const valueMultiplier = valueSensitivityMultiplier(input.cleanMarketValue);
 
   // --- 3) Kaporta cezasi: azalan getiri ile birikir (kor toplama yok) ---
   const impacts: Array<{ part: string; status: PartStatus; cls: PartClass; impact: number }> = [];
@@ -247,7 +317,11 @@ export function assessCondition(input: ConditionInput): ConditionResult {
   let cosmeticPenalty = 0;
   let structuralPenalty = 0;
   impacts.forEach((it, i) => {
-    const scaled = it.impact * Math.pow(C.diminishingDecay, i) * ageMultiplier;
+    // Deger sonumlemesi YALNIZ yapisal olmayan panellere uygulanir; yapisal
+    // beyan zaten manuel kapisini acar ve "pahali araca daha az yuzde" gibi
+    // otomatik bir matematige tabi tutulmaz.
+    const vm = it.cls === 'MAJOR' ? 1 : valueMultiplier;
+    const scaled = it.impact * Math.pow(C.diminishingDecay, i) * ageMultiplier * vm;
     if (it.cls === 'MAJOR') structuralPenalty += scaled;
     else cosmeticPenalty += scaled;
     countedParts.push({ ...it, impact: scaled });
@@ -302,6 +376,9 @@ export function assessCondition(input: ConditionInput): ConditionResult {
     // gercek etkiyi oldugundan kucuk gosterir -> manuel degerlendirme.
     // (Yeni bir yuzde uydurulmaz; esik, mevcut tavanin kendisidir.)
     if (rawTramerPenalty > C.tramer.maxPenalty) flags.push('TRAMER_ABOVE_MODEL_RANGE');
+    // HAM oran kapisi: ceza tavanlandigi icin agirligi kucuk gorunen ama
+    // gercekte agir olan kayitlar otomatik fiyatlanmaz.
+    if (ratio >= C.tramer.manualRatio) flags.push('TRAMER_RATIO_HIGH');
   } else if (input.tramerAmount && /var/i.test(String(input.tramerAmount)) && tramer === null) {
     flags.push('TRAMER_UNKNOWN_AMOUNT');
   }
@@ -328,7 +405,8 @@ export function assessCondition(input: ConditionInput): ConditionResult {
   // --- 7) Manuel kapisi ---
   const structuralFlag = flags.some((f) =>
     ['STRUCTURAL_PART', 'CHASSIS_OR_STRUCTURAL', 'HEAVY_DAMAGE', 'AIRBAG',
-      'ENGINE_FAULT', 'TRANSMISSION_FAULT', 'TRAMER_ABOVE_MODEL_RANGE'].includes(f),
+      'ENGINE_FAULT', 'TRANSMISSION_FAULT', 'TRAMER_ABOVE_MODEL_RANGE',
+      'TRAMER_RATIO_HIGH'].includes(f),
   );
   const requiresManualReview =
     structuralFlag || extremeMultiPanel || penalty >= C.manualReviewThreshold;
@@ -354,6 +432,7 @@ export function assessCondition(input: ConditionInput): ConditionResult {
       mechanicalPenalty,
       tramerPenalty,
       ageMultiplier,
+      valueMultiplier,
       changedPanelCount,
       paintedPanelCount,
       localPanelCount,
