@@ -221,13 +221,24 @@ export class TelegramService {
     fairMarketValue: number;
     finalOfferedPrice: number;
     finalConsignmentPrice: number;
+    /** Konsinyede musteriye kalan net. Cekirdek hesaplar; burada TURETILMEZ. */
+    customerConsignmentNet?: number | null;
     sellingTimeline?: string;
   }) {
     const desiredText = evalData.userDesiredPrice
       ? `<b>💰 Müşteri Beklentisi:</b> ${evalData.userDesiredPrice.toLocaleString('tr-TR')} ₺\n`
       : '<b>💰 Müşteri Beklentisi:</b> Belirtilmedi\n';
 
-    const profit = Math.max(0, evalData.fairMarketValue - evalData.finalOfferedPrice);
+    // BRUT marj: beklenen satis ile nakit teklif arasindaki fark.
+    // NET KAR DEGILDIR — isletme maliyeti ve risk maliyeti dusulmemistir.
+    // Eskiden "Net Kâr" olarak gosteriliyordu; bayi olmayan bir marja
+    // guvenip pazarlik payi hesaplayabiliyordu.
+    const grossMargin = Math.max(0, evalData.fairMarketValue - evalData.finalOfferedPrice);
+    // Musteri neti YALNIZCA cekirdekten gelirse gosterilir; UYDURULMAZ.
+    const netLine =
+      typeof evalData.customerConsignmentNet === 'number' && Number.isFinite(evalData.customerConsignmentNet)
+        ? evalData.customerConsignmentNet
+        : null;
 
     const caption = `
 <b>🚗 YENİ NAKİTGARAJ ARAÇ DEĞERLEMESİ!</b>
@@ -239,8 +250,9 @@ export class TelegramService {
 <b>📋 Plaka:</b> ${evalData.licensePlate || '34ABC123'} | <b>Renk:</b> ${evalData.color}
 
 ${desiredText}<b>📉 Piyasa Satış Değeri:</b> ${evalData.fairMarketValue.toLocaleString('tr-TR')} ₺
-<b>💵 Anında Nakit Alım Teklifimiz:</b> ${evalData.finalOfferedPrice.toLocaleString('tr-TR')} ₺ <i>(Net Kâr: ${profit.toLocaleString('tr-TR')} ₺)</i>
-<b>🏪 Dükkan Konsinye Fiyatımız:</b> ${evalData.finalConsignmentPrice.toLocaleString('tr-TR')} ₺
+<b>💵 Anında Nakit Alım Teklifimiz:</b> ${evalData.finalOfferedPrice.toLocaleString('tr-TR')} ₺ <i>(Brüt Marj: ${grossMargin.toLocaleString('tr-TR')} ₺)</i>
+<b>🏪 Önerilen Konsinye İlan Fiyatı:</b> ${evalData.finalConsignmentPrice.toLocaleString('tr-TR')} ₺${netLine !== null ? `
+<b>🤝 Konsinyede Müşteriye Tahmini Net:</b> ${netLine.toLocaleString('tr-TR')} ₺` : ''}
 
 <b>⏱️ Satış Aciliyeti:</b> ${evalData.sellingTimeline || 'Hemen'}
 <b>📅 Tarih:</b> ${new Date().toLocaleString('tr-TR')}
@@ -256,7 +268,8 @@ ${desiredText}<b>📉 Piyasa Satış Değeri:</b> ${evalData.fairMarketValue.toL
     // baska isletmelere satildiginda yanlis kisiye yonlendirirdi.
     // Ayar bos ise `formatWhatsAppUrl` null doner ve buton hic eklenmez.
     const adminPhone = this.getSettings().galleryWhatsAppPhone || '';
-    const adminText = `🚗 YENİ NAKİTGARAJ ARAÇ DEĞERLEMESİ!\n\n👤 Müşteri: ${evalData.firstName || 'İsimsiz'} ${evalData.lastName || ''}\n📞 Telefon: ${evalData.phone || 'Belirtilmedi'}\n🚘 Araç: ${evalData.vehicleName}\n🛣️ Kilometre: ${evalData.mileage ? evalData.mileage.toLocaleString('tr-TR') : 0} km\n📋 Plaka: ${evalData.licensePlate || ''} | Renk: ${evalData.color || ''}\n\n${evalData.userDesiredPrice ? '💰 Müşteri Beklentisi: ' + evalData.userDesiredPrice.toLocaleString('tr-TR') + ' ₺\n' : ''}📉 Piyasa Satış Değeri: ${evalData.fairMarketValue ? evalData.fairMarketValue.toLocaleString('tr-TR') : 0} ₺\n💵 Anında Nakit Alım Teklifimiz: ${evalData.finalOfferedPrice ? evalData.finalOfferedPrice.toLocaleString('tr-TR') : 0} ₺ (Net Kâr: ${profit.toLocaleString('tr-TR')} ₺)\n🏪 Dükkan Konsinye Fiyatımız: ${evalData.finalConsignmentPrice ? evalData.finalConsignmentPrice.toLocaleString('tr-TR') : 0} ₺\n\n⏱️ Satış Aciliyeti: ${evalData.sellingTimeline || 'Hemen'}\n📅 Tarih: ${new Date().toLocaleString('tr-TR')}`;
+    const adminText = `🚗 YENİ NAKİTGARAJ ARAÇ DEĞERLEMESİ!\n\n👤 Müşteri: ${evalData.firstName || 'İsimsiz'} ${evalData.lastName || ''}\n📞 Telefon: ${evalData.phone || 'Belirtilmedi'}\n🚘 Araç: ${evalData.vehicleName}\n🛣️ Kilometre: ${evalData.mileage ? evalData.mileage.toLocaleString('tr-TR') : 0} km\n📋 Plaka: ${evalData.licensePlate || ''} | Renk: ${evalData.color || ''}\n\n${evalData.userDesiredPrice ? '💰 Müşteri Beklentisi: ' + evalData.userDesiredPrice.toLocaleString('tr-TR') + ' ₺\n' : ''}📉 Piyasa Satış Değeri: ${evalData.fairMarketValue ? evalData.fairMarketValue.toLocaleString('tr-TR') : 0} ₺\n💵 Anında Nakit Alım Teklifimiz: ${evalData.finalOfferedPrice ? evalData.finalOfferedPrice.toLocaleString('tr-TR') : 0} ₺ (Brüt Marj: ${grossMargin.toLocaleString('tr-TR')} ₺)\n🏪 Önerilen Konsinye İlan Fiyatı: ${evalData.finalConsignmentPrice ? evalData.finalConsignmentPrice.toLocaleString('tr-TR') : 0} ₺${netLine !== null ? `
+🤝 Konsinyede Müşteriye Tahmini Net: ${netLine.toLocaleString('tr-TR')} ₺` : ''}\n\n⏱️ Satış Aciliyeti: ${evalData.sellingTimeline || 'Hemen'}\n📅 Tarih: ${new Date().toLocaleString('tr-TR')}`;
 
     const adminWaUrl = this.formatWhatsAppUrl(adminPhone, adminText);
 

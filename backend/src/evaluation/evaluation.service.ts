@@ -157,6 +157,11 @@ export class EvaluationService {
         // nakit teklifden sabit carpanlarla yeniden URETMEZ.
         marketReferenceValue: res.results!.marketReferenceValue ?? null,
         conditionAdjustedSaleValue: res.results!.conditionAdjustedSaleValue ?? null,
+        // KONSINYE ILAN FIYATI (maxExpectedValue) MUSTERI NETI DEGILDIR.
+        // Ilan fiyati tanim geregi beklenen satisin ustundedir; musterinin
+        // eline gececek tutar ayri bir sayidir ve cekirdek onu zaten
+        // hesapliyor. Panel bunu komisyon/ilan/nakit uzerinden TURETMEZ.
+        customerConsignmentNet: res.results!.customerConsignmentNet ?? null,
         // GERCEK DURUM AYNEN SAKLANIR: galeri paneli durumu artik
         // `aiAnalysis`/`confidenceScore`/fiyat alanlarindan TURETMEZ.
         // Istemciye donen `status` ile birebir ayni deger yazilir.
@@ -192,6 +197,9 @@ export class EvaluationService {
       fairMarketValue: res.results!.fairMarketValue,
       finalOfferedPrice: res.results!.cashOffer,
       finalConsignmentPrice: res.results!.consignmentListingPrice,
+      // Bildirimde ILAN FIYATI ile MUSTERI NETI ayri ayri gorunur; bayi
+      // hangisinin isteme fiyati, hangisinin odeme oldugunu tahmin etmez.
+      customerConsignmentNet: res.results!.customerConsignmentNet ?? null,
       userDesiredPrice: dto.userDesiredPrice,
       sellingTimeline: dto.sellingTimeline,
       firstName: dto.firstName,

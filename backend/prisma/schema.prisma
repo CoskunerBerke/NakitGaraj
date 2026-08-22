@@ -232,6 +232,22 @@ model VehicleEvaluation {
   /// Kondisyon duzeltmesi sonrasi beklenen satis degeri, TL.
   conditionAdjustedSaleValue Float?
 
+  // KONSINYEDE MUSTERIYE KALAN NET (degerleme aninda hesaplanan).
+  //
+  // `maxExpectedValue` KONSINYE ILAN (isteme) FIYATIDIR ve tanim geregi
+  // beklenen satisin USTUNDEDIR. Musterinin eline gececek tutar DEGILDIR.
+  // Ikisi farkli sayilardir; olculen ornek: ilan 1.499.900 TL iken musteri
+  // neti 1.406.580 TL. Bu alan olmadan galeri paneli musterinin gercekte ne
+  // alacagini GOSTEREMIYORDU.
+  //
+  // Hesaplayan tek yer fiyat cekirdegidir (customerConsignmentNet); panel ya da
+  // on yuz bu degeri komisyon/ilan/nakit uzerinden YENIDEN TURETMEZ.
+  //
+  // ESKI KAYITLARDA NULL KALIR VE NULL DOGRU CEVAPTIR: gecmis degerlemelerin
+  // neti hicbir yerde saklanmadi, sentetik GERIYE DOLDURULMAZ.
+  /// Konsinye satisinda musteriye kalan tahmini net, TL.
+  customerConsignmentNet     Float?
+
   // DEGERLENDIRME DURUMU ANLIK GORUNTUSU (degerleme aninda arka ucun donen
   // yetkili durumu).
   //

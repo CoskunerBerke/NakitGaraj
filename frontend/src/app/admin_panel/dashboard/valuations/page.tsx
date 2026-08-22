@@ -367,7 +367,7 @@ export default function ValuationsList() {
                             {formatTL(item.finalOfferedPrice || item.estimatedValue)}
                           </span>
                           <span className="text-[10px] text-zinc-500 whitespace-nowrap">
-                            Konsinye: {formatTL(item.maxExpectedValue || item.estimatedValue)}
+                            İlan: {formatTL(item.maxExpectedValue || item.estimatedValue)}
                           </span>
                           {/*
                             GERCEK piyasa referansi — nakitten TURETILMEZ.
@@ -503,9 +503,27 @@ export default function ValuationsList() {
                   </span>
                 </div>
                 <div className="flex justify-between items-center">
-                  <span className="text-zinc-600 dark:text-zinc-400">Dükkan Konsinye Fiyatı:</span>
+                  <span className="text-zinc-600 dark:text-zinc-400">Önerilen Konsinye İlan Fiyatı:</span>
                   <span className="font-bold text-zinc-800 dark:text-white">
                     {formatTL(selectedEval.maxExpectedValue || selectedEval.estimatedValue)}
+                  </span>
+                </div>
+                {/*
+                  ILAN FIYATI MUSTERI NETI DEGILDIR.
+                  Ilan fiyati tanim geregi beklenen satisin ustundedir; musterinin
+                  eline gececek tutar ayri bir alandir. Eski kayitlarda bu deger
+                  hic saklanmadi -> "Saklanmamis". Komisyon/ilan/nakit uzerinden
+                  YENIDEN HESAPLANMAZ.
+                */}
+                <div className="flex justify-between items-center">
+                  <span className="text-zinc-600 dark:text-zinc-400">Konsinyede Müşteriye Tahmini Net:</span>
+                  <span
+                    data-testid="admin-consignment-net"
+                    className="font-bold text-zinc-800 dark:text-white"
+                  >
+                    {selectedEval.customerConsignmentNet != null
+                      ? formatTL(selectedEval.customerConsignmentNet)
+                      : 'Saklanmamış'}
                   </span>
                 </div>
               </div>
@@ -559,9 +577,17 @@ export default function ValuationsList() {
                       </span>
                     </div>
                     <div className="flex justify-between text-xs font-semibold text-zinc-300">
-                      <span>Konsinye İlan Fiyatı:</span>
+                      <span>Önerilen Konsinye İlan Fiyatı:</span>
                       <span className="text-amber-400 font-extrabold">
                         {formatTL(selectedEval.maxExpectedValue)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-xs font-semibold text-zinc-300">
+                      <span>Konsinyede Müşteriye Tahmini Net:</span>
+                      <span className="text-emerald-400 font-extrabold">
+                        {selectedEval.customerConsignmentNet != null
+                          ? formatTL(selectedEval.customerConsignmentNet)
+                          : 'Saklanmamış'}
                       </span>
                     </div>
                     {selectedEval.conditionAdjustedSaleValue != null && (

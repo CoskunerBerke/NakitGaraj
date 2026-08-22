@@ -2641,7 +2641,16 @@ function SearchableCombobox({
             conditionAdjustedPrice < marketReferencePrice;
           // Konsinyede müşteriye asıl önemli olan, ilan fiyatı değil eline geçecek net tutardır.
           const consignmentExpectedSale = activeResults.expectedConsignmentSalePrice || activeResults.expectedSalePrice || 0;
-          const consignmentCustomerNet = activeResults.customerConsignmentNet || activeResults.agreedCustomerNet || 0;
+          // MUSTERI NETI YALNIZCA ARKA UCTAN GELIR.
+          // Once `customerConsignmentNet || consignmentPrice` yaziliyordu; net
+          // gelmediginde musteriye ILAN FIYATI "size kalacak net" etiketiyle
+          // gosteriliyordu. Ilan fiyati beklenen satisin USTUNDEDIR, yani
+          // musteriye gercekte alacagindan fazlasi vaat edilmis olurdu.
+          const rawCustomerNet = activeResults.customerConsignmentNet ?? activeResults.agreedCustomerNet;
+          const consignmentCustomerNet =
+            typeof rawCustomerNet === 'number' && Number.isFinite(rawCustomerNet) && rawCustomerNet > 0
+              ? rawCustomerNet
+              : null;
           const estimatedDaysToSell = activeResults.estimatedDaysToSell || '';
 
           return (
@@ -2728,7 +2737,7 @@ function SearchableCombobox({
                           Size kalacak tahmini net
                         </div>
                         <div data-testid="result-consignment-net" className="text-3xl lg:text-4xl font-black text-brand-orange tracking-tight">
-                          {formatTL(consignmentCustomerNet || consignmentPrice)}
+                          {consignmentCustomerNet !== null ? formatTL(consignmentCustomerNet) : 'Uzmanımız belirleyecek'}
                         </div>
 
                         <div className="mt-3 space-y-1.5 text-[11px] font-semibold text-brand-orange/90 dark:text-orange-200">

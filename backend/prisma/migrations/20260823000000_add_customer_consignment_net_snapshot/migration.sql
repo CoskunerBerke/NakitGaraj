@@ -1,0 +1,16 @@
+-- KONSINYEDE MUSTERIYE KALAN NET ANLIK GORUNTUSU (EKLEMELI, NULLABLE)
+--
+-- `maxExpectedValue` KONSINYE ILAN (isteme) FIYATIDIR: tanim geregi beklenen
+-- satisin USTUNDEDIR ve musterinin eline gececek tutar DEGILDIR.
+-- Olculen ornek: beklenen satis 1.450.082 TL, ilan fiyati 1.499.900 TL,
+-- musteri neti 1.406.580 TL, komisyon 43.502 TL.
+--
+-- Musteri neti fiyat cekirdeginde ZATEN hesaplaniyordu (customerConsignmentNet)
+-- ama hicbir yere yazilmiyordu; bu yuzden galeri paneli musterinin gercekte ne
+-- alacagini gosteremiyor, bildirimde de yalnizca ilan fiyati gorunuyordu.
+--
+-- Panel/on yuz bu degeri komisyon veya ilan fiyatindan YENIDEN TURETMEZ.
+--
+-- ESKI KAYITLAR NULL KALIR ve bu DOGRU cevaptir: gecmis degerlemelerin neti
+-- hicbir zaman saklanmadi; sentetik GERIYE DOLDURMA YAPILMAZ.
+ALTER TABLE "VehicleEvaluation" ADD COLUMN "customerConsignmentNet" REAL;
