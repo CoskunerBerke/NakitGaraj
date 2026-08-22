@@ -92,6 +92,22 @@ body {
   outline: none;
 }
 
+/*
+ * Doğrulama hatası durumu.
+ * .glass-input katmansız (unlayered) tanımlandığı için Tailwind'in
+ * katmanlı border ve ring utility'leri onu ezemiyor; bu yüzden hata
+ * stili aynı blokta ve .glass-input'tan sonra tanımlanır.
+ */
+.glass-input-error {
+  border-color: #ef4444;
+  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.25);
+}
+
+.glass-input-error:focus {
+  border-color: #ef4444;
+  box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.35);
+}
+
 /* Shimmer/Skeleton Effect */
 @keyframes shimmer {
   0% {

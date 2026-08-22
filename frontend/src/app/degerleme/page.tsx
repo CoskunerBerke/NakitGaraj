@@ -36,6 +36,66 @@ import RealisticCarDamageSchematic from '../../components/RealisticCarDamageSche
 import Link from 'next/link';
 import { useLanguage } from '../../context/LanguageContext';
 import ShinyText from '../../components/reactbits/ShinyText';
+import { formatTL } from '../../lib/format';
+import { siteConfig } from '../../config/site-config';
+
+/**
+ * MUSTERIYE GOSTERILECEK ACIKLAMALARI SUZ.
+ *
+ * Arka ucun `aiAnalysis` listesi hem musteriye uygun cumleler hem de DAHILI
+ * teknik/galeri-ici satirlar tasir. Ham haliyle basildiginda musteri sunlari
+ * goruyordu (olculdu):
+ *   - "Seviye 1: ... birebir motor, yakit ve model yili eslesen 9 gercek
+ *     Sahibinden ilani kullanildi"              -> ic eslesme seviyesi
+ *   - "... (LEARNED_FROM_LISTINGS)"             -> ham ic enum
+ *   - "Kilometre Duzeltmesi: ... Katsayi: %1.66/10.000km ..." -> ic katsayi
+ *   - "Bu arac icin otomatik fiyatlandirma guvenli aralikta sonuc uretemedi"
+ *     -> GALERI ICI ekonomi gerekcesi (musteri tabani/kar catismasi)
+ *
+ * Bu satirlar KALDIRILIR. Yerine uydurma metin URETILMEZ; yalnizca zaten
+ * musteri diliyle yazilmis satirlar gecer. Arka uc DEGISMEDI.
+ */
+const INTERNAL_NOTE_PATTERNS: RegExp[] = [
+  /Seviye\s*\d/i,                       // ic eslesme seviyesi
+  /LEARNED_|DEFAULT_|SNAPSHOT_|NO_KM_DATA|LIMITED_KM_SAMPLE/,  // ham enum
+  /Kilometre Düzeltmesi:/i,             // ic katsayi dokumu
+  /Model Yılı Normalizasyonu:/i,        // ic normalizasyon dokumu
+  /güvenli aralıkta sonuç üretemedi/i,  // galeri ici ekonomi gerekcesi
+  /Fiyat invariantları/i,               // ic tutarlilik kontrolu
+  /konsinye komisyonu.*kurgulanamıyor/i, // galeri ici komisyon gerekcesi
+];
+
+/**
+ * MANUEL GEREKCESINI MUSTERI DILINE CEVIR.
+ *
+ * Ic gerekceler (dusuk guven, musteri tabani catismasi, kar/ekonomi
+ * catismasi, TRAMER_RATIO_HIGH gibi bayraklar) MUSTERIYE GOSTERILMEZ.
+ * Yalnizca musterinin anlayabilecegi ve dogru olan bir ozet secilir.
+ * Hicbir gerekce uydurulmaz; eslesme yoksa notr metin doner.
+ */
+const manualReasonForCustomer = (notes: unknown): string => {
+  const text = Array.isArray(notes) ? notes.filter((n) => typeof n === 'string').join(' | ') : '';
+  if (/yapısal\/ağır hasar|mekanik arıza|çok sayıda değişen panel/i.test(text)) {
+    return 'Aracınızda bildirdiğiniz hasar/onarım durumu, yerinde kontrol ile daha doğru değerlenir.';
+  }
+  if (/hasar seviyesi otomatik fiyatlandırma için yüksek/i.test(text)) {
+    return 'Bildirdiğiniz hasar geçmişi nedeniyle ek inceleme gerekiyor.';
+  }
+  if (/sınırlı sayıda emsal/i.test(text)) {
+    return 'Aracınıza çok benzeyen ilan sayısı sınırlı olduğu için fiyatı uzmanımız netleştirecek.';
+  }
+  if (/kasa tipi belirtilmediği/i.test(text)) {
+    return 'Aracınızın kasa tipi netleşmediği için doğru fiyat uzmanımızca belirlenecek.';
+  }
+  return 'Aracınızın özellikleri, otomatik teklif yerine uzman değerlendirmesini daha sağlıklı kılıyor.';
+};
+
+const customerFacingNotes = (notes: unknown): string[] => {
+  if (!Array.isArray(notes)) return [];
+  return notes
+    .filter((n): n is string => typeof n === 'string' && n.trim().length > 0)
+    .filter((n) => !INTERNAL_NOTE_PATTERNS.some((re) => re.test(n)));
+};
 
 const BODY_PARTS = [
   'Motor Kaputu',
@@ -124,6 +184,9 @@ const filterDirtyOptions = (options: any[]) => {
   });
 };
 
+// Tek kaynak: hem submit doğrulaması hem de alan altındaki yardım metni bunu kullanır.
+const TR_PHONE_PATTERN = /^(05|5)\d{9}$/;
+
 export default function ValuationWizard() {
   const { t, language } = useLanguage();
   const [step, setStep] = useState(1);
@@ -196,6 +259,7 @@ export default function ValuationWizard() {
   const [phone, setPhone] = useState('');
   const [showUserModal, setShowUserModal] = useState(false);
   const [userModalError, setUserModalError] = useState('');
+  const [phoneTouched, setPhoneTouched] = useState(false);
 
   // Vehicle data loading states
   const [isVehicleDataLoading, setIsVehicleDataLoading] = useState(false);
@@ -235,9 +299,10 @@ export default function ValuationWizard() {
     }
 
     const cleanedPhone = phone.replace(/[^0-9]/g, '');
-    const isValidPhone = /^(05|5)\d{9}$/.test(cleanedPhone);
+    const isValidPhone = TR_PHONE_PATTERN.test(cleanedPhone);
 
     if (!isValidPhone) {
+      setPhoneTouched(true);
       setUserModalError('Geçersiz telefon numarası girdiniz. Lütfen kontrol edip tekrar deneyiniz.');
       return;
     }
@@ -249,6 +314,10 @@ export default function ValuationWizard() {
     setPhone(cleanedPhone);
     setShowUserModal(false);
   };
+
+  // Hata durumu yalnızca kullanıcı alana dokunduktan veya formu gönderdikten sonra gösterilir.
+  const isPhoneValid = TR_PHONE_PATTERN.test(phone.replace(/[^0-9]/g, ''));
+  const showPhoneError = phoneTouched && !isPhoneValid;
 
   const toggleFeature = (featureName: string) => {
     setSelectedFeatures(prev => {
@@ -307,24 +376,62 @@ export default function ValuationWizard() {
 
   // Step 3 valuation results
   const [valuationResult, setValuationResult] = useState<any>(null);
+
+  /**
+   * DEGERLEME YUKLEME DURUMU.
+   *
+   * Onceki surumde tek geri bildirim butonun "Değerlendiriliyor..." etiketiydi;
+   * istek birkac yuz ms surdugu icin musteri ne oldugunu goremiyordu.
+   * Mesajlar SAHTE YUZDE icermez ve canli Sahibinden baglantisi IDDIA ETMEZ —
+   * degerleme mevcut ilan veritabani uzerinden yapilir.
+   */
+  const [loadingStep, setLoadingStep] = useState(0);
+  const LOADING_MESSAGES = [
+    'Aracınıza uygun emsal ilanlar taranıyor',
+    'Benzer ilanların fiyatları karşılaştırılıyor',
+    'Kilometre ve model yılı farkları dengeleniyor',
+    'Teklifiniz hazırlanıyor',
+  ];
+  useEffect(() => {
+    if (!isLoading) { setLoadingStep(0); return; }
+    const id = setInterval(() => {
+      setLoadingStep((p) => Math.min(p + 1, LOADING_MESSAGES.length - 1));
+    }, 900);
+    return () => clearInterval(id);
+  }, [isLoading]);
   const [showKvkk, setShowKvkk] = useState(false);
 
-  const calculateEstimatedDamagePenalty = () => {
-    let penalty = 0;
-    for (const [part, status] of Object.entries(paintParts)) {
-      if (status === 'DEGISEN') {
-        penalty += (part === 'Motor Kaputu' || part === 'Tavan') ? 8 : 4;
-      } else if (status === 'BOYALI') {
-        penalty += (part === 'Motor Kaputu' || part === 'Tavan') ? 5 : 2;
-      } else if (status === 'LOKAL') {
-        penalty += (part === 'Motor Kaputu' || part === 'Tavan') ? 3 : 1;
-      }
+  /**
+   * MUSTERININ BEYAN OZETI — FIYAT TAHMINI DEGILDIR.
+   *
+   * Onceki surumde burada ayri bir "Tahmini Deger Dususu: %X" hesabi vardi.
+   * Bu, arka uctaki Kondisyon V2 ile HICBIR ILGISI OLMAYAN ikinci bir
+   * fiyatlama uygulamasiydi ve musteriye YANLIS sayi gosteriyordu:
+   *   1 boyali kapi  -> ekranda %2   · gercekte %1,6 (yas + deger olcekli)
+   *   sasi islemi    -> ekranda %25  · gercekte YUZDE YOK, MANUEL inceleme
+   *   ust sinir      -> ekranda %60  · gercekte %28
+   * Ayrica musteri, degerleme yapilmadan once "boya su kadar dusurur"
+   * izlenimi aliyordu. Musteri burada fiyat hesaplamaz, DURUM BEYAN EDER.
+   *
+   * Yerine yalnizca ne beyan edildigi sayilir; fiyat etkisi sonucta gosterilir.
+   */
+  const conditionDeclarationSummary = () => {
+    let painted = 0;
+    let changed = 0;
+    let local = 0;
+    for (const status of Object.values(paintParts)) {
+      if (status === 'DEGISEN') changed++;
+      else if (status === 'BOYALI') painted++;
+      else if (status === 'LOKAL') local++;
     }
-    if (chassisAction) penalty += 25;
-    if (heavyDamage) penalty += 35;
-    if (scratchDent) penalty += 2;
-    if (crackedGlass) penalty += 1;
-    return Math.min(60, penalty);
+    const extras: string[] = [];
+    if (chassisAction) extras.push('şasi işlemi');
+    if (podyeDamage) extras.push('podye');
+    if (heavyDamage) extras.push('ağır hasar kaydı');
+    if (airbagDeployed) extras.push('hava yastığı');
+    if (engineProblem) extras.push('motor arızası');
+    if (transmissionProblem) extras.push('şanzıman arızası');
+    return { painted, changed, local, extras, total: painted + changed + local + extras.length };
   };
 
   const handleSendVehicleRequest = async (e: React.FormEvent) => {
@@ -632,6 +739,11 @@ function SearchableCombobox({
       {/* Hidden Native Select for Playwright test compatibility */}
       <select
         data-testid={dataTestId}
+        /*
+          Bu gizli select `sr-only` oldugu icin EKRAN OKUYUCUYA GORUNURDUR;
+          etiketsiz birakildiginda isimsiz bir form alani olarak okunuyordu.
+        */
+        aria-label={placeholder}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         className="sr-only"
@@ -982,6 +1094,44 @@ function SearchableCombobox({
 
   return (
     <div className="max-w-4xl mx-auto w-full px-4 md:px-8 py-10 md:py-16 flex-1 flex flex-col justify-center">
+      {/* Değerleme yükleme katmanı */}
+      {isLoading && (
+        <div
+          data-testid="valuation-loading-overlay"
+          role="status"
+          aria-live="polite"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-white/85 dark:bg-zinc-950/85 backdrop-blur-sm px-6"
+        >
+          <div className="glass-card rounded-3xl p-8 border border-brand-orange/20 flex flex-col items-center gap-5 max-w-sm w-full text-center bg-white dark:bg-zinc-900">
+            <div className="w-14 h-14 rounded-2xl bg-brand-orange/10 border border-brand-orange/20 flex items-center justify-center">
+              <div className="w-7 h-7 border-[3px] border-brand-orange border-t-transparent rounded-full animate-spin" />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <h3 className="text-base font-extrabold text-zinc-900 dark:text-white">
+                Aracınız değerlendiriliyor
+              </h3>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400 min-h-[2rem]">
+                {LOADING_MESSAGES[loadingStep]}…
+              </p>
+            </div>
+            {/* Adim gostergesi — yuzde IDDIA ETMEZ, yalnizca ilerleyisi belli eder */}
+            <div className="flex items-center gap-1.5" aria-hidden="true">
+              {LOADING_MESSAGES.map((_, i) => (
+                <span
+                  key={i}
+                  className={`h-1.5 rounded-full transition-all duration-500 ${
+                    i <= loadingStep ? 'w-6 bg-brand-orange' : 'w-1.5 bg-zinc-300 dark:bg-zinc-700'
+                  }`}
+                />
+              ))}
+            </div>
+            <p className="text-[10px] text-zinc-400 leading-relaxed">
+              Değerleme, veritabanımızdaki gerçek ilan verileri üzerinden yapılır.
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Progress Indicator */}
       <div className="flex items-center justify-between mb-8 max-w-md mx-auto w-full">
         {[1, 2, 3].map((s) => (
@@ -1106,7 +1256,7 @@ function SearchableCombobox({
                   {selectedBrand && selectedYear && !selectedModel && `Model Yılı seçildi (${selectedYear}). Şimdi 3. Adımdan aracınızın modelini seçin.`}
                   {selectedBrand && selectedYear && selectedModel && !selectedVariant && `Model seçildi (${models.find(m => m.id === selectedModel)?.name || 'Seçildi'}). Şimdi 4. Adımdan motor/versiyon bilgisini seçin.`}
                   {selectedModel && selectedVariant && !selectedPackage && `Motor seçildi (${availableVariants.find(v => v.id === selectedVariant)?.name || 'Seçildi'}). Şimdi 5. Adımdan donanım paketini seçin.`}
-                  {selectedPackage && 'Tüm araç bilgileri tamamlandı! Aşağıdaki "Sonraki Adım: Araç Bilgileri" butonuna tıklayarak devam edebilirsiniz.'}
+                  {selectedPackage && 'Tüm araç bilgileri tamamlandı! Aşağıdaki “Devam Et” butonuyla ilerleyebilirsiniz.'}
                 </span>
               </div>
             </div>
@@ -1165,6 +1315,7 @@ function SearchableCombobox({
                     {/* All Brands Dropdown */}
                     <select
                       data-testid="vehicle-brand"
+                      aria-label="Marka seçimi"
                       suppressHydrationWarning
                       value={selectedBrand}
                       onChange={(e) => {
@@ -1175,7 +1326,7 @@ function SearchableCombobox({
                       }}
                       className="glass-input rounded-xl p-3.5 text-sm w-full font-semibold"
                     >
-                      <option value="">-- Tüm Markalar ({safeBrands.length} Marka Katoloğumuzda Mevcut) --</option>
+                      <option value="">-- Tüm Markalar ({safeBrands.length} Marka Kataloğumuzda Mevcut) --</option>
                       {safeBrands.map((b) => (
                         <option key={b.id} value={b.id}>
                           {b.name}
@@ -1217,6 +1368,7 @@ function SearchableCombobox({
                 </div>
                 <select
                   data-testid="vehicle-year"
+                      aria-label="Model yılı seçimi"
                   suppressHydrationWarning
                   disabled={!selectedBrand}
                   value={selectedBrand ? selectedYear : ''}
@@ -1279,6 +1431,7 @@ function SearchableCombobox({
 
                 <select
                   data-testid="vehicle-model"
+                      aria-label="Model seçimi"
                   suppressHydrationWarning
                   disabled={!selectedBrand || !selectedYear}
                   value={selectedBrand && selectedYear ? selectedModel : ''}
@@ -1828,16 +1981,42 @@ function SearchableCombobox({
                           Detaylı Ekspertiz Şeması (Boya / Değişen Bilgisi)
                         </h3>
                         <p className="text-xs text-zinc-500 dark:text-zinc-400">
-                          Aracınızın parça bazlı durumlarını seçerek nokta atışı değerleme hesaplatın.
+                          Aracınızın parça bazlı durumunu işaretleyin. Fiyat etkisi, değerleme sonucunda gösterilir.
                         </p>
                       </div>
                     </div>
 
                     <div className="flex items-center gap-3 self-start sm:self-auto shrink-0">
-                      {/* Live Penalty Badge */}
-                      <div className="px-3.5 py-2 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-600 dark:text-rose-400 text-xs font-extrabold shadow-2xs">
-                        Tahmini Değer Düşüşü: %{calculateEstimatedDamagePenalty()}
-                      </div>
+                      {/*
+                        BEYAN OZETI — fiyat tahmini DEGIL.
+                        Fiyat etkisi yalnizca degerleme sonucunda, gercek
+                        Kondisyon V2 hesabiyla gosterilir.
+                      */}
+                      {(() => {
+                        const d = conditionDeclarationSummary();
+                        if (d.total === 0) {
+                          return (
+                            <div className="px-3.5 py-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-700 dark:text-emerald-400 text-xs font-bold">
+                              Henüz işlem işaretlenmedi
+                            </div>
+                          );
+                        }
+                        const parts = [
+                          d.changed ? `${d.changed} değişen` : '',
+                          d.painted ? `${d.painted} boyalı` : '',
+                          d.local ? `${d.local} lokal` : '',
+                        ].filter(Boolean).join(' · ');
+                        return (
+                          <div className="px-3.5 py-2 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-700 dark:text-amber-400 text-xs font-bold max-w-[220px]">
+                            Beyanınız: {parts || 'ek durum'}
+                            {d.extras.length > 0 && (
+                              <span className="block font-normal opacity-80 mt-0.5">
+                                + {d.extras.join(', ')}
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })()}
 
                       {/* Quick "Set All Original" Button */}
                       <button
@@ -2260,17 +2439,30 @@ function SearchableCombobox({
                 <div className="w-16 h-16 rounded-full bg-amber-500/10 text-amber-500 flex items-center justify-center border border-amber-500/20">
                   <AlertTriangle className="w-8 h-8" />
                 </div>
-                <h3 className="text-xl font-bold text-zinc-900 dark:text-white">Bu araç için yeterli emsal bulunamadı.</h3>
+                <h3 className="text-xl font-bold text-zinc-900 dark:text-white">
+                  Bu araç için yeterli piyasa verisi bulunamadı
+                </h3>
                 <p className="text-xs text-zinc-500 max-w-md leading-relaxed">
-                  {valuationResult.message || 'Girmiş olduğunuz marka, model ve versiyona ait piyasada yeterli emsal ilan verisi henüz oluşturulmamıştır.'}
+                  Aracınıza yeterince benzeyen ilan bulunmadığı için yanlış bir fiyat göstermek istemiyoruz.
+                  Bunun yerine aracınızı uzmanımız değerlendirsin.
                 </p>
-                <button
-                  type="button"
-                  onClick={() => setStep(1)}
-                  className="bg-brand-orange hover:bg-brand-orange/90 text-white text-xs font-bold px-6 py-3 rounded-xl mt-2 transition-all cursor-pointer"
-                >
-                  Farklı Bir Araç Değerlendir
-                </button>
+                {/* Musteri bilgileri zaten alindi; bu yuzden asil eylem iletisim. */}
+                <div className="flex flex-col sm:flex-row gap-3 mt-2 w-full max-w-sm">
+                  <a
+                    data-testid="insufficient-contact-cta"
+                    href={`tel:${siteConfig.supportPhone}`}
+                    className="flex-1 bg-brand-orange hover:bg-brand-orange/90 text-white text-xs font-bold px-6 py-3 rounded-xl transition-all cursor-pointer text-center"
+                  >
+                    Uzmanımızı Arayın
+                  </a>
+                  <button
+                    type="button"
+                    onClick={() => setStep(1)}
+                    className="flex-1 border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-white/5 text-zinc-700 dark:text-zinc-200 text-xs font-bold px-6 py-3 rounded-xl transition-all cursor-pointer"
+                  >
+                    Araç Bilgilerini Düzenle
+                  </button>
+                </div>
               </motion.div>
             );
           }
@@ -2288,17 +2480,37 @@ function SearchableCombobox({
                 <div className="w-16 h-16 rounded-full bg-blue-500/10 text-blue-500 flex items-center justify-center border border-blue-500/20">
                   <HelpCircle className="w-8 h-8" />
                 </div>
-                <h3 className="text-xl font-bold text-zinc-900 dark:text-white">Bu araç için özel değerlendirme gereklidir.</h3>
+                {/*
+                  MANUEL BIR HATA DEGILDIR: musteri degerlemeyi TAMAMLADI,
+                  sistem bilerek uzman incelemesi istiyor. Basarisizlik dili
+                  kullanilmaz ve GALERI ICI gerekce (dusuk guven, musteri
+                  tabani, kar catismasi) MUSTERIYE GOSTERILMEZ.
+                */}
+                <h3 className="text-xl font-bold text-zinc-900 dark:text-white">
+                  Aracınız için uzman incelemesi gerekiyor
+                </h3>
                 <p className="text-xs text-zinc-500 max-w-md leading-relaxed">
-                  {valuationResult.message || 'Girdiğiniz araç segmenti veya kilometresi için uzman ekspertiz ekibimiz 30 dakika içerisinde telefonla sizinle iletişime geçecektir.'}
+                  Değerleme talebiniz bize ulaştı. {manualReasonForCustomer(valuationResult.aiAnalysis)}
                 </p>
-                <button
-                  type="button"
-                  onClick={() => setStep(1)}
-                  className="bg-brand-orange hover:bg-brand-orange/90 text-white text-xs font-bold px-6 py-3 rounded-xl mt-2 transition-all cursor-pointer"
-                >
-                  Ana Sayfaya Dön
-                </button>
+                <p className="text-[11px] text-zinc-400 max-w-md leading-relaxed">
+                  Bıraktığınız telefon numarası üzerinden ekibimiz sizinle iletişime geçecek.
+                </p>
+                <div className="flex flex-col sm:flex-row gap-3 mt-2 w-full max-w-sm">
+                  <a
+                    data-testid="manual-contact-cta"
+                    href={`tel:${siteConfig.supportPhone}`}
+                    className="flex-1 bg-brand-orange hover:bg-brand-orange/90 text-white text-xs font-bold px-6 py-3 rounded-xl transition-all cursor-pointer text-center"
+                  >
+                    Hemen Uzmanımızı Arayın
+                  </a>
+                  <button
+                    type="button"
+                    onClick={() => setStep(1)}
+                    className="flex-1 border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-white/5 text-zinc-700 dark:text-zinc-200 text-xs font-bold px-6 py-3 rounded-xl transition-all cursor-pointer"
+                  >
+                    Araç Bilgilerini Düzenle
+                  </button>
+                </div>
               </motion.div>
             );
           }
@@ -2374,7 +2586,20 @@ function SearchableCombobox({
 
           const cashOfferPrice = activeResults.finalOfferedPrice || activeResults.cashOffer || activeResults.estimatedValue || 0;
           const consignmentPrice = activeResults.finalConsignmentPrice || activeResults.consignmentListingPrice || activeResults.maxExpectedValue || 0;
-          const fairMarketPrice = activeResults.fairMarketValue || 0;
+          /**
+           * GERCEK PIYASA REFERANSI — arka uctan gelen deger kullanilir.
+           * `marketReferenceValue` kondisyon ONCESI temiz esdeger emsal
+           * merkezidir; `conditionAdjustedSaleValue` musterinin beyan ettigi
+           * kondisyondan SONRAKI beklenen degerdir. Hicbiri nakit teklifden
+           * ya da sabit bir carpandan TURETILMEZ.
+           */
+          const marketReferencePrice = activeResults.marketReferenceValue ?? activeResults.fairMarketValue ?? 0;
+          const conditionAdjustedPrice = activeResults.conditionAdjustedSaleValue ?? activeResults.expectedSalePrice ?? 0;
+          // Kondisyon beyani gercekten deger dusurduyse iki satiri da goster.
+          const showConditionAdjusted =
+            conditionAdjustedPrice > 0 &&
+            marketReferencePrice > 0 &&
+            conditionAdjustedPrice < marketReferencePrice;
           // Konsinyede müşteriye asıl önemli olan, ilan fiyatı değil eline geçecek net tutardır.
           const consignmentExpectedSale = activeResults.expectedConsignmentSalePrice || activeResults.expectedSalePrice || 0;
           const consignmentCustomerNet = activeResults.customerConsignmentNet || activeResults.agreedCustomerNet || 0;
@@ -2408,12 +2633,28 @@ function SearchableCombobox({
                 <div className="md:col-span-2 glass-card rounded-3xl p-6 md:p-8 border border-brand-orange/30 dark:border-brand-orange/20 flex flex-col justify-between relative overflow-hidden bg-gradient-to-br from-brand-orange/5 via-transparent to-emerald-500/5">
                   <div className="absolute top-0 right-0 w-32 h-32 bg-brand-orange/10 rounded-bl-[100px] blur-[30px] pointer-events-none" />
 
-                  {/* Piyasa Değeri Rozeti */}
-                  <div className="mb-4 pb-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between">
-                    <span className="text-xs font-bold text-zinc-500 dark:text-zinc-400">Tahmini Piyasa Değeri:</span>
-                    <span data-testid="result-fair-market-value" className="text-lg font-black text-zinc-900 dark:text-white">
-                      {fairMarketPrice.toLocaleString('tr-TR')} ₺
-                    </span>
+                  {/* Piyasa Referansı (+ beyan edilen kondisyon sonrası) */}
+                  <div className="mb-4 pb-4 border-b border-zinc-200 dark:border-zinc-800 flex flex-col gap-1.5">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-xs font-bold text-zinc-500 dark:text-zinc-400">
+                        Piyasa Referansı
+                        <span className="block text-[10px] font-normal opacity-80">Benzer ilanların ortalama seviyesi</span>
+                      </span>
+                      <span data-testid="result-fair-market-value" className="text-lg font-black text-zinc-900 dark:text-white whitespace-nowrap">
+                        {formatTL(marketReferencePrice)}
+                      </span>
+                    </div>
+                    {showConditionAdjusted && (
+                      <div className="flex items-center justify-between gap-3 pt-1.5 border-t border-dashed border-zinc-200 dark:border-zinc-800">
+                        <span className="text-xs font-bold text-zinc-500 dark:text-zinc-400">
+                          Beyan Ettiğiniz Duruma Göre
+                          <span className="block text-[10px] font-normal opacity-80">Bildirdiğiniz boya/değişen/hasar dikkate alındı</span>
+                        </span>
+                        <span data-testid="result-condition-adjusted-value" className="text-base font-extrabold text-zinc-700 dark:text-zinc-200 whitespace-nowrap">
+                          {formatTL(conditionAdjustedPrice)}
+                        </span>
+                      </div>
+                    )}
                   </div>
 
                   {/* 2 MAIN SELLING OPTIONS COMPARISON */}
@@ -2426,7 +2667,7 @@ function SearchableCombobox({
                           1. Anında Nakit Alım Teklifi
                         </div>
                         <div data-testid="result-cash-offer" className="text-3xl lg:text-4xl font-black text-emerald-600 dark:text-emerald-400 tracking-tight mt-1">
-                          {cashOfferPrice.toLocaleString('tr-TR')} ₺
+                          {formatTL(cashOfferPrice)}
                         </div>
                         <p className="text-xs font-semibold text-emerald-800 dark:text-emerald-200 mt-2 leading-relaxed">
                           Aracınızı <strong>30 dakikada nakit sizden satın alırız</strong>. Bu tutar,
@@ -2448,21 +2689,21 @@ function SearchableCombobox({
                           Size kalacak tahmini net
                         </div>
                         <div data-testid="result-consignment-net" className="text-3xl lg:text-4xl font-black text-brand-orange tracking-tight">
-                          {(consignmentCustomerNet || consignmentPrice).toLocaleString('tr-TR')} ₺
+                          {formatTL(consignmentCustomerNet || consignmentPrice)}
                         </div>
 
                         <div className="mt-3 space-y-1.5 text-[11px] font-semibold text-brand-orange/90 dark:text-orange-200">
                           <div className="flex items-center justify-between gap-2">
                             <span>İlan fiyatımız</span>
                             <span data-testid="result-consignment-price" className="font-black">
-                              {consignmentPrice.toLocaleString('tr-TR')} ₺
+                              {formatTL(consignmentPrice)}
                             </span>
                           </div>
                           {consignmentExpectedSale > 0 && (
                             <div className="flex items-center justify-between gap-2">
                               <span>Tahmini satış fiyatı</span>
                               <span data-testid="result-consignment-expected-sale" className="font-black">
-                                {consignmentExpectedSale.toLocaleString('tr-TR')} ₺
+                                {formatTL(consignmentExpectedSale)}
                               </span>
                             </div>
                           )}
@@ -2495,12 +2736,38 @@ function SearchableCombobox({
                       <div className="w-10 h-10 rounded-xl bg-brand-orange/10 text-brand-orange flex items-center justify-center border border-brand-orange/20">
                         <TrendingUp className="w-5 h-5" />
                       </div>
-                      <div>
-                        <div className="text-xs text-zinc-500">Güven Skoru</div>
-                        <div className="text-lg font-extrabold text-zinc-900 dark:text-white">
-                          %{activeResults.confidenceScore || 85}
-                        </div>
-                      </div>
+                      {/*
+                        GUVEN: ciplak sayi tek basina musteriye anlam ifade
+                        etmiyordu; ustelik `|| 85` yedegi, guven 0 geldiginde
+                        UYDURMA bir deger gosteriyordu. Artik gercek skor
+                        ANLAMLANDIRILARAK sunulur, yoksa hic gosterilmez.
+                      */}
+                      {(() => {
+                        const c = activeResults.confidenceScore;
+                        if (typeof c !== 'number' || !Number.isFinite(c)) {
+                          return (
+                            <div>
+                              <div className="text-xs text-zinc-500">Emsal Desteği</div>
+                              <div className="text-sm font-bold text-zinc-500">Belirtilmedi</div>
+                            </div>
+                          );
+                        }
+                        const label = c >= 85 ? 'Güçlü emsal desteği'
+                          : c >= 70 ? 'Orta emsal desteği'
+                          : 'Sınırlı emsal desteği';
+                        const tone = c >= 85 ? 'text-emerald-600 dark:text-emerald-400'
+                          : c >= 70 ? 'text-amber-600 dark:text-amber-400'
+                          : 'text-zinc-600 dark:text-zinc-300';
+                        return (
+                          <div>
+                            <div className="text-xs text-zinc-500">Emsal Desteği</div>
+                            <div className={`text-base font-extrabold ${tone}`}>{label}</div>
+                            <div className="text-[10px] text-zinc-500 mt-0.5">
+                              Benzer ilanların sayısı ve birbirine yakınlığına göre (%{c})
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </div>
 
                     <div className="flex items-center gap-3">
@@ -2508,14 +2775,21 @@ function SearchableCombobox({
                         <Layers className="w-5 h-5" />
                       </div>
                       <div>
-                        <div className="text-xs text-zinc-500">Kullanılan Emsal İlan</div>
+                        <div className="text-xs text-zinc-500">Değerlemede Kullanılan İlan</div>
                         <div className="text-lg font-extrabold text-zinc-900 dark:text-white">
-                          {activeResults.actuallyUsedListingCount || activeResults.matchedListingCount || 0} Adet Real İlan
+                          {activeResults.actuallyUsedListingCount || activeResults.matchedListingCount || 0} benzer ilan
+                        </div>
+                        <div className="text-[10px] text-zinc-500 mt-0.5">
+                          Aracınıza en yakın gerçek ilanlar üzerinden hesaplandı
                         </div>
                       </div>
                     </div>
 
-                    {activeResults.usedTrimDistribution && Object.keys(activeResults.usedTrimDistribution).length > 0 && (
+                    {/*
+                      Ham paket dagilimi (teknik doku) musteriye deger katmiyor;
+                      galeri panelinde zaten mevcut. Musteri ekraninda gizlendi.
+                    */}
+                    {false && activeResults.usedTrimDistribution && Object.keys(activeResults.usedTrimDistribution).length > 0 && (
                       <div className="mt-4 p-4 rounded-xl bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-200 dark:border-zinc-700">
                         <div className="text-xs font-bold mb-2">Donanım Dağılımı</div>
                         <div className="flex flex-wrap gap-2">
@@ -2532,14 +2806,14 @@ function SearchableCombobox({
               </div>
 
               {/* AI Analysis section */}
-              {Array.isArray(valuationResult.aiAnalysis) && valuationResult.aiAnalysis.length > 0 && (
+              {customerFacingNotes(valuationResult.aiAnalysis).length > 0 && (
                 <div className="glass-card rounded-3xl p-6 md:p-8 border border-zinc-800/10 dark:border-white/5 flex flex-col gap-4">
                   <h3 className="text-md font-bold text-zinc-900 dark:text-white flex items-center gap-2">
                     <Sparkles className="w-5 h-5 text-brand-orange" />
                     {t('wiz.step3.ai')}
                   </h3>
                   <div className="flex flex-col gap-3">
-                    {valuationResult.aiAnalysis.map((item: string, i: number) => (
+                    {customerFacingNotes(valuationResult.aiAnalysis).map((item: string, i: number) => (
                       <div key={i} className="flex items-start gap-3 bg-zinc-800/5 dark:bg-white/3 p-3.5 rounded-xl border border-zinc-800/10 dark:border-white/3">
                         <CheckCircle className="w-4 h-4 text-brand-orange mt-0.5 shrink-0" />
                         <p className="text-xs text-zinc-600 dark:text-zinc-300 leading-relaxed">{item}</p>
@@ -2842,11 +3116,24 @@ function SearchableCombobox({
                         const digits = e.target.value.replace(/\D/g, '');
                         setPhone(digits);
                       }}
+                      onBlur={() => {
+                        // Hiç yazılmamış alanı hatalı göstermiyoruz; sadece girilen değer doğrulanır.
+                        if (phone.length > 0) setPhoneTouched(true);
+                      }}
                       maxLength={11}
-                      className="glass-input rounded-xl p-3 pl-9 text-xs w-full"
+                      aria-invalid={showPhoneError}
+                      aria-describedby="welcome-phone-hint"
+                      className={`glass-input rounded-xl p-3 pl-9 text-xs w-full ${showPhoneError ? 'glass-input-error' : ''}`}
                     />
                   </div>
-                  <p className="text-[10px] text-zinc-550 mt-1">Lütfen geçerli 10 veya 11 haneli TR telefon numarası giriniz.</p>
+                  {showPhoneError ? (
+                    <p id="welcome-phone-hint" className="text-[10px] text-red-600 dark:text-red-400 mt-1 flex items-center gap-1">
+                      <AlertTriangle className="w-3 h-3 shrink-0" />
+                      Numara 5 ile başlamalı ve 10 veya 11 haneli olmalıdır.
+                    </p>
+                  ) : (
+                    <p id="welcome-phone-hint" className="text-[10px] text-zinc-500 dark:text-zinc-400 mt-1">Örnek: 0532 123 45 67</p>
+                  )}
                 </div>
 
                 <button

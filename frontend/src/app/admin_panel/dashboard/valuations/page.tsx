@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
+import { formatTL } from '../../../../lib/format';
 import { Sparkles, Calendar, FileText, CheckCircle2, AlertCircle, Eye, X, Phone, User, Car, DollarSign, ShieldAlert, ChevronRight, ExternalLink } from 'lucide-react';
 
 const API_BASE = typeof window !== 'undefined'
@@ -290,7 +291,7 @@ export default function ValuationsList() {
                       <td className="py-4 px-6">
                         {item.userDesiredPrice && item.userDesiredPrice >= 200000 ? (
                           <span className="font-bold text-emerald-600 dark:text-emerald-400 text-xs">
-                            {item.userDesiredPrice.toLocaleString('tr-TR')} ₺
+                            {formatTL(item.userDesiredPrice)}
                           </span>
                         ) : (
                           <span className="text-[10px] text-zinc-400 italic">Belirtilmedi</span>
@@ -300,11 +301,19 @@ export default function ValuationsList() {
                       {/* Anında Nakit Alım Teklifi */}
                       <td className="py-4 px-6 text-right">
                         <div className="flex flex-col items-end">
-                          <span className="font-black text-brand-orange text-sm md:text-base">
-                            {(item.finalOfferedPrice || item.estimatedValue).toLocaleString('tr-TR')} ₺
+                          <span className="font-black text-brand-orange text-sm md:text-base whitespace-nowrap">
+                            {formatTL(item.finalOfferedPrice || item.estimatedValue)}
                           </span>
-                          <span className="text-[10px] text-zinc-500">
-                            Konsinye: {(item.maxExpectedValue || item.estimatedValue).toLocaleString('tr-TR')} ₺
+                          <span className="text-[10px] text-zinc-500 whitespace-nowrap">
+                            Konsinye: {formatTL(item.maxExpectedValue || item.estimatedValue)}
+                          </span>
+                          {/*
+                            GERCEK piyasa referansi — nakitten TURETILMEZ.
+                            Eski kayitlarda saklanmadigi icin NULL'dur ve
+                            sentetik deger uretilmez.
+                          */}
+                          <span className="text-[10px] text-zinc-400 whitespace-nowrap">
+                            Piyasa: {item.marketReferenceValue != null ? formatTL(item.marketReferenceValue) : 'kayıtsız'}
                           </span>
                         </div>
                       </td>
@@ -410,23 +419,23 @@ export default function ValuationsList() {
 
               {/* Price Offers */}
               <div className="bg-emerald-500/10 border border-emerald-500/20 p-4 rounded-2xl flex flex-col gap-2">
-                <span className="font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider text-[10px]">Pazarlık & Galeri Teklifleri</span>
+                <span className="font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider text-[10px]">Müşteri Talebi & Galeri Teklifleri</span>
                 <div className="flex justify-between items-center">
                   <span className="text-zinc-600 dark:text-zinc-400">Müşteri Talebi:</span>
                   <span className="font-bold text-emerald-700 dark:text-emerald-300">
-                    {selectedEval.userDesiredPrice ? `${selectedEval.userDesiredPrice.toLocaleString('tr-TR')} ₺` : 'Belirtilmedi'}
+                    {selectedEval.userDesiredPrice ? formatTL(selectedEval.userDesiredPrice) : 'Belirtilmedi'}
                   </span>
                 </div>
                 <div className="flex justify-between items-center border-t border-emerald-500/20 pt-1.5">
                   <span className="font-bold text-emerald-800 dark:text-emerald-200">Anında Nakit Alım Teklifimiz:</span>
                   <span className="font-black text-brand-orange text-sm">
-                    {(selectedEval.finalOfferedPrice || selectedEval.estimatedValue).toLocaleString('tr-TR')} ₺
+                    {formatTL(selectedEval.finalOfferedPrice || selectedEval.estimatedValue)}
                   </span>
                 </div>
                 <div className="flex justify-between items-center">
                   <span className="text-zinc-600 dark:text-zinc-400">Dükkan Konsinye Fiyatı:</span>
                   <span className="font-bold text-zinc-800 dark:text-white">
-                    {(selectedEval.maxExpectedValue || selectedEval.estimatedValue).toLocaleString('tr-TR')} ₺
+                    {formatTL(selectedEval.maxExpectedValue || selectedEval.estimatedValue)}
                   </span>
                 </div>
               </div>
@@ -455,7 +464,7 @@ export default function ValuationsList() {
                       <span className="text-[11px] text-zinc-400 font-bold block">📊 Piyasa Referansı (emsal merkezi)</span>
                       <div className="text-lg font-black text-amber-400 mt-1">
                         {selectedEval.marketReferenceValue != null
-                          ? `${Math.round(selectedEval.marketReferenceValue).toLocaleString('tr-TR')} ₺`
+                          ? `${formatTL(selectedEval.marketReferenceValue)}`
                           : 'Saklanmamış'}
                       </div>
                       <span className="text-[10px] text-zinc-500 block mt-0.5">Temiz eşdeğer Sahibinden emsal merkezi</span>
@@ -465,7 +474,7 @@ export default function ValuationsList() {
                       <span className="text-[11px] text-zinc-400 font-bold block">🔧 Kondisyon Sonrası Beklenen Değer</span>
                       <div className="text-lg font-black text-white mt-1">
                         {selectedEval.conditionAdjustedSaleValue != null
-                          ? `${Math.round(selectedEval.conditionAdjustedSaleValue).toLocaleString('tr-TR')} ₺`
+                          ? `${formatTL(selectedEval.conditionAdjustedSaleValue)}`
                           : 'Saklanmamış'}
                       </div>
                       <span className="text-[10px] text-zinc-500 block mt-0.5">Bildirilen hasar/kondisyon düzeltmesi sonrası</span>
@@ -476,20 +485,20 @@ export default function ValuationsList() {
                     <div className="flex justify-between text-xs font-semibold text-zinc-300">
                       <span>Nakit Teklif:</span>
                       <span className="text-emerald-400 font-extrabold">
-                        {Math.round(selectedEval.finalOfferedPrice || selectedEval.estimatedValue).toLocaleString('tr-TR')} ₺
+                        {formatTL(selectedEval.finalOfferedPrice || selectedEval.estimatedValue)}
                       </span>
                     </div>
                     <div className="flex justify-between text-xs font-semibold text-zinc-300">
                       <span>Konsinye İlan Fiyatı:</span>
                       <span className="text-amber-400 font-extrabold">
-                        {Math.round(selectedEval.maxExpectedValue || 0).toLocaleString('tr-TR')} ₺
+                        {formatTL(selectedEval.maxExpectedValue)}
                       </span>
                     </div>
                     {selectedEval.conditionAdjustedSaleValue != null && (
                       <div className="flex justify-between text-xs font-semibold text-zinc-400">
                         <span>Galeri Brüt Marjı:</span>
                         <span className="font-extrabold">
-                          {Math.round(selectedEval.conditionAdjustedSaleValue - (selectedEval.finalOfferedPrice || selectedEval.estimatedValue)).toLocaleString('tr-TR')} ₺
+                          {formatTL(selectedEval.conditionAdjustedSaleValue - (selectedEval.finalOfferedPrice || selectedEval.estimatedValue))}
                         </span>
                       </div>
                     )}
@@ -506,7 +515,7 @@ export default function ValuationsList() {
                   <div className="flex justify-between text-xs font-semibold text-zinc-300 mt-3 pt-3 border-t border-white/10">
                     <span>Nakit Teklif:</span>
                     <span className="text-emerald-400 font-extrabold">
-                      {Math.round(selectedEval.finalOfferedPrice || selectedEval.estimatedValue).toLocaleString('tr-TR')} ₺
+                      {formatTL(selectedEval.finalOfferedPrice || selectedEval.estimatedValue)}
                     </span>
                   </div>
                 </div>
