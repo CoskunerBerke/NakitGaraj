@@ -1063,11 +1063,11 @@ function SearchableCombobox({
       });
 
       if (!response.ok) {
+        // Arka ucun hata metni MUSTERIYE BASILMAZ (dogrulama ciktisi/ic jargon
+        // tasiyabilir); teshis icin konsola yazilir.
         const err = await response.json().catch(() => ({ message: 'Değerleme işlemi başarısız.' }));
-        setValuationResult({
-          status: 'ERROR',
-          message: err.message || 'Değerleme sırasında bir hata oluştu, lütfen tekrar deneyiniz.'
-        });
+        console.error('Valuation API error:', response.status, err);
+        setValuationResult({ status: 'ERROR', networkError: false });
         setStep(3);
         return;
       }
@@ -1077,15 +1077,10 @@ function SearchableCombobox({
       setStep(3);
     } catch (error: any) {
       console.error('Valuation submission error:', error);
+      // Teknik ayrinti (ornegin "backend servisi kapali") MUSTERIYE GOSTERILMEZ;
+      // yalnizca baglanti hatasi mi degil mi bilgisi tasinir.
       const isNetworkError = error.message?.includes('NetworkError') || error.message?.includes('fetch');
-      const friendlyMsg = isNetworkError
-        ? 'Sunucu ile bağlantı kurulamadı (Backend servisi kapalı veya yanıt vermiyor). Lütfen backend sunucusunu başlatıp tekrar deneyiniz.'
-        : (error.message || 'Değerleme sırasında bir hata oluştu, lütfen tekrar deneyiniz.');
-      
-      setValuationResult({
-        status: 'ERROR',
-        message: friendlyMsg
-      });
+      setValuationResult({ status: 'ERROR', networkError: Boolean(isNetworkError) });
       setStep(3);
     } finally {
       setIsLoading(false);
@@ -2528,17 +2523,50 @@ function SearchableCombobox({
                 <div className="w-16 h-16 rounded-full bg-red-500/10 text-red-500 flex items-center justify-center border border-red-500/20">
                   <AlertTriangle className="w-8 h-8" />
                 </div>
-                <h3 className="text-xl font-bold text-zinc-900 dark:text-white">Değerleme sırasında bir bağlantı hatası oluştu.</h3>
+                {/*
+                  MUSTERIYE DAHILI METIN BASILMAZ.
+
+                  Onceki surumde burada `valuationResult.message` dogrudan
+                  gosteriliyordu. Bu alan uc ayri ic metin tasiyabiliyordu:
+                    - "Backend servisi kapali ... backend sunucusunu baslatip"
+                      -> musteriye sunucu baslatmasi soyleniyordu
+                    - "Veri butunlugu hatasi: Duzeltilmis P35 degeri ..."
+                      -> ic fiyat zinciri jargonu
+                    - arka ucun ham dogrulama hata metni
+                  Teknik ayrinti artik yalnizca konsola yazilir.
+
+                  Baslik da duzeltildi: DATA_INTEGRITY_ERROR bir BAGLANTI
+                  hatasi degildir, bu yuzden tek tip "baglanti hatasi" basligi
+                  kullanilmiyor.
+                */}
+                <h3 className="text-xl font-bold text-zinc-900 dark:text-white">
+                  {valuationResult.networkError
+                    ? 'Sunucuya ulaşılamadı'
+                    : 'Değerlemeyi şu anda tamamlayamadık'}
+                </h3>
                 <p className="text-xs text-zinc-500 max-w-md leading-relaxed">
-                  {valuationResult.message || 'Lütfen internet bağlantınızı ve verilerinizi kontrol edip tekrar deneyiniz.'}
+                  {valuationResult.networkError
+                    ? 'İnternet bağlantınızı kontrol edip tekrar deneyiniz.'
+                    : 'Aracınızın değerlemesi tamamlanamadı. Tekrar deneyebilir veya uzmanımızla görüşebilirsiniz.'}
                 </p>
-                <button
-                  type="button"
-                  onClick={() => setStep(2)}
-                  className="bg-brand-orange hover:bg-brand-orange/90 text-white text-xs font-bold px-6 py-3 rounded-xl mt-2 transition-all cursor-pointer"
-                >
-                  Tekrar Dene
-                </button>
+                <div className="flex flex-col sm:flex-row gap-3 mt-2 w-full max-w-sm">
+                  <button
+                    type="button"
+                    onClick={() => setStep(2)}
+                    className="flex-1 bg-brand-orange hover:bg-brand-orange/90 text-white text-xs font-bold px-6 py-3 rounded-xl transition-all cursor-pointer"
+                  >
+                    Tekrar Dene
+                  </button>
+                  {!valuationResult.networkError && (
+                    <a
+                      data-testid="error-contact-cta"
+                      href={`tel:${siteConfig.supportPhone}`}
+                      className="flex-1 border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-white/5 text-zinc-700 dark:text-zinc-200 text-xs font-bold px-6 py-3 rounded-xl transition-all cursor-pointer text-center"
+                    >
+                      Uzmanımızı Arayın
+                    </a>
+                  )}
+                </div>
               </motion.div>
             );
           }
