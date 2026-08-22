@@ -1,0 +1,18 @@
+-- EKSIK MIGRATION'IN GERI KAZANIMI (SEMA GECMISI UZLASTIRMASI)
+--
+-- `RawVehicleListing.missingFields` alani schema.prisma'ya ve calisan
+-- veritabanina girmis ama HICBIR migration onu olusturmuyordu (semaya girisi:
+-- 42c4776, buyuk Sahibinden import commit'i). Sonuc: yalnizca checked-in
+-- migration zincirinden kurulan TAZE bir veritabaninda sutun YOKTUR.
+--
+-- Alan calisma zamaninda GEREKLIDIR: ice aktarim/yeniden kurma betikleri
+-- (rebuild_raw_listings_v3.ts, import_unique_sahibinden_listings.ts) bu alana
+-- yazar. Sutun olmadan taze bir ortamda ice aktarim KIRILIR.
+--
+-- Tur: String? -> SQLite TEXT, NULL kabul eder, varsayilan yok.
+--
+-- MEVCUT VERITABANLARI: sutun zaten VAR. SQLite'ta
+-- `ADD COLUMN IF NOT EXISTS` yoktur; bu yuzden bu migration mevcut DB'lerde
+-- CALISTIRILMAZ, `prisma migrate resolve --applied` ile uygulanmis olarak
+-- isaretlenir (baseline). Taze DB'lerde normal sekilde calisir.
+ALTER TABLE "RawVehicleListing" ADD COLUMN "missingFields" TEXT;
