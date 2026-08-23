@@ -99,6 +99,18 @@ describe('Ilan kimligi kaniti (gercek veritabani)', () => {
     for (const c of m.cleanListings as any[]) expect(/cabrio/i.test((c.bodyType || '') + ' ' + (c.trim || ''))).toBe(false);
   }, 60000);
 
+  test('aracin ADI kasa soyluyorsa, ACIK farkli kasa sozluk dusmesinde bile GIRMEZ', async () => {
+    // BMW 8 Serisi ailesinde gercek coupe'lerin kasa alani BOS; ilan
+    // sozlugunde COUPE etiketi yok. Sozluk dusmesi pozitif kapiyi kapatir
+    // ama AD ("840i Coupe") kimliktir: acik CABRIO ilani yine de dislanir.
+    const m = await matcher.matchComparableListings({
+      make: 'BMW', model: '8 Serisi', variant: '840i Coupe', trim: 'M Sport', year: 2020, mileageKm: 50_000,
+    });
+    for (const c of m.cleanListings as any[]) {
+      expect(c.bodyType === 'CABRIO').toBe(false);
+    }
+  }, 60000);
+
   test('N=1 Abarth 500e Coupe 2024 sozlesmesi DEGISMEDI', async () => {
     const m = await matcher.matchComparableListings({ make: 'Abarth', model: '500e', variant: 'Standart', trim: 'Coupe', year: 2024, mileageKm: 6_001 });
     expect(m.matchedCount).toBe(1);

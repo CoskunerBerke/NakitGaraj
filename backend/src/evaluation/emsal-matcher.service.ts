@@ -646,8 +646,20 @@ export class EmsalMatcherService {
     // Kasa musteri/katalog alaninda yoksa, musterinin SECTIGI etiketin kendisi
     // kasa tasiyabilir ("A3 Sedan 35 TFSI" -> SEDAN). Bu musterinin beyanidir,
     // uydurma degildir. Ilan tarafinda da ayni kanit kullanilir (bodyOf).
-    const requestedBody =
-      normalizeBodyType(params.bodyType) || deriveBodyType(variantText, paramTrim);
+    /**
+     * KASA KANITININ IKI KAYNAGI, IKI FARKLI GUCU VARDIR (bkz. kimlik kurali):
+     *
+     *   bodyFromName  aracin KENDI ADINDAN gelir ("840i Coupe", "A3 Sedan
+     *                 35 TFSI"). Ad, kimliktir: RED tarafinda her zaman
+     *                 gecerlidir -- ACIKCA farkli kasali ilan (Cabrio) bu
+     *                 hedefe hicbir kosulda emsal olamaz.
+     *   bodyType parametresi kategorik bir etikettir ("Hatchback") ve marka
+     *                 sozlugune gore YER TUTUCU olabilir (BMW 4 Serisi'nde
+     *                 Gran Coupe, Audi A3'te Sportback anlamina gelir).
+     *                 Yalnizca ilan sozlugu destekliyorsa kullanilir.
+     */
+    const bodyFromName = deriveBodyType(variantText, paramTrim);
+    const requestedBody = normalizeBodyType(params.bodyType) || bodyFromName;
     const paramTransmission = (params.transmission || '').trim();
 
     /**
@@ -789,7 +801,17 @@ export class EmsalMatcherService {
         // -> her seviyede dislanir (420d Cabrio, 420d Coupe'nin emsali olamaz).
         // CASE C: adayin kasasi bilinmiyorsa BURADA dislanmaz; buildResult'ta
         // dusuk agirlik alir. UNKNOWN != KNOWN MISMATCH.
+        //
+        // RED tarafi iki katmanlidir:
+        //   1) bodyFromName (aracin adi kasa soyluyor): sozluk dusmesinden
+        //      ETKILENMEZ. Olculen: BMW 840i Coupe 2019/2020 kohortlarina
+        //      1 acik Cabrio sizmisti (ailenin ilan sozlugunde COUPE etiketi
+        //      yok diye kapi topyekun kapaniyordu). Ad kimliktir; ACIKCA
+        //      farkli kasa dislanir, UNKNOWN serbesttir.
+        //   2) paramBody (kategorik etiket): yalnizca ilan sozlugu
+        //      destekliyorsa calisir (KATALOG SOZLUGU != ILAN SOZLUGU).
         const candidateBody = this.bodyOf(r);
+        if (bodyFromName && candidateBody && candidateBody !== bodyFromName) continue;
         if (paramBody && candidateBody && candidateBody !== paramBody) continue;
 
         if (cfg.requireFuel && paramFuel) {
