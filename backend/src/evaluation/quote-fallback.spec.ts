@@ -79,8 +79,11 @@ describe('Gercek emsal varken fiyat uretilir (gercek veritabani)', () => {
       make: 'Audi', model: 'A3', variant: 'A3 Sedan 35 TFSI', trim: 'S Line', year: 2025, mileageKm: 15_000,
     });
     expect(m.level).toBeLessThan(4);
-    expect(m.matchedCount).toBeGreaterThanOrEqual(50);
-    expect(m.cleanListings.length).toBeGreaterThanOrEqual(50);
+    // Kohort artik PAKETE SADIK (acik S Line) ve yerel: 2025 Sedan'da acik
+    // S Line 46 ilan; 15.000 km hedefi icin 20+ yerel emsal. Onceki 50+ sayi,
+    // daha ucuz paketlerin havuza karismasindan geliyordu.
+    expect(m.matchedCount).toBeGreaterThanOrEqual(15);
+    expect(m.cleanListings.length).toBeGreaterThanOrEqual(15);
     // Motor kaniti etiketten geldi; uydurulmadi.
     expect(m.engineEvidence?.strong).toBe(true);
     expect(m.engineEvidence?.signature).toBe('35 TFSI');

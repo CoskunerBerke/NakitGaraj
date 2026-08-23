@@ -191,7 +191,8 @@ describe('Yuksek destekli kohortlar DEGISMEDI', () => {
       make: 'Audi', model: 'A3', variant: 'A3 Sedan 35 TFSI', trim: 'S Line', year: 2025, mileageKm: 15_000,
     });
     expect(m.level).toBeLessThan(4);
-    expect(m.matchedCount).toBeGreaterThanOrEqual(50);
+    // Pakete sadik yerel kohort (bkz. quote-fallback): 15+ acik S Line emsali.
+    expect(m.matchedCount).toBeGreaterThanOrEqual(15);
     // N >= 2: yil normalizasyonu ESKISI GIBI calisir.
     expect(m.yearAdjustmentSource).not.toBe('SINGLE_COMPARABLE_NO_YEAR_ADJUSTMENT');
   }, 60000);

@@ -9,6 +9,7 @@ import {
   explicitEngineSignature,
   foldTurkish,
   fullModelExact,
+  hasExplicitPackageEvidence,
   hasStrongDamageSignal,
   isEngineCompatible,
   normalizeBodyType,
@@ -205,6 +206,49 @@ export class EmsalMatcherService {
   }
 
   /**
+   * PAKET (DONANIM) KANITI — UC DURUMLU, markadan bagimsiz.
+   *
+   *   MATCH    aranan paket, ilanin yapisal donanim alaninda YA DA ilanin
+   *            kendi basliginda/model dizgesinde ACIKCA yaziyor
+   *   UNKNOWN  ilanda paket kaniti yok (yapisal alan bos ya da yalnizca
+   *            model/motor dizgesi tasiyor) -> CELISKI DEGILDIR
+   *   CONFLICT yapisal donanim alani gercek bir paket tasiyor ve aranan
+   *            paketle ortusmuyor (orn. "Joy" aranirken "Touch")
+   *
+   * Onceki kural ikili idi: yapisal alan doluysa ve aranan paketi
+   * icermiyorsa UYUSMAZLIK sayiyordu. Oysa alan cogu zaman kaynak model
+   * dizgesidir ("A3 Sedan 35 TFSI"); paket ise ayni ilanin basliginda
+   * yazilidir ("... 35 TFSI S-LINE ..."). Olculen: 46 Sedan S Line ilani
+   * bu yuzden "uyusmuyor" sayilip donanima sadik kademeden dusuyor, havuz
+   * daha ucuz paketlerle doluyordu.
+   *
+   * Aciklik, kaynak metinde paket adinin SINIR duyarli gecmesidir; uydurma
+   * cikarim yoktur. Kalici veriye yazilmaz.
+   */
+  private packageEvidenceOf(r: RawCandidate, foldedParamTrim: string): 'MATCH' | 'UNKNOWN' | 'CONFLICT' {
+    if (!foldedParamTrim) return 'MATCH';
+    const listingTrim = foldTurkish((r.canonicalTrim || '').trim());
+    if (listingTrim && listingTrim !== 'belirtilmemis') {
+      if (listingTrim === foldedParamTrim || listingTrim.includes(foldedParamTrim) || foldedParamTrim.includes(listingTrim)) {
+        return 'MATCH';
+      }
+    }
+    // Yapisal alan eslesmedi: ayni ilanin ACIK metinlerine bakilir.
+    if (hasExplicitPackageEvidence(foldedParamTrim, r.rawTitle, r.canonicalTrim, r.rawModel, r.rawVariant)) {
+      return 'MATCH';
+    }
+    // Yapisal alan gercek bir PAKET tasiyorsa (motor/kasa/model dizgesi
+    // degil) ve ortusmuyorsa bu celiskidir. Motor imzasi ya da kasa sozcugu
+    // tasiyan dizge paket degil, model kimligidir -> UNKNOWN.
+    if (listingTrim && listingTrim !== 'belirtilmemis') {
+      const looksLikeModelString =
+        Boolean(explicitEngineSignature(r.canonicalTrim || '')) || Boolean(deriveBodyType(r.canonicalTrim || ''));
+      if (!looksLikeModelString) return 'CONFLICT';
+    }
+    return 'UNKNOWN';
+  }
+
+  /**
    * Motor KANITI: ayri bir motor kodu alani yoksa, ilanin kendi TAM MODEL
    * hucresindeki ACIK motor imzasi kullanilir ("1.6 TDI BlueMotion Highline"
    * -> "1.6 TDI"). Uydurma degildir; bilgi ilanda zaten yazilidir. Kalici
@@ -228,6 +272,29 @@ export class EmsalMatcherService {
       return stored === 'Hibrit' ? stored : fromEngine;
     }
     return stored || fromEngine || deriveFuelType(r.rawTitle || '');
+  }
+
+  /**
+   * YAKIT UYUMU — `fuelOf` ile AYNI semantik, markadan bagimsiz.
+   *
+   * `fuelOf` zaten soyluyor: "Hibrit", yanma motoru koduyla CELISMEZ
+   * (benzinli/dizel hafif hibrit). Ancak kapi bu tolerasyonu uygulamiyor ve
+   * ayni motor kodunu ("35 TFSI") tasiyan MHEV ilanlarini "yakit uyusmuyor"
+   * diye dusuruyordu. Olculen: Audi A3 Sedan 35 TFSI S Line 2025 icin
+   * 3.675.000 / 6.005 km ve 3.590.000 / 18.914 km ilanlari (ikisi de
+   * "35 TFSI MHEV S-LINE") kohorttan dismisti.
+   *
+   * Kural: hedef yanma yakiti (Benzin/Dizel) ise ilanin "Hibrit" etiketi
+   * uyumludur; tam elektrik/LPG vb. farkli yakitlar celiskidir. Hedef
+   * Hibrit ise yalnizca Hibrit ya da ayni yanma yakiti uyumludur.
+   */
+  private fuelCompatible(target: string, candidate: string): boolean {
+    if (!target || !candidate) return true;
+    if (target === candidate) return true;
+    const combustion = new Set(['Benzin', 'Dizel']);
+    if (combustion.has(target) && candidate === 'Hibrit') return true;
+    if (target === 'Hibrit' && combustion.has(candidate)) return true;
+    return false;
   }
 
   private transmissionOf(r: RawCandidate): string {
@@ -405,6 +472,30 @@ export class EmsalMatcherService {
   /** Yakinlik olcegi: hedefin kendisinden turetilir, sabit segment tablosu YOK. */
   private mileageProximityScale(targetKm: number): number {
     return Math.max(targetKm * 0.5, 15_000);
+  }
+
+  /**
+   * Ailenin (marka+model) TUM yillardaki ilanlarinda gorulen kasa sozlugu.
+   * Yalnizca "bu kasa etiketi ilan sozlugunde var mi?" sorusuna cevap verir;
+   * fiyat kohortuna hicbir ilan eklemez (yil kurali DEGISMEZ).
+   */
+  private async familyBodyVocabulary(make: string, model: string): Promise<Set<string>> {
+    const cleanMake = make.trim();
+    const rows = (await this.prisma.rawVehicleListing.findMany({
+      where: {
+        OR: [{ rawMake: { equals: cleanMake } }, { canonicalMake: { equals: cleanMake } }],
+        parseStatus: 'VALID',
+        price: { gt: 0 },
+      },
+      select: { rawModel: true, canonicalModel: true, canonicalTrim: true, canonicalBodyType: true },
+    })) as Array<{ rawModel: string; canonicalModel: string; canonicalTrim: string | null; canonicalBodyType: string | null }>;
+    const out = new Set<string>();
+    for (const r of rows) {
+      if (!modelNameMatches(r.canonicalModel, model) && !modelNameMatches(r.rawModel, model)) continue;
+      const b = (r.canonicalBodyType || '').trim() || deriveBodyType(r.canonicalTrim || '');
+      if (b) out.add(b);
+    }
+    return out;
   }
 
   private async fetchCandidates(make: string, model: string, yearMin: number, yearMax: number) {
@@ -586,10 +677,22 @@ export class EmsalMatcherService {
     // Havuzda hic gorulmeyen bir kasa etiketiyle eleme yapmak, DOGRU emsalleri
     // topluca disari atar. Boyle bir etiket kanit degildir: UNKNOWN kabul edilir
     // ve kasa uzerinden eleme yapilmaz (UNKNOWN > WRONG).
+    //
+    // ANCAK: "havuzda gorulmedi" karari YALNIZCA sozluk uyusmazligi icin
+    // gecerlidir. Musterinin kasasi ailenin TUM ilanlarinda (yil filtresiz)
+    // gercekten gorulmus bir kasaysa, etiket kanittir ve hedef yil
+    // penceresinde o kasa satista degilse bile baska bir kasa EMSAL OLAMAZ.
+    // Olculen: Abarth 500e Coupe 2025 hedefinde tek Coupe ilani 2024
+    // modeldi; 2025 penceresi yalnizca CABRIO icerdigi icin "Coupe"
+    // sozlugu dusuruluyor ve iki acik Cabrio ilani Coupe kohortuna giriyordu.
     const observedBodies = new Set(
       candidates.map((c) => this.bodyOf(c)).filter(Boolean),
     );
-    const bodySignalDropped = Boolean(requestedBody) && !observedBodies.has(requestedBody);
+    let bodySignalDropped = Boolean(requestedBody) && !observedBodies.has(requestedBody);
+    if (bodySignalDropped) {
+      const familyBodies = await this.familyBodyVocabulary(make, model);
+      if (familyBodies.has(requestedBody)) bodySignalDropped = false;
+    }
     const paramBody = bodySignalDropped ? '' : requestedBody;
 
     if (candidates.length === 0) {
@@ -694,7 +797,7 @@ export class EmsalMatcherService {
           // Yakiti bilinmeyen ilan Seviye 1'e alinmaz; alt seviyelerde
           // agirligi dusurulerek kabul edilir.
           if (cfg.level === 1 && !f) continue;
-          if (f && f !== paramFuel) continue;
+          if (f && !this.fuelCompatible(paramFuel, f)) continue;
         }
 
         if (cfg.requireTransmission && paramTransmission) {
@@ -702,13 +805,10 @@ export class EmsalMatcherService {
           if (t && t !== paramTransmission) continue;
         }
 
-        const listingTrim = foldTurkish((r.canonicalTrim || '').trim());
-        const trimHit =
-          !foldedParamTrim ||
-          !listingTrim ||
-          listingTrim === foldedParamTrim ||
-          listingTrim.includes(foldedParamTrim) ||
-          foldedParamTrim.includes(listingTrim);
+        // Paket kaniti UC durumludur; UNKNOWN celiski degildir, CONFLICT'tir.
+        const pkgEvidence = this.packageEvidenceOf(r, foldedParamTrim);
+        const trimHit = pkgEvidence !== 'CONFLICT';
+        const trimExplicit = Boolean(foldedParamTrim) && pkgEvidence === 'MATCH';
 
         // Seviye 1'de paket kontrolu TAM MODEL esitligiyle zaten yapildi.
         // Hedef aracin motor kodu bilinmiyorsa paketi ayni olmayan ilanlar
@@ -718,8 +818,11 @@ export class EmsalMatcherService {
         // korunur. Onceki surumde bu koruma motor ALANINA bakiyordu ve kanit
         // etikette olsa bile tum aileyi eliyordu.
         if (!paramEngineEvidence && foldedParamTrim && !trimHit) continue;
-        if (cfg.trimFaithful && foldedParamTrim && !trimHit) continue;
-        if (trimHit) trimMatchedCount++;
+        // DONANIMA SADIK kademe: yalnizca ACIK paket kaniti olan ilanlar.
+        // UNKNOWN burada YETMEZ (sadakat, bilinen paket demektir); gevsek
+        // kademelerde UNKNOWN kabul edilir, CONFLICT hicbirinde.
+        if (cfg.trimFaithful && foldedParamTrim && !trimExplicit) continue;
+        if (trimExplicit) trimMatchedCount++;
 
         selected.push(r);
       }
@@ -923,15 +1026,12 @@ export class EmsalMatcherService {
       if (yearDiff === 1) quality *= 0.75;
       else if (yearDiff >= 2) quality *= 0.5;
 
-      const listingTrim = foldTurkish(trimName);
-      if (foldedParamTrim && listingTrim && listingTrim !== 'belirtilmemis') {
-        const trimHit =
-          listingTrim === foldedParamTrim ||
-          listingTrim.includes(foldedParamTrim) ||
-          foldedParamTrim.includes(listingTrim);
-        if (!trimHit) quality *= 0.7;
-      } else if (foldedParamTrim) {
-        quality *= 0.85;
+      // Paket kalitesi: ACIK eslesme tam agirlik, bilinmeyen hafif, celiski
+      // belirgin ceza (havuza girmisse gevsek kademededir).
+      if (foldedParamTrim) {
+        const ev = this.packageEvidenceOf(r, foldedParamTrim);
+        if (ev === 'CONFLICT') quality *= 0.7;
+        else if (ev === 'UNKNOWN') quality *= 0.85;
       }
 
       // CASE C: hedef kasa biliniyor ama adayin kasasi bilinmiyorsa hafif

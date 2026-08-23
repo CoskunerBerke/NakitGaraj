@@ -614,6 +614,52 @@ const STRONG_DAMAGE_PATTERNS: RegExp[] = [
 ];
 
 /** Ilan basliginda ACIK agir hasar beyani var mi? */
+/**
+ * ACIK PAKET (DONANIM) KANITI — ilanin KENDI metninden, markadan bagimsiz.
+ *
+ * Yapisal donanim alani (canonicalTrim) cogu zaman paketi DEGIL, kaynak
+ * model dizgesini tasir ("A3 Sedan 35 TFSI"); paket bilgisi ise ayni ilanin
+ * basliginda acikca yazilidir ("... 35 TFSI S-LINE ..."). Olculen: Audi A3
+ * Sedan 2025'te 137 Sedan ilaninin 46'sinda S Line yalnizca baslikta gecer;
+ * bu ilanlar paketi "bilinmiyor" degil "UYUSMUYOR" sayilip dusuk paketlerle
+ * ayni havuza karistiriliyordu (kohort medyani 3,02 mn; S Line alt kume
+ * medyani 3,57 mn).
+ *
+ * Kural: aranan paket adinin tokenlari, verilen metinlerin birinde SINIR
+ * duyarli ve SIRALI olarak geciyorsa kanit VARDIR. Tire/bosluk farki
+ * ("S-Line" / "S Line" / "SLine") esittir. Eslesme yoksa bu "bilinmiyor"dur,
+ * celiski DEGILDIR — celiskiyi ancak farkli bir paketin ACIK kaniti kurar
+ * (bkz. explicitPackageConflict).
+ *
+ * Bu bir KIMLIK kanitidir, fiyat tablosu degildir; marka/model ozel dal yok.
+ */
+export function hasExplicitPackageEvidence(
+  pkg: string | null | undefined,
+  ...texts: Array<string | null | undefined>
+): boolean {
+  const want = packageKey(pkg);
+  if (!want) return false;
+  for (const t of texts) {
+    if (!t) continue;
+    const hay = ' ' + packageKey(t) + ' ';
+    // Sinir duyarli arama; tire/bosluk/birlesik yazim packageKey ile esitlenir.
+    if (hay.includes(' ' + want + ' ')) return true;
+    // "sline" gibi bitisik yazimlar: tokenler birlestirilmis haliyle de aranir.
+    const joined = want.replace(/ /g, '');
+    if (joined.length >= 4 && hay.replace(/ /g, ' ').split(' ').some((tok) => tok === joined)) return true;
+  }
+  return false;
+}
+
+/** Paket adi anahtari: Turkce katlama, tire->bosluk, tekil bosluk. */
+export function packageKey(s: string | null | undefined): string {
+  return foldTurkish(String(s || ''))
+    .replace(/[\-_/+]+/g, ' ')
+    .replace(/[^a-z0-9. ]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export function hasStrongDamageSignal(text: string | null | undefined): boolean {
   const t = foldTurkish(String(text || ''));
   if (!t) return false;
