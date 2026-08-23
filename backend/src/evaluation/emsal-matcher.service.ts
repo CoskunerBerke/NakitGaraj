@@ -675,10 +675,12 @@ export class EmsalMatcherService {
         ...built,
         engineEvidence,
         isLimitedComps: true,
+        // Musteriye EMSAL SAYISI ve kademe SIZDIRILMAZ (bkz. is kurali):
+        // yalnizca "sinirli sayida benzer ilan" bilgisi verilir. Sayi ve
+        // kademe denetim alanlarinda (matchedCount / level) zaten mevcuttur.
         explanationNote:
-          `${make} ${model} ${paramEngineEvidence || ''} (${year}) için veritabanında yalnızca ` +
-          `${n} uyumlu emsal ilan bulundu. Emsal sayısı sınırlı olduğu için teklif uzman ` +
-          `kontrolüyle kesinleşecektir.`,
+          `${make} ${model} ${paramEngineEvidence || ''} (${year}) için piyasada sınırlı sayıda ` +
+          `benzer ilan bulunduğu için teklif uzman kontrolüyle kesinleşecektir.`,
       };
     }
 
@@ -753,13 +755,37 @@ export class EmsalMatcherService {
 
     const foldedParamTrim = foldTurkish(paramTrim);
 
+    /**
+     * TEK GERCEK EMSAL: PIYASA REFERANSI O ILANIN FIYATIDIR.
+     *
+     * Elimizde tek bir gercek ilan varsa, gozlenebilir piyasa TEK bir isteme
+     * fiyatindan ibarettir. Bu fiyati genel bir yillik deger kaybi orani ile
+     * hedef model yilina tasimak, sahip OLMADIGIMIZ bir piyasa bilgisini
+     * biliyormus gibi davranmaktir.
+     *
+     * Oran zaten kanittan gelmiyor: `learnAnnualDepreciation` en az 3 yil
+     * noktasi (her biri >=3 ilan) ister; tek ilanli havuzda daima
+     * DEFAULT_ANNUAL_RATE doner. Olculen: Abarth 500e Coupe icin tek gercek
+     * ilan 2024 / 3.500.000 TL iken 2025 hedefinde piyasa referansi
+     * 3.695.000 TL gosteriliyordu — gozlenmemis bir fiyat.
+     *
+     * Kilometre duzeltmesi DEGISMEDI: o, fiyat cekirdeginin mevcut kanonik
+     * yoludur ve ayni ilanin farkli kilometreye tasinmasidir, baska bir
+     * araca degil.
+     *
+     * N >= 2 davranisi AYNEN korunur.
+     */
+    const singleComparable = selected.length === 1;
+
     for (const r of selected) {
       const engine = this.engineEvidenceOf(r) || 'Bilinmiyor';
       const trimName = (r.canonicalTrim || '').trim() || 'Belirtilmemiş';
       engineDist[engine] = (engineDist[engine] || 0) + 1;
       trimDist[trimName] = (trimDist[trimName] || 0) + 1;
 
-      const normalizedPrice = this.normalizeToYear(r.price, r.year, year, annualRate);
+      const normalizedPrice = singleComparable
+        ? r.price
+        : this.normalizeToYear(r.price, r.year, year, annualRate);
 
       const fresh = this.freshnessWeight(r.scrapedAt);
       freshnessSum += fresh;
@@ -893,7 +919,7 @@ export class EmsalMatcherService {
       kmDecayPer10k: undefined,
       referenceMedianMileage,
       mileageAdjustmentSource: kmSorted.length ? 'LISTING_MEDIAN' : 'NO_KM_DATA',
-      yearAdjustmentSource,
+      yearAdjustmentSource: singleComparable ? 'SINGLE_COMPARABLE_NO_YEAR_ADJUSTMENT' : yearAdjustmentSource,
       yearAdjustmentRate: annualRate,
       level1CandidateCount: level === 1 ? n : 0,
       level2CandidateCount: level === 2 ? n : 0,

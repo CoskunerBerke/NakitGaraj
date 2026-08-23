@@ -661,8 +661,13 @@ export class EvaluationService {
     } else {
       aiAnalysis.push('Emsal ilanlarda kilometre bilgisi bulunmadığı için kilometre düzeltmesi uygulanmamıştır.');
     }
-    if (emsalResult.yearAdjustmentRate) {
-      aiAnalysis.push(`Model Yılı Normalizasyonu: Farklı model yılına ait emsaller, veriden öğrenilen yıllık %${(emsalResult.yearAdjustmentRate * 100).toFixed(1)} değer farkıyla ${dto.year} model yılına indirgenmiştir (${emsalResult.yearAdjustmentSource}).`);
+    // Tek gercek emsalde YIL NORMALIZASYONU UYGULANMAZ (piyasa referansi o
+    // ilanin kendi fiyatidir); dolayisiyla "indirgenmistir" notu da yazilmaz.
+    // Aksi halde denetim dokumu yapilmayan bir islemi yapilmis gosterirdi.
+    if (emsalResult.yearAdjustmentRate && emsalResult.yearAdjustmentSource !== 'SINGLE_COMPARABLE_NO_YEAR_ADJUSTMENT') {
+      aiAnalysis.push(`Model Yılı Normalizasyonu: Farklı model yılına ait emsaller, veriden öğrenilen yıllık %${(emsalResult.yearAdjustmentRate * 100).toFixed(1)} değer farkıyla ${dto.year} model yılına indirgenmiştir (${emsalResult.yearAdjustmentSource}).`)
+    } else if (emsalResult.yearAdjustmentSource === 'SINGLE_COMPARABLE_NO_YEAR_ADJUSTMENT') {
+      aiAnalysis.push('Model Yılı Normalizasyonu: Tek gerçek emsal bulunduğu için piyasa referansı o ilanın kendi fiyatıdır; model yılı düzeltmesi uygulanmamıştır.');
     }
 
     if (emsalResult.isLimitedComps) {
