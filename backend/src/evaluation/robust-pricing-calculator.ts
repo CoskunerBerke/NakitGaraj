@@ -1,5 +1,6 @@
 import { CleanListingItem } from './emsal-matcher.service';
 import {
+  PRICING_ECONOMICS,
   PRICING_LIMITS,
   PricingSegment,
   clamp,
@@ -7,6 +8,7 @@ import {
   operatingCostFor,
   targetProfitFor,
 } from './pricing-config';
+import { finalizeCommercialQuote, roundToStep } from './quote-rounding';
 
 export interface PricingEngineOutput {
   adjustedP35: number;
@@ -228,9 +230,14 @@ export class RobustPricingCalculator {
   }
 
   /** Nakit teklifleri temiz galeri basamaklarina yuvarlar (asla yukari degil) */
+  /**
+   * Nakit teklif yuvarlamasi: her deger araliginda 5.000 TL adim, en yakin.
+   * Onceki surum 1M ustunde 10.000 asagi yuvarliyordu (2.847.000 -> 2.840.000).
+   * Nihai rekabet payi ve minimum kar korumasi finalizeCommercialQuote icinde
+   * tek yerde uygulanir; burada yalnizca adim granulerligi belirlenir.
+   */
   static roundCashOffer(val: number): number {
-    if (val <= 1_000_000) return Math.floor(val / 5000) * 5000;
-    return Math.floor(val / 10000) * 10000;
+    return roundToStep(val);
   }
 
   /** Konsinye ilan fiyatina psikolojik bitis uygular; tabani asla bozmaz. */
@@ -453,7 +460,29 @@ export class RobustPricingCalculator {
       distanceOutsideObservedRange: input.distanceOutsideObservedRange,
     });
 
-    const expectedCompanyGrossMargin = expectedSalePrice - agreedCustomerNet;
+    // 11) TICARI YUVARLAMA (tek kanonik yer). Hassas degerler denetim alaninda
+    // kalir (pricingAudit.*Raw); musteri/bayi/panel temiz 5.000 TL adimlarini
+    // gorur ve hicbir yuzey ikinci bir aritmetik yapmaz.
+    const quote = finalizeCommercialQuote({
+      expectedSalePrice,
+      fairMarketValue,
+      cashOffer,
+      customerConsignmentNet,
+      consignmentListingPrice,
+      operatingCost,
+      riskCost,
+      minimumProfit: PRICING_ECONOMICS.targetProfit.minimum,
+    });
+    const rawQuote = {
+      expectedSalePriceRaw: Math.round(expectedSalePrice),
+      fairMarketValueRaw: Math.round(fairMarketValue),
+      cashOfferRaw: Math.round(cashOffer),
+      customerConsignmentNetRaw: Math.round(customerConsignmentNet),
+      consignmentListingPriceRaw: Math.round(consignmentListingPrice),
+      roundingAdjustments: quote.adjustments,
+    };
+
+    const expectedCompanyGrossMargin = quote.expectedSalePrice - quote.customerConsignmentNet;
 
     const daysScale = realMatchedListingCount >= 25 ? 1 : 1.2;
     const estimatedDaysToSellMin = Math.round(segment.daysToSell[0] * daysScale);
@@ -461,23 +490,23 @@ export class RobustPricingCalculator {
 
     return {
       adjustedP35: Math.round(askingP35 * (1 - damagePenalty)),
-      fairMarketValue,
-      recommendedPublicListingPrice: consignmentListingPrice,
-      expectedSalePrice,
-      customerDesiredNet: userDesiredPrice > 0 ? userDesiredPrice : aiRecommendedCustomerNet,
-      aiRecommendedCustomerNet,
-      proposedCustomerNet: agreedCustomerNet,
-      agreedCustomerNet,
-      baseCommission: consignmentCommission,
-      performanceMargin: Math.max(0, expectedCompanyGrossMargin - consignmentCommission),
+      fairMarketValue: quote.fairMarketValue,
+      recommendedPublicListingPrice: quote.consignmentListingPrice,
+      expectedSalePrice: quote.expectedSalePrice,
+      customerDesiredNet: userDesiredPrice > 0 ? userDesiredPrice : quote.customerConsignmentNet,
+      aiRecommendedCustomerNet: roundToStep(aiRecommendedCustomerNet),
+      proposedCustomerNet: quote.customerConsignmentNet,
+      agreedCustomerNet: quote.customerConsignmentNet,
+      baseCommission: quote.consignmentCommission,
+      performanceMargin: Math.max(0, expectedCompanyGrossMargin - quote.consignmentCommission),
       expectedCompanyGrossMargin,
-      cashOffer,
-      cashOfferMin: this.roundCashOffer(cashOffer * 0.97),
-      cashOfferMax: this.roundCashOffer(cashOffer * 1.02),
-      consignmentListingPrice,
-      expectedConsignmentSalePrice,
-      consignmentCommission,
-      customerConsignmentNet,
+      cashOffer: quote.cashOffer,
+      cashOfferMin: roundToStep(quote.cashOffer * 0.97),
+      cashOfferMax: roundToStep(quote.cashOffer * 1.02),
+      consignmentListingPrice: quote.consignmentListingPrice,
+      expectedConsignmentSalePrice: quote.expectedSalePrice,
+      consignmentCommission: quote.consignmentCommission,
+      customerConsignmentNet: quote.customerConsignmentNet,
       estimatedDaysToSellMin,
       estimatedDaysToSellMax,
       matchedListingCount: realMatchedListingCount,
@@ -508,6 +537,7 @@ export class RobustPricingCalculator {
         fuelKnownShare: input.fuelKnownShare,
         transmissionKnownShare: input.transmissionKnownShare,
         targetEngineKnown: input.targetEngineKnown,
+        ...rawQuote,
       },
     };
   }

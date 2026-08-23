@@ -592,7 +592,11 @@ export class EvaluationService {
     const hasLowComps = emsalResult.matchedCount < 8;
     const hasLowCompsForHighFmv = isFmvTooHigh && emsalResult.matchedCount < 10;
     const hasLowConfidence = calc.confidenceScore <= 70;
-    const isP35TooHigh = calc.adjustedP35 > calc.fairMarketValue;
+    // Butunluk kontrolu HASSAS degerler uzerinde yapilir: calc.fairMarketValue
+    // artik musteriye sunulan 5.000 TL adimli ticari degerdir ve 2.500'e kadar
+    // asagi yuvarlanabilir; hassas P35 ile karsilastirmak sahte hata uretirdi.
+    const preciseFmv = (calc as any).pricingAudit?.fairMarketValueRaw ?? calc.fairMarketValue;
+    const isP35TooHigh = calc.adjustedP35 > preciseFmv;
 
     // Requirement 9: If adjustedP35 > fairMarketValue, throw DATA_INTEGRITY_ERROR (do not produce price)
     if (isP35TooHigh) {

@@ -40,8 +40,11 @@ describe('Fiyatlama V5 — sürekli ekonomi', () => {
     test.each([200_000, 250_000, 500_000, 1_000_000, 2_000_000])('%i TL: ekonomi bileşenleri tutarlı', (v) => {
       const r = value(v);
       const a = r.pricingAudit;
-      expect(a.operatingCost).toBe(operatingCostFor(r.expectedSalePrice));
-      expect(a.targetProfit).toBe(targetProfitFor(r.expectedSalePrice));
+      // Ekonomi bilesenleri HASSAS beklenen satistan turer; r.expectedSalePrice
+      // ise musteriye sunulan 5.000 TL adimli ticari degerdir (quote-rounding).
+      const precise = a.expectedSalePriceRaw ?? r.expectedSalePrice;
+      expect(a.operatingCost).toBe(operatingCostFor(precise));
+      expect(a.targetProfit).toBe(targetProfitFor(precise));
       expect(a.operatingCost).toBeGreaterThan(0);
       expect(a.targetProfit).toBeGreaterThanOrEqual(PRICING_ECONOMICS.targetProfit.minimum);
       expect(r.cashOffer).toBeLessThan(r.expectedSalePrice);

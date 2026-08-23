@@ -85,7 +85,8 @@ describe('Fiyatlama V4', () => {
       // Her iki senaryoda da hedef kar, kar egrisinin BIREBIR kendisidir:
       // guven/yayilim degisse bile kar carpani devreye girmez.
       for (const r of [value(1_000_000, 41, 0.10, 95), value(1_000_000, 41, 0.30, 60)] as any[]) {
-        expect(r.pricingAudit.targetProfit).toBe(targetProfitFor(r.expectedSalePrice));
+        // Hedef kar HASSAS beklenen satistan turer (ticari cikti 5.000 adimlidir).
+        expect(r.pricingAudit.targetProfit).toBe(targetProfitFor(r.pricingAudit.expectedSalePriceRaw ?? r.expectedSalePrice));
       }
     });
 
