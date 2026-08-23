@@ -694,9 +694,23 @@ describe('NakitGaraj Fiyatlama Motoru V3', () => {
       expect(found.length).toBe(ids.length);
     });
 
+    /**
+     * FARKLI MOTOR KANITI -> FARKLI FIYAT.
+     *
+     * Olcut, TALEP EDILEN motor etiketi degil, havuza gercekten giren motor
+     * KANITIDIR. Hedef motorun gercek emsali yoksa motor kademesi uyumlu bir
+     * motora gevser (mevcut, bu gorevin disindaki davranis) ve iki farkli
+     * etiket AYNI gercek kohorta duser -- ayni kohortun ayni fiyati vermesi
+     * dogrudur, hata degildir. Onceki surumde uc etiket yalnizca eski model
+     * yillarindan gelen kirlilik sayesinde ayrisiyordu; tek yonlu yil kurali
+     * sonrasi 2019 BMW 3 Serisi'nde gercek 316i/318i kaniti yoktur.
+     *
+     * Bu yuzden dogrulanan sey: FARKLI motor kohortlari FARKLI fiyat uretir.
+     */
     test('H6. Aynı model ailesindeki farklı motorlar farklı fiyat üretir', async () => {
       const variants = ['320i', '318i', '320d'];
       const values: number[] = [];
+      const byEngineCohort = new Map<string, number>();
       for (const v of variants) {
         const m = await matcher.matchComparableListings({
           make: 'BMW',
@@ -717,10 +731,19 @@ describe('NakitGaraj Fiyatlama Motoru V3', () => {
           freshnessScore: m.freshnessScore,
         });
         values.push(calc.fairMarketValue);
+        // Havuza GERCEKTEN giren motor kanitinin imzasi.
+        const sig = Object.keys(m.usedEngineDistribution || {}).sort().join('+');
+        const prev = byEngineCohort.get(sig);
+        if (prev !== undefined) {
+          // Ayni gercek kohort -> ayni fiyat (tutarlilik).
+          expect(calc.fairMarketValue).toBe(prev);
+        }
+        byEngineCohort.set(sig, calc.fairMarketValue);
       }
-      if (values.length >= 2) {
-        expect(new Set(values).size).toBe(values.length);
-      }
+      // FARKLI motor kohortlari FARKLI fiyat uretmelidir.
+      const distinct = [...byEngineCohort.values()];
+      expect(new Set(distinct).size).toBe(distinct.length);
+      expect(byEngineCohort.size).toBeGreaterThanOrEqual(2);
     });
 
     test('H7. Gerçek veri üzerinde km artışı fiyatı düşürür (tüm seviyelerde)', async () => {

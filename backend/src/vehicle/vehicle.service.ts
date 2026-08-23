@@ -511,13 +511,27 @@ export class VehicleService {
     return [...catalog, ...extras];
   }
 
+  /**
+   * GOZLENEN ILAN PENCERESI — FIYAT KOHORTUYLA AYNI KURAL.
+   *
+   * Sihirbaz, yalnizca GERCEKTEN fiyatlanabilir uclari sunmalidir. Fiyat
+   * cekirdegi hedeften ESKI ilanlari emsal saymadigina gore (bkz.
+   * emsal-matcher: tek yonlu yil kapisi), katalog kapisi da ayni pencereyi
+   * kullanmalidir. Aksi halde sihirbaz, kaniti YALNIZCA daha eski model
+   * yillarinda olan bir uc sunar ve o uc fiyatlanamaz.
+   *
+   * Olculen: pencere simetrikken (yil -/+2) 102 uc yaprak bu durumdaydi;
+   * 102'sinin de HEAD'deki emsal kohortu %100 hedeften ESKI ilanlardan
+   * olusuyordu — yani gosterilen fiyat, kurala gore kanit sayilmayan
+   * verilerden uretilmisti. Uydurma fiyat yerine uc SUNULMAZ.
+   */
   private observedWhere(params: { make?: string; year?: number }): any {
     const where: any = { parseStatus: 'VALID' };
     if (params.make) {
       where.OR = [{ rawMake: params.make }, { canonicalMake: params.make }];
     }
     if (params.year) {
-      where.year = { gte: params.year - 2, lte: params.year + 2 };
+      where.year = { gte: params.year, lte: params.year + 2 };
     }
     return where;
   }
@@ -805,7 +819,11 @@ export class VehicleService {
     year?: number | null,
     strictEngine = false,
   ): boolean {
-    if (year && Math.abs(r.year - year) > 2) return false;
+    // FIYAT KOHORTUYLA AYNI PENCERE: hedeften ESKI ilan, degerlemenin kabul
+    // ettigi bir kanit degildir; dolayisiyla bir SECENEGI de dogrulayamaz.
+    // Bu fonksiyonun sozlesmesi (bkz. familyIdentities aciklamasi) sihirbazin
+    // sundugu her yapragin, DEGERLEMENIN KABUL EDECEGI bir ilana dayanmasidir.
+    if (year && (r.year < year || r.year - year > 2)) return false;
     if (body && r.body && r.body !== body) return false;
     if (evidence) {
       if (!r.engine) return false;

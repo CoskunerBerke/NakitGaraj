@@ -107,14 +107,40 @@ describe('Gercek emsal varken fiyat uretilir (gercek veritabani)', () => {
     }
   }, 60000);
 
-  test('birebir donanim yeterliyse donanim GEVSETILMEZ (Passat 1.5 TSI Elegance)', async () => {
+  /**
+   * DONANIM ONCELIGI, ARTIK TEK YONLU YIL PENCERESI ICINDE OLCULUR.
+   *
+   * Kural: donanim yalnizca GERCEKTEN kitken gevsetilir. "Gercekten kit"in
+   * olcusu, hedef yil ve DAHA YENISI icindeki birebir donanim sayisidir;
+   * daha ESKI yillardaki donanim kayitlari artik hicbir kademede kanit
+   * sayilmaz. Bu test sayiyi sabitlemez, KURALI veriden dogrular.
+   */
+  test('donanim onceligi: birebir donanim YETERLIYSE gevsetilmez (Passat 1.5 TSI Elegance)', async () => {
+    const YEAR = 2021;
+    // AYNI arac: 'Passat Variant' (station wagon) baska bir kasadir ve
+    // eslesticinin kimlik kapisindan zaten gecmez; arz olcusune de girmez.
+    const inWindow = await prisma.rawVehicleListing.count({
+      where: {
+        canonicalMake: 'Volkswagen', canonicalModel: 'Passat',
+        year: { gte: YEAR, lte: YEAR + 2 }, parseStatus: 'VALID', price: { gt: 0 },
+        canonicalTrim: { contains: 'Elegance' },
+      },
+    });
     const m = await matcher.matchComparableListings({
-      make: 'Volkswagen', model: 'Passat', trim: '1.5 TSI  Elegance', year: 2021, mileageKm: 101_000,
+      make: 'Volkswagen', model: 'Passat', trim: '1.5 TSI  Elegance', year: YEAR, mileageKm: 101_000,
     });
     expect(m.level).toBeLessThan(4);
     expect(m.matchedCount).toBeGreaterThanOrEqual(5);
-    // Yeterli birebir Elegance emsali varken Business/Impression havuza girmez.
-    for (const c of m.cleanListings as any[]) expect(/elegance/i.test(c.trim || '')).toBe(true);
+    // HER durumda: hedeften eski model yili havuza GIREMEZ.
+    for (const c of m.cleanListings as any[]) expect(c.year).toBeGreaterThanOrEqual(YEAR);
+    if (inWindow >= 5) {
+      // Yeterli birebir Elegance emsali varken Business/Impression girmez.
+      for (const c of m.cleanListings as any[]) expect(/elegance/i.test(c.trim || '')).toBe(true);
+    } else {
+      // Birebir donanim GERCEKTEN kit: gevsetme mesru, ama ayni arac ailesinde kalir.
+      expect(inWindow).toBeLessThan(5);
+      for (const c of m.cleanListings as any[]) expect(/1\.5 TSI/i.test(c.trim || '')).toBe(true);
+    }
   }, 60000);
 
   test('DUSUK SAYI != VERI YOK: 1-3 gercek emsal fiyat uretir (Abarth 500e)', async () => {
@@ -142,7 +168,14 @@ describe('Gercek emsal varken fiyat uretilir (gercek veritabani)', () => {
       make: 'Renault', model: 'Clio', variant: '1.0 TCe', trim: 'Joy', year: 2022, mileageKm: 60_000,
     });
     expect(m.level).toBe(1);
-    expect(m.matchedCount).toBeGreaterThanOrEqual(300);
+    // KOHORT ARTIK YEREL: ayni yil + hedef km ve alti. Onceki surumde ayni
+    // sorgu 6.350-224.850 km araligindan 502 ilan topluyordu; 502'nin 361'i
+    // hedefin UZERINDEYDI. Sayi kucuruldu, KANIT yerellesti.
+    expect(m.matchedCount).toBeGreaterThanOrEqual(100);
+    for (const c of m.cleanListings as any[]) {
+      expect(c.year).toBe(2022);
+      if (c.mileageKm > 0) expect(c.mileageKm).toBeLessThanOrEqual(60_000);
+    }
   }, 60000);
 });
 

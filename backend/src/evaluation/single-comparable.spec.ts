@@ -106,13 +106,24 @@ describe('Tek emsal — piyasa referansi (gercek veritabani)', () => {
     }
   }, 60000);
 
-  test('C) tek emsal KOMSU YILDAN fiyat cekmez (yil duzeltmesi uygulanmaz)', async () => {
+  test('C) tek emsal ESKI YILDAN fiyat cekmez (2024 ilan, 2025 hedefe giremez)', async () => {
+    // GLOBAL KOHORT KURALI: hedeften ESKI ilan emsal degildir. 2024 model tek
+    // ilan, 2025 hedefi icin kanit SAYILMAZ; genel amortisman orani ile
+    // "yeni model yiline tasinarak" da kullanilamaz.
     const m = await matcher.matchComparableListings({
       make: SOLE.make, model: SOLE.model, variant: 'Standart', trim: SOLE.trim,
       year: SOLE.year + 1, mileageKm: SOLE.km,
     });
+    expect(m.matchedCount).toBe(0);
+    for (const c of m.cleanListings as any[]) expect(c.year).toBeGreaterThanOrEqual(SOLE.year + 1);
+  }, 60000);
+
+  test('C2) tek emsal KENDI yilinda aynen kullanilir (N=1 sozlesmesi)', async () => {
+    const m = await matcher.matchComparableListings({
+      make: SOLE.make, model: SOLE.model, variant: 'Standart', trim: SOLE.trim,
+      year: SOLE.year, mileageKm: SOLE.km,
+    });
     expect(m.matchedCount).toBe(1);
-    // Ilanin fiyati AYNEN tasinir; genel amortisman orani UYGULANMAZ.
     expect(m.cleanListings[0].price).toBe(SOLE.price);
     expect(m.yearAdjustmentSource).toBe('SINGLE_COMPARABLE_NO_YEAR_ADJUSTMENT');
   }, 60000);
@@ -190,7 +201,8 @@ describe('Yuksek destekli kohortlar DEGISMEDI', () => {
       make: 'Renault', model: 'Clio', variant: '1.0 TCe', trim: 'Joy', year: 2022, mileageKm: 60_000,
     });
     expect(m.level).toBe(1);
-    expect(m.matchedCount).toBeGreaterThanOrEqual(300);
+    // Yerel kohort: sayi kuculdu (bkz. quote-fallback), kanit yerellesti.
+    expect(m.matchedCount).toBeGreaterThanOrEqual(100);
     expect(m.yearAdjustmentSource).not.toBe('SINGLE_COMPARABLE_NO_YEAR_ADJUSTMENT');
   }, 60000);
 });

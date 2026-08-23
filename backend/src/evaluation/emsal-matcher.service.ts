@@ -332,6 +332,81 @@ export class EmsalMatcherService {
   /* Aday havuzu                                                       */
   /* ---------------------------------------------------------------- */
 
+  /**
+   * KILOMETRE YERELLIGI — her arac icin ayni, marka/model ayrimi YOK.
+   *
+   * Musterinin kilometresi K ise, once K VE ALTI gercek gozlemler kullanilir.
+   * Onceki surumde kohorta o yilin TUM kilometreleri esit hakla giriyordu:
+   * olculen ornek, 60.000 km'lik Clio 2022 icin 6.350-224.850 km araligindan
+   * 502 ilan; 502'nin 361'i hedefin UZERINDE.
+   *
+   * Kilometresi BILINMEYEN ilan dislanmaz: bilinmezlik celiski degildir ve
+   * fiyat cekirdegi zaten agirligini yariya dusurur.
+   *
+   * K ve alti yeterli DEGILSE (orn. hedef 5.000 km, piyasa 6.001 km'den
+   * basliyor) EN YAKIN gercek gozlemlere acilir — uzaga atlanmaz.
+   */
+  private applyMileageLocality(
+    selected: RawCandidate[],
+    targetKm: number,
+    minCount: number,
+  ): RawCandidate[] {
+    if (!targetKm || targetKm <= 0 || selected.length === 0) return selected;
+
+    const known = selected.filter((r) => typeof r.mileageKm === 'number' && (r.mileageKm as number) > 0);
+    const unknown = selected.filter((r) => !(typeof r.mileageKm === 'number' && (r.mileageKm as number) > 0));
+    if (known.length === 0) return selected;
+
+    const atOrBelow = known.filter((r) => (r.mileageKm as number) <= targetKm);
+    if (atOrBelow.length >= minCount) {
+      // Yeterli YEREL kanit var: hedefin uzerindeki kilometreler merkeze girmez.
+      return [...atOrBelow, ...unknown];
+    }
+
+    // Yeterli degil: mesafe sirasiyla EN YAKIN gercek gozlemlere acilir.
+    //
+    // Yaricap iki olcutun BUYUGUDUR:
+    //   (a) minCount'a ulastiran mesafe,
+    //   (b) yakinlik olcegi (asagidaki agirlik fonksiyonuyla ayni olcek).
+    //
+    // (b) taban olmasaydi yaricap tek bir yigilmaya kilitlenebilirdi: Audi A3
+    // 2025 hedefi 5.000 km iken kaynak veride 303 ilanin 35'i tam olarak
+    // 6.001 km'de duruyor (Sahibinden'in "0-6.001 km" araligi). Sadece o
+    // yigilma alinsaydi, 6.002-15.000 km'deki 138 gercek gozlem — hedefe en
+    // az onun kadar yakin kanit — disarida kalirdi.
+    //
+    // Yaricap ICINDE hangi ilanin merkezi belirledigini yakinlik AGIRLIGI
+    // soyler; secim kapisi yalnizca uzagi disarida tutar.
+    const byDistance = [...known].sort(
+      (a, b) => Math.abs((a.mileageKm as number) - targetKm) - Math.abs((b.mileageKm as number) - targetKm),
+    );
+    const cut = byDistance[Math.min(minCount, byDistance.length) - 1];
+    const radius = Math.max(
+      Math.abs((cut.mileageKm as number) - targetKm),
+      this.mileageProximityScale(targetKm),
+    );
+    return [...known.filter((r) => Math.abs((r.mileageKm as number) - targetKm) <= radius), ...unknown];
+  }
+
+  /**
+   * Hedef kilometreye YAKINLIK agirligi (0 < w <= 1).
+   *
+   * Secim tek basina yetmez: kucuk havuzlarda K ve alti kanitlarin hepsi
+   * kalir ve cok dusuk kilometreli bir ilan, hedefe komsu ilanlarla ayni
+   * hakki alirdi. Olcek hedefin kendisinden turetilir (veri surer, sabit
+   * bir segment tablosu DEGIL); cok dusuk hedeflerde taban olcek kullanilir.
+   */
+  private mileageProximityWeight(listingKm: number | null, targetKm: number): number {
+    if (!targetKm || targetKm <= 0) return 1;
+    if (!listingKm || listingKm <= 0) return 1; // bilinmiyor: celiski degil
+    return 1 / (1 + Math.abs(listingKm - targetKm) / this.mileageProximityScale(targetKm));
+  }
+
+  /** Yakinlik olcegi: hedefin kendisinden turetilir, sabit segment tablosu YOK. */
+  private mileageProximityScale(targetKm: number): number {
+    return Math.max(targetKm * 0.5, 15_000);
+  }
+
   private async fetchCandidates(make: string, model: string, yearMin: number, yearMax: number) {
     const cleanMake = make.trim();
     const cleanModel = model.trim();
@@ -422,6 +497,7 @@ export class EmsalMatcherService {
     transmission?: string;
   }): Promise<EmsalMatchResult> {
     const { make, model, variant, trim, year } = params;
+    const targetKm = params.mileageKm > 0 ? params.mileageKm : 0;
 
     // Katalog variant adi motor + paket birlestirilmis gelebilir; emsal
     // tablosuyla ayni semantige indirgenir.
@@ -483,10 +559,22 @@ export class EmsalMatcherService {
       normalizeBodyType(params.bodyType) || deriveBodyType(variantText, paramTrim);
     const paramTransmission = (params.transmission || '').trim();
 
+    /**
+     * ADAY PENCERESI: HEDEF YIL VE DAHA YENISI.
+     *
+     * Musterinin aracindan DAHA ESKI bir ilan, o aracin piyasa fiyatinin
+     * kaniti degildir. Onceki surumde pencere simetrikti (yil -/+2) ve eski
+     * yillar merkezi asagi cekiyordu. Olculen: Audi A3 Sedan 35 TFSI S Line
+     * 2025 hedefinde secilen 234 emsalin 102'si 2024 modeldi; piyasa
+     * referansi 3.085.000 TL cikiyordu. Fiat Egea 1.4 Fire 2021 hedefinde
+     * 3.195 emsalin 1.024'u 2020 modeldi.
+     *
+     * Bu KURAL, marka/model ayrimi YAPMAZ; her arac icin aynidir.
+     */
     const { candidates, duplicateCount, damagedCount } = await this.fetchCandidates(
       make,
       model,
-      year - 2,
+      year,
       year + 2,
     );
 
@@ -525,19 +613,30 @@ export class EmsalMatcherService {
       trimFaithful?: boolean;
     }> = [
       { level: 1, yearSpan: 0, strictEngine: true, requireFuel: true, requireTransmission: true, minCount: PRICING_LIMITS.minCompCountForPricing },
-      // DONANIMA SADIK yil gevsetmesi: ayni motor + AYNI donanim, yil +/-1.
-      // Donanim gevsetmesi ancak bundan SONRA gelir ("veri yok" demeden once
-      // gevset; eldeki birebir donanim yeterliyken DEGIL). Olculen: Passat
+      // SIRA: once KIMLIK korunur, sonra yil TEK YONLU ve EN YAKINDAN acilir.
+      //
+      // Her kimlik kademesi kendi icinde yil 0 -> +1 (-> +2) diye genisler.
+      // Hedef yilda yeterli kanit varken daha yeni yil EKLENMEZ: emsal
+      // sayisini buyutmek yerel piyasayi genel ortalamaya cevirir.
+      //
+      // DONANIM, yil genislemesinden ONCE gelir. Olculen: Passat
       // "1.5 TSI Elegance" 2021 icin 17 birebir Elegance emsali varken
       // Business/Impression havuza katilinca nakit teklif %16 dusuyordu.
+      // Yani "ayni donanim / komsu yeni yil", "ayni yil / baska donanim"dan
+      // daha dogru bir emsaldir. Donanim ancak GERCEKTEN kitken gevsetilir.
+      { level: 2, yearSpan: 0, strictEngine: false, requireFuel: true, requireTransmission: false, minCount: PRICING_LIMITS.minCompCountForPricing, trimFaithful: true },
       { level: 2, yearSpan: 1, strictEngine: false, requireFuel: true, requireTransmission: false, minCount: PRICING_LIMITS.minCompCountForPricing, trimFaithful: true },
+      { level: 2, yearSpan: 2, strictEngine: false, requireFuel: true, requireTransmission: false, minCount: PRICING_LIMITS.minCompCountForPricing, trimFaithful: true },
+      { level: 2, yearSpan: 0, strictEngine: false, requireFuel: true, requireTransmission: false, minCount: PRICING_LIMITS.minCompCountForPricing },
       { level: 2, yearSpan: 1, strictEngine: false, requireFuel: true, requireTransmission: false, minCount: PRICING_LIMITS.minCompCountForPricing },
+      { level: 3, yearSpan: 1, strictEngine: false, requireFuel: true, requireTransmission: false, minCount: 4 },
       { level: 3, yearSpan: 2, strictEngine: false, requireFuel: true, requireTransmission: false, minCount: 4 },
     ];
 
     let level3Snapshot: {
       level: number;
       selected: RawCandidate[];
+      bodyEvidence: RawCandidate[];
       trimMatchedCount: number;
     } | null = null;
 
@@ -546,7 +645,9 @@ export class EmsalMatcherService {
       let trimMatchedCount = 0;
 
       for (const r of candidates) {
-        if (Math.abs(r.year - year) > cfg.yearSpan) continue;
+        // TEK YONLU YIL KAPISI: hedeften ESKI ilan hicbir kademede giremez.
+        if (r.year < year) continue;
+        if (r.year - year > cfg.yearSpan) continue;
 
         // Motor KANITI her kademede ayni sekilde kullanilir: ayri motor alani
         // YA DA tam-model metnindeki ACIK imza. Onceki surumde alt kademeler
@@ -623,8 +724,12 @@ export class EmsalMatcherService {
         selected.push(r);
       }
 
-      if (cfg.level === 3) level3Snapshot = { level: 3, selected, trimMatchedCount };
-      if (selected.length >= cfg.minCount) {
+      // KM YERELLIGI kademe kabulunden ONCE uygulanir: kohort neyse, kabul
+      // olcutu de o kohort uzerinden isler.
+      const local = this.applyMileageLocality(selected, targetKm, cfg.minCount);
+
+      if (cfg.level === 3) level3Snapshot = { level: 3, selected: local, bodyEvidence: selected, trimMatchedCount };
+      if (local.length >= cfg.minCount) {
         return { ...this.buildResult({
           level: cfg.level,
           make,
@@ -636,7 +741,9 @@ export class EmsalMatcherService {
           paramFuel,
           paramBody,
           year,
-          selected,
+          selected: local,
+          bodyEvidence: selected,
+          targetKm,
           trimMatchedCount,
           annualRate,
           yearAdjustmentSource,
@@ -664,6 +771,8 @@ export class EmsalMatcherService {
         paramBody,
         year,
         selected: level3Snapshot.selected,
+        bodyEvidence: level3Snapshot.bodyEvidence,
+        targetKm,
         trimMatchedCount: level3Snapshot.trimMatchedCount,
         annualRate,
         yearAdjustmentSource,
@@ -732,6 +841,17 @@ export class EmsalMatcherService {
     paramBody: string;
     year: number;
     selected: RawCandidate[];
+    /**
+     * KASA BELIRSIZLIGI KANITI — km yerelligi UYGULANMADAN ONCEKI kume.
+     *
+     * Kasa belirsizligi, hedefin KIMLIGINE dair bir risktir; fiyat kohortunun
+     * kilometre penceresine gore daralmasi bu riski ortadan kaldirmaz. Ayni
+     * kumeyi kullanmak guvenlik sinyalini korurken fiyat kohortunu yerel
+     * tutar. Olculen: BMW 420d 2014 (kasa beyansiz) icin km yerelligi sonrasi
+     * kasa gruplari destek esiginin altina dusuyor ve uyari SUSUYORDU.
+     */
+    bodyEvidence: RawCandidate[];
+    targetKm: number;
     trimMatchedCount: number;
     annualRate: number;
     yearAdjustmentSource: string;
@@ -741,7 +861,8 @@ export class EmsalMatcherService {
   }): EmsalMatchResult {
     const {
       level, make, model, paramEngine, paramTrim, paramFuel, paramBody, year, selected,
-      trimMatchedCount, annualRate, yearAdjustmentSource, duplicateCount, damagedCount,
+      bodyEvidence, targetKm, trimMatchedCount, annualRate, yearAdjustmentSource,
+      duplicateCount, damagedCount,
     } = args;
 
     const engineDist: Record<string, number> = {};
@@ -792,6 +913,12 @@ export class EmsalMatcherService {
 
       // Esleme kalitesi agirligi: yil farki, trim uyumu, yakit bilinmezligi
       let quality = 1;
+
+      // Hedef kilometreye YAKINLIK: en yakin gercek gozlemler merkezi belirler.
+      // Ornek (hedef 5.000 km): 6k/8k/15k ilanlari, 80k/120k ilanlarina gore
+      // toplam agirligin buyuk cogunlugunu tasir.
+      quality *= this.mileageProximityWeight(r.mileageKm, targetKm);
+
       const yearDiff = Math.abs(r.year - year);
       if (yearDiff === 1) quality *= 0.75;
       else if (yearDiff >= 2) quality *= 0.5;
@@ -882,11 +1009,11 @@ export class EmsalMatcherService {
     // gruplar yuz binlerce TL ayrisabildigi icin, ayrisma olculur ve gerekirse
     // otomatik fiyat verilmez. Kasa BILINIYORSA (CASE A/B) bu kontrol calismaz.
     const bodyGroups = new Map<string, number[]>();
-    for (const l of listings) {
-      const b = (l.bodyType || '').trim();
+    for (const r of bodyEvidence) {
+      const b = (this.bodyOf(r) || '').trim();
       if (!b) continue;
       if (!bodyGroups.has(b)) bodyGroups.set(b, []);
-      bodyGroups.get(b)!.push(l.normalizedPrice ?? l.price);
+      bodyGroups.get(b)!.push(r.price);
     }
     const med = (arr: number[]) => {
       const a = [...arr].sort((x, y) => x - y);
