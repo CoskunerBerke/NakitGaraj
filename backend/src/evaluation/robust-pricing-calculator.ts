@@ -341,6 +341,14 @@ export class RobustPricingCalculator {
      * (PRICING_LIMITS.riskRateRange), yani rezerv ust siniri ayni.
      */
     const dataConfidence = clamp(baseConfidenceScore / 100, 0, 1);
+    /**
+     * YUKSEK-GUVEN IADESI (rekabetcilik V1): kaniti guclu kohortlar
+     * gereksiz belirsizlik rezervi tasimaz. Iade YALNIZCA guven > 0,72
+     * bolgesinde devreye girer; dusuk guvenli / N=1 / manuel adaylar
+     * ETKILENMEZ ve risk TABANI (riskRateRange[0]) asla delinmez.
+     * Markadan bagimsizdir; sinyal mevcut guven mimarisidir.
+     */
+    const highConfidenceRebate = Math.max(0, dataConfidence - 0.72) * 0.020;
     const riskRate = clamp(
       0.003 +
         (1 - dataConfidence) * 0.022 +
@@ -348,7 +356,8 @@ export class RobustPricingCalculator {
         (matchedLevel >= 3 ? 0.006 : 0) +
         dispersion * 0.010 +
         liquidityPenalty +
-        stalePenalty,
+        stalePenalty -
+        highConfidenceRebate,
       PRICING_LIMITS.riskRateRange[0],
       PRICING_LIMITS.riskRateRange[1],
     );
@@ -398,7 +407,7 @@ export class RobustPricingCalculator {
 
     const commissionTarget = Math.max(
       segment.commission.min,
-      Math.round(expectedSalePrice * segment.commission.rate),
+      Math.round(expectedSalePrice * segment.commission.rate * PRICING_ECONOMICS.commissionScale),
     );
     // Komisyon tavani: konsinye musteriye HER ZAMAN nakitten anlamli sekilde
     // daha fazla birakmali.

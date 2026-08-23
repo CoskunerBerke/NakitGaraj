@@ -1,7 +1,7 @@
 import { RobustPricingCalculator } from './robust-pricing-calculator';
 import { EmsalMatcherService, CleanListingItem } from './emsal-matcher.service';
 import { PrismaClient } from '@prisma/client';
-import { PRICING_LIMITS, getSegment } from './pricing-config';
+import { PRICING_ECONOMICS, targetProfitFor, PRICING_LIMITS, getSegment } from './pricing-config';
 import { computeConfidence, mileageExtrapolationPenalty } from './robust-pricing-calculator';
 import {
   deriveFromSource,
@@ -338,7 +338,9 @@ describe('NakitGaraj Fiyatlama Motoru V3', () => {
     test('E2. Müşterinin istediği yüksek net, güvenli tavanı aşamaz', () => {
       const r = priceIt(comps(40, 1_500_000), { userDesiredPrice: 99_000_000 });
       expect(r.agreedCustomerNet).toBeLessThanOrEqual(r.expectedSalePrice);
-      expect(r.agreedCustomerNet).toBeLessThanOrEqual(r.aiRecommendedCustomerNet);
+      // MUSTERI LEHINE yuvarlama guvenli tavanin en fazla BIR adim (5.000)
+      // ustune cikabilir; satis-alti ve nakit-ustu korumalar degismez.
+      expect(r.agreedCustomerNet).toBeLessThanOrEqual(r.aiRecommendedCustomerNet + 5_000);
       expect(r.customerConsignmentNet).toBeGreaterThan(r.cashOffer);
     });
 
@@ -357,19 +359,24 @@ describe('NakitGaraj Fiyatlama Motoru V3', () => {
   /* ================================================================ */
 
   describe('F. Kâr basamağı ve müşteri koruması', () => {
-    test.each([
-      [400_000, 20_000],
-      [900_000, 30_000],
-      [1_600_000, 40_000],
-      [3_000_000, 60_000],
-      [6_000_000, 140_000],
-    ])('F1. %i TL segmentinde hedef kâr tabanı >= %i TL', (base, minProfit) => {
-      const r = priceIt(comps(40, base));
-      if (r.requiresManualApproval) return; // manuel akista fiyat gosterilmez
-      expect(r.pricingAudit.targetProfit).toBeGreaterThanOrEqual(minProfit);
-      // Nakit kanalinin brut marji hedef kari kapsamali
-      expect(r.expectedSalePrice - r.cashOffer).toBeGreaterThanOrEqual(minProfit);
-    });
+    // REKABETCILIK V1: hedef kar SUREKLI egriden gelir (targetProfitFor);
+    // eski segment-tablosu tabanlari artik sozlesme degildir. Sozlesme:
+    //   kar == egri degeri  ve  kar >= MECBURI minimum (20k)  ve
+    //   brut marj hedef kari kapsar.
+    test.each([[400_000], [900_000], [1_600_000], [3_000_000], [6_000_000]])(
+      'F1. %i TL bandında hedef kâr egriyle birebir ve taban üstünde',
+      (base) => {
+        const r = priceIt(comps(40, base));
+        if (r.requiresManualApproval) return; // manuel akista fiyat gosterilmez
+        // Hedef kar HAM beklenen satistan hesaplanir; r.expectedSalePrice
+        // ticari yuvarlama sonrasi degerdir.
+        const expected = targetProfitFor(r.pricingAudit.expectedSalePriceRaw ?? r.expectedSalePrice);
+        expect(r.pricingAudit.targetProfit).toBe(expected);
+        expect(r.pricingAudit.targetProfit).toBeGreaterThanOrEqual(PRICING_ECONOMICS.targetProfit.minimum);
+        // Nakit kanalinin brut marji hedef kari kapsamali
+        expect(r.expectedSalePrice - r.cashOffer).toBeGreaterThanOrEqual(r.pricingAudit.targetProfit);
+      },
+    );
 
     // V4: belirsizlik TEK KEZ, risk rezervinde fiyatlanir. Hedef kar galerinin
     // ticari karidir ve belirsizlik yuzunden ayrica buyutulmez (cifte tahsil).

@@ -69,10 +69,15 @@ describe('Fiyatlama V5 — sürekli ekonomi', () => {
   });
 
   describe('F/G/H/I/J. Yüksek segment sönümlü ama monoton', () => {
-    test('kâr TL değere göre monoton artar', () => {
+    test('kâr TL değere göre monoton artar (taban platosu bilinçli)', () => {
+      // Dusuk degerde MECBURI taban (minimum) plato yapar; bu dusus degildir.
+      // Egri bolgesinde (taban baglayici degilken) artis KESIN artandir.
       const vals = [200_000, 500_000, 1_000_000, 2_000_000, 5_000_000, 10_000_000, 20_000_000, 30_000_000, 50_000_000];
       for (let i = 1; i < vals.length; i++) {
-        expect(targetProfitFor(vals[i])).toBeGreaterThan(targetProfitFor(vals[i - 1]));
+        expect(targetProfitFor(vals[i])).toBeGreaterThanOrEqual(targetProfitFor(vals[i - 1]));
+        if (targetProfitFor(vals[i - 1]) > PRICING_ECONOMICS.targetProfit.minimum) {
+          expect(targetProfitFor(vals[i])).toBeGreaterThan(targetProfitFor(vals[i - 1]));
+        }
       }
     });
 

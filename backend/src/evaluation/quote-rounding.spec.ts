@@ -87,8 +87,11 @@ describe('finalizeCommercialQuote — gorev ornekleri', () => {
       customerConsignmentNet: 5_050_000,
       consignmentListingPrice: 5_399_900,
     });
-    expect(q.cashOffer).toBe(4_650_000);
-    expect(Math.abs(q.cashOffer - 4_652_400)).toBeLessThanOrEqual(2_500);
+    // MUSTERI LEHINE yuvarlama: ekonomi izin veriyorsa USTTEKI 5.000 adimi
+    // (4.655.000) tercih edilir; sapma yine EN FAZLA bir adimdir. Yuzde
+    // bazli sisirme yoktur.
+    expect(q.cashOffer).toBe(4_655_000);
+    expect(Math.abs(q.cashOffer - 4_652_400)).toBeLessThanOrEqual(5_000);
   });
 
   test('ilan fiyati beklenen satisin altina dusmez', () => {

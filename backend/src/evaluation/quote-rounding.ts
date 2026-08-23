@@ -60,12 +60,20 @@ export function finalizeCommercialQuote(i: CommercialQuoteInput): CommercialQuot
   const expectedSalePrice = roundToStep(i.expectedSalePrice);
   const fairMarketValue = roundToStep(i.fairMarketValue);
 
-  // NAKIT: en yakin adim; ama minimum kar korunmuyorsa asagi adim.
-  let cashOffer = roundToStep(i.cashOffer);
+  // NAKIT: MUSTERI LEHINE yuvarlama — ekonomi izin veriyorsa USTTEKI guvenli
+  // 5.000 adimi tercih edilir (2.897.600 -> 2.900.000). Ust adim minimum kar
+  // tavanini asarsa en yakin adim, o da asarsa asagi adim. Minimum kar
+  // korumasi DEGISMEDI; yalnizca guvenli araliktaki tercih musteri lehine.
   const cashCeiling = i.expectedSalePrice - i.operatingCost - i.riskCost - i.minimumProfit;
-  if (cashOffer > i.cashOffer && cashOffer > cashCeiling) {
-    cashOffer = floorToStep(i.cashOffer);
-    adjustments.push('cash: rekabet payi minimum kari asacagi icin asagi yuvarlandi');
+  let cashOffer = ceilToStep(i.cashOffer);
+  if (cashOffer > cashCeiling) {
+    cashOffer = roundToStep(i.cashOffer);
+    if (cashOffer > i.cashOffer && cashOffer > cashCeiling) {
+      cashOffer = floorToStep(i.cashOffer);
+      adjustments.push('cash: rekabet payi minimum kari asacagi icin asagi yuvarlandi');
+    }
+  } else if (cashOffer > i.cashOffer) {
+    adjustments.push('cash: musteri lehine ust adima yuvarlandi (minimum kar korunuyor)');
   }
   // Siralama fizibilitesi: nakit ile satis arasinda net icin en az bir adim.
   if (cashOffer > expectedSalePrice - 2 * step) {
@@ -79,8 +87,12 @@ export function finalizeCommercialQuote(i: CommercialQuoteInput): CommercialQuot
   // ILAN: yukari adim; beklenen satisin altina DUSMEZ.
   const consignmentListingPrice = ceilToStep(Math.max(i.consignmentListingPrice, expectedSalePrice));
 
-  // NET: en yakin adim; satisin ALTINDA ve nakdin USTUNDE kalir.
-  let customerConsignmentNet = roundToStep(i.customerConsignmentNet);
+  // NET: MUSTERI LEHINE ust adim; satisin ALTINDA ve nakdin USTUNDE kalir.
+  // Ust adim satis-alti kosulu bozarsa en yakin adima dusulur.
+  let customerConsignmentNet = ceilToStep(i.customerConsignmentNet);
+  if (customerConsignmentNet >= expectedSalePrice) {
+    customerConsignmentNet = roundToStep(i.customerConsignmentNet);
+  }
   if (customerConsignmentNet >= expectedSalePrice) {
     customerConsignmentNet = expectedSalePrice - step;
     adjustments.push('net: satisin altina cekildi (komisyon en az bir adim)');

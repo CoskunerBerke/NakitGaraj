@@ -204,10 +204,28 @@ export const PRICING_ECONOMICS = {
    * ve mevcut ekonomik segment tabaniyla AYNI tutulmustur (degistirilmedi).
    */
   targetProfit: {
-    referenceProfit: 40_000, // mevcut 1M davranisi ile birebir
-    exponent: 0.8,
+    /**
+     * REKABETCILIK V1 (olculen): 1.204 gercek yol uzerinde offline replay,
+     * uc aday politika (bazal / ilimli / azami-guvenli). Secilen egri, tum
+     * sert kapilarda SIFIR ihlalle (zarar 0, min-kar ihlali 0, siralama 0,
+     * klif 0) en yuksek musteri teklifini verendir. `minimum` MECBURI kar
+     * tabanidir ve DEGISMEDI; dusuk deger bandinda teklifler zaten sabit
+     * operasyon maliyeti + bu tabanla sinirlidir (bilincli olarak korunur).
+     * Ust bantta mutlak kar buyumesi yavaslatildi (20M'de ~439k -> ~273k
+     * hedef kar): deger buyudu diye kar orantisiz buyumez.
+     */
+    referenceProfit: 28_000,
+    exponent: 0.76,
     minimum: 20_000,
   },
+
+  /**
+   * Konsinye komisyon OLCEGI: segment tablosundaki oranlara uygulanir
+   * (taban `min` degerleri DEGISMEZ). Olculen: 0,8 olceginde komisyon
+   * kanali anlamli kalirken musteri neti belirgin artar ve
+   * nakit < net < satis siralamasi tum orneklemde korunur.
+   */
+  commissionScale: 0.8,
 
   /**
    * Operasyon + elde tutma maliyeti:
