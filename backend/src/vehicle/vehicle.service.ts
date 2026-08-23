@@ -4,8 +4,14 @@ import { CacheService } from '../cache.service';
 import {
   BODY_TYPE_LABELS,
   CANONICAL_BODY_TYPES,
+  deriveBodyType,
+  explicitEngineSignature,
   foldTurkish,
+  isEngineCompatible,
+  modelNameMatches,
+  splitVariantString,
 } from '../evaluation/listing-attributes';
+import { PRICING_LIMITS } from '../evaluation/pricing-config';
 
 /**
  * Musteriye SUNULAMAYACAK kadar bozuk model adi mi?
@@ -29,7 +35,8 @@ export function isUnusableModelName(name: string): boolean {
   const raw = String(name ?? '');
   const t = foldTurkish(raw);
   if (!t.trim()) return true;
-  if (t.includes('sahibinden') || t.includes('fiyatlar') || t.includes('modelleri')) return true;
+  // "sahibind" (kirpilmis "sahibinden") de sayfa basligi kalintisidir.
+  if (t.includes('sahibind') || t.includes('fiyatlar') || t.includes('modelleri')) return true;
   if (t.includes('.html')) return true;
   if (/[─-▟�]/.test(raw)) return true;
   // Hic harf/rakam tasimayan ad (orn. "_ -") gercek bir model degildir.
@@ -210,7 +217,16 @@ export class VehicleService {
 
     let merged = filtered;
     if (makeName) {
-      const observed = await this.getObservedModels({ make: makeName });
+      const observed = await this.getObservedModels({ make: makeName, year: numYear ?? undefined });
+
+      // YIL PENCERESI DESTEGI: yil secildiyse model ancak o yilin +/-2
+      // penceresinde gercek ilani varsa sunulur (degerleme bu pencereyi
+      // kullanir). Olculen: "A3 Hatchback" 2023 icin sunuluyor ama tum
+      // ilanlari 2005-2012 araligindaydi -> fiyatlanamayan yaprak.
+      if (numYear) {
+        const supported = await this.modelsWithSupportInWindow(makeName, numYear);
+        filtered = filtered.filter((m) => supported.some((s) => this.modelMatchesTarget(s, String(m.name || ''))));
+      }
 
       // KASA ADI TEK BASINA MODEL DEGILSE GIZLENIR — GERCEK ILAN DESTEGIYLE.
       //
@@ -273,8 +289,31 @@ export class VehicleService {
     // Gercek ilanlarda gorulen motorlar (katalog variant yoksa bile)
     const names = await this.resolveNames({ brandId, modelId });
     const observedEngines = names.make && names.model
-      ? await this.getObservedEngines({ make: names.make, model: names.model })
+      ? await this.getObservedEngines({ make: names.make, model: names.model, year: numYear ?? undefined })
       : [];
+
+    // GOZLENEN ILISKI KAPISI (katalog sozlesmesi): bir motor/versiyon secenegi
+    // ancak o marka+model ailesinin GERCEK ilanlarinda karsiligi varsa sunulur.
+    // Olculen (26.607 uc yaprak): katalogdaki "Standart", "147 5 Kapi",
+    // "Eco Elegance" gibi motor TASIMAYAN etiketler ile ailede hic gorulmeyen
+    // motorlar, fiyatlanamayan 7.600+ sahte yaprak uretiyordu.
+    if (names.make && names.model) {
+      const family = await this.familyIdentities(names.make, names.model);
+      const familyHasEngine = family.some((r) => Boolean(r.engine));
+      variants = variants.filter((v) => {
+        const name = String(v.name || '');
+        const evidence = this.variantEngineEvidence(name);
+        const body = deriveBodyType(name);
+        if (evidence) {
+          return family.some((r) => this.admissible(r, evidence, body, '', numYear));
+        }
+        // Motor tasimayan etiket yalnizca ailenin kendisi de motor kaniti
+        // tasimiyorsa yer tutucu olarak kalir (orn. elektrikli tek versiyon).
+        // Aile gercek motorlar iceriyorsa onlar sunulur; uydurma etiket degil.
+        if (familyHasEngine) return false;
+        return family.some((r) => this.admissible(r, '', body, '', numYear));
+      });
+    }
     variants = this.mergeObserved(variants, observedEngines);
 
     if (variants.length === 0) {
@@ -316,11 +355,27 @@ export class VehicleService {
       );
     }
 
-    // Gercek ilanlarda gorulen paketler (katalog package yoksa bile)
+    // Gercek ilanlarda gorulen paketler (katalog package yoksa bile).
+    // GOZLENEN ILISKI KAPISI: paketler, secilen motorla BIRLIKTE gorulmus
+    // ilanlardan gelir; modelin tum paketlerinin bagimsiz carpimi degil.
+    // Onceki surum motor alani eslesmeyince modelin TUM paketlerine dusuyordu
+    // (Audi A3 Sedan 35 TFSI icin 38 ilgisiz secenek).
     const pkgNames = await this.resolveNames({ brandId, modelId, variantId });
     const observedTrims = pkgNames.make && pkgNames.model
-      ? await this.getObservedTrims({ make: pkgNames.make, model: pkgNames.model, engine: pkgNames.engine })
+      ? await this.getObservedTrims({ make: pkgNames.make, model: pkgNames.model, engine: pkgNames.engine, year: numYear ?? undefined })
       : [];
+    if (pkgNames.make && pkgNames.model) {
+      const evidence = this.variantEngineEvidence(pkgNames.engine || '');
+      if (!evidence) {
+        // Motor bilinmiyorsa paket tek ayirt edicidir: katalog paketi ancak
+        // gercek ilanlarda gorulen bir donanimla ORTUSUYORSA sunulur.
+        const observedKeys = observedTrims.map((o) => foldTurkish(o.value));
+        packages = packages.filter((pk) => {
+          const name = foldTurkish(String(pk.name || ''));
+          return observedKeys.some((k) => k === name || k.includes(name) || name.includes(k));
+        });
+      }
+    }
     const mergedPackages = this.mergeObserved(packages, observedTrims);
 
     await this.cache.set(cacheKey, mergedPackages, 3600);
@@ -348,14 +403,9 @@ export class VehicleService {
    * NOT: Bu kural yalnizca SECENEK KESFI icindir; emsal eslestiricinin
    * havuz kurali bilerek DEGISTIRILMEMISTIR (fiyat motoru donduruldu).
    */
+  /** Degerleme motoruyla AYNI model kurali (listing-attributes.modelNameMatches). */
   private modelMatchesTarget(candidate: string, target: string): boolean {
-    const c = foldTurkish(candidate || '').trim();
-    const t = foldTurkish(target || '').trim();
-    if (!c || !t) return false;
-    if (c === t) return true;
-    if (c.startsWith(t + ' ')) return true;
-    if (c.endsWith(' ' + t)) return true;
-    return c.includes(' ' + t + ' ');
+    return modelNameMatches(candidate, target);
   }
 
   /**
@@ -569,18 +619,40 @@ export class VehicleService {
     return out;
   }
 
+  /**
+   * Bir markanin, verilen yilin +/-2 penceresinde GERCEK ilani olan
+   * canonical model adlari (salt-okunur, onbellekli).
+   */
+  private async modelsWithSupportInWindow(make: string, year: number): Promise<string[]> {
+    const cacheKey = await this.versionedKey(`modelwin:${foldTurkish(make)}:${year}`);
+    const cached = await this.cache.get<string[]>(cacheKey);
+    if (cached) return cached;
+    const groups = await this.withRetry(() =>
+      this.prisma.rawVehicleListing.groupBy({
+        by: ['canonicalModel'],
+        where: { ...this.observedWhere({ make, year }), price: { gt: 0 } },
+        _count: { _all: true },
+      }),
+    );
+    const out = (groups as any[]).map((g) => String(g.canonicalModel || '').trim()).filter(Boolean);
+    await this.cache.set(cacheKey, out, 3600);
+    return out;
+  }
+
   /** Bir markanin GERCEK ilanlarda gorulen modelleri. */
-  async getObservedModels(params: { make?: string; brandId?: string }) {
+  async getObservedModels(params: { make?: string; brandId?: string; year?: number }) {
     const make = params.make || (await this.resolveNames({ brandId: params.brandId })).make;
     if (!make) return [];
-    const cacheKey = await this.versionedKey(`models:${foldTurkish(make)}`);
+    // Yil verildiyse yalnizca o yilin +/-2 penceresinde ilani olan modeller
+    // (degerlemenin kullandigi pencere); yil yoksa tum korpus.
+    const cacheKey = await this.versionedKey(`models:${foldTurkish(make)}:${params.year || 'all'}`);
     const cached = await this.cache.get<any[]>(cacheKey);
     if (cached) return cached;
 
     const groups = await this.withRetry(() =>
       this.prisma.rawVehicleListing.groupBy({
         by: ['canonicalModel'],
-        where: this.observedWhere({ make }),
+        where: this.observedWhere({ make, year: params.year }),
         _count: { _all: true },
       }),
     );
@@ -605,31 +677,28 @@ export class VehicleService {
   }
 
   /** make + model icin GERCEK ilanlarda gorulen motor kodlari. */
-  async getObservedEngines(params: { make?: string; brandId?: string; model?: string; modelId?: string }) {
+  async getObservedEngines(params: { make?: string; brandId?: string; model?: string; modelId?: string; year?: number }) {
     const names = await this.resolveNames({ brandId: params.brandId, modelId: params.modelId });
     const make = params.make || names.make;
     const model = params.model || names.model;
     if (!make || !model) return [];
-    const cacheKey = await this.versionedKey(`engines:${foldTurkish(make)}:${foldTurkish(model)}`);
+    const cacheKey = await this.versionedKey(`engines:${foldTurkish(make)}:${foldTurkish(model)}:${params.year || 'all'}`);
     const cached = await this.cache.get<any[]>(cacheKey);
     if (cached) return cached;
 
-    const groups = await this.withRetry(() =>
-      this.prisma.rawVehicleListing.groupBy({
-        by: ['canonicalModel', 'canonicalVariant'],
-        where: this.observedWhere({ make }),
-        _count: { _all: true },
-      }),
-    );
+    // Yalnizca AYRI motor alani dolu ilanlar gozlenen motor secenegi uretir
+    // (etiket icindeki imza katalog variantini destekler, ayri secenek olmaz).
+    // Yil verildiyse degerlemenin kullandigi +/-2 yil penceresi uygulanir;
+    // aksi halde secenek gorunur ama o yil icin fiyatlanamaz.
+    const family = await this.familyIdentities(make, model);
     const merged = new Map<string, { value: string; displayLabel: string; listingCount: number }>();
-    for (const g of groups as any[]) {
-      if (!this.modelMatchesTarget(g.canonicalModel, model)) continue;
-      const raw = String(g.canonicalVariant || '').trim();
-      if (!raw) continue;
-      const key = foldTurkish(raw);
+    for (const r of family) {
+      if (!r.engineField) continue;
+      if (params.year && Math.abs(r.year - params.year) > 2) continue;
+      const key = foldTurkish(r.engineField);
       const prev = merged.get(key);
-      if (prev) prev.listingCount += g._count._all;
-      else merged.set(key, { value: raw, displayLabel: raw, listingCount: g._count._all });
+      if (prev) prev.listingCount += r.n;
+      else merged.set(key, { value: r.engineField, displayLabel: r.engineField, listingCount: r.n });
     }
     const out = [...merged.values()].sort((a, b) => b.listingCount - a.listingCount);
     await this.cache.set(cacheKey, out, 3600);
@@ -638,53 +707,115 @@ export class VehicleService {
 
   /** make + model + motor icin GERCEK ilanlarda gorulen paketler. */
   async getObservedTrims(params: {
-    make?: string; brandId?: string; model?: string; modelId?: string; engine?: string; variantId?: string;
+    make?: string; brandId?: string; model?: string; modelId?: string; engine?: string; variantId?: string; year?: number;
   }) {
     const names = await this.resolveNames({ brandId: params.brandId, modelId: params.modelId, variantId: params.variantId });
     const make = params.make || names.make;
     const model = params.model || names.model;
-    const engine = params.engine || names.engine;
+    const engine = params.engine || names.engine || '';
     if (!make || !model) return [];
-    const cacheKey = await this.versionedKey(`trims:${foldTurkish(make)}:${foldTurkish(model)}:${foldTurkish(engine || '')}`);
+    const cacheKey = await this.versionedKey(`trims:${foldTurkish(make)}:${foldTurkish(model)}:${foldTurkish(engine)}:${params.year || 'all'}`);
+    const cached = await this.cache.get<any[]>(cacheKey);
+    if (cached) return cached;
+
+    // Paketler, secilen motorla BIRLIKTE gorulmus ilanlardan gelir. Motor
+    // karsilastirmasi KANIT uzerinden yapilir (ayri alan YA DA etiketteki
+    // acik imza) ve motor bilinmiyorsa model duzeyindeki donanimlar sunulur.
+    // Onceki surumdeki "motor eslesmezse modelin TUM paketlerine dus" yolu
+    // KALDIRILDI: hic gorulmemis motor+paket ciftleri uretiyordu.
+    const evidence = this.variantEngineEvidence(engine);
+    const body = deriveBodyType(engine);
+    const family = await this.familyIdentities(make, model);
+    const merged = new Map<string, { value: string; displayLabel: string; listingCount: number }>();
+    for (const r of family) {
+      if (!r.trim) continue;
+      // Paket etiketi secilen motorla BIREBIR gorulmus olmali: "1.0 TCe"
+      // secimine "0.9 TCe Joy" etiketi sunulmaz (degerleme gevsek uyumla
+      // havuzlayabilir, ama secenek olarak yanlis kimliktir).
+      if (!this.admissible(r, evidence, body, '', params.year, true)) continue;
+      const key = foldTurkish(r.trim);
+      const prev = merged.get(key);
+      if (prev) prev.listingCount += r.n;
+      else merged.set(key, { value: r.trim, displayLabel: r.trim, listingCount: r.n });
+    }
+    const out = [...merged.values()].sort((a, b) => b.listingCount - a.listingCount).slice(0, 60);
+    await this.cache.set(cacheKey, out, 3600);
+    return out;
+  }
+
+  /**
+   * Bir marka+model ailesinin GERCEK ilan kimlikleri (salt-okunur, korpus
+   * surumuyle onbellekli). Motor KANITI: ayri alan ya da donanim etiketindeki
+   * acik imza; kasa: kalici alan ya da etiketteki acik kasa sozcugu.
+   * Degerleme motoruyla (emsal-matcher) AYNI kanit tanimi kullanilir; boylece
+   * sihirbazin sundugu her yaprak, degerlemenin kabul edecegi bir ilana dayanir.
+   */
+  private async familyIdentities(make: string, model: string): Promise<Array<{
+    engineField: string; engine: string; trim: string; body: string; year: number; n: number;
+  }>> {
+    const cacheKey = await this.versionedKey(`family:${foldTurkish(make)}:${foldTurkish(model)}`);
     const cached = await this.cache.get<any[]>(cacheKey);
     if (cached) return cached;
 
     const groups = await this.withRetry(() =>
       this.prisma.rawVehicleListing.groupBy({
-        by: ['canonicalModel', 'canonicalVariant', 'canonicalTrim'],
-        where: this.observedWhere({ make }),
+        by: ['canonicalModel', 'canonicalVariant', 'rawVariant', 'canonicalTrim', 'canonicalBodyType', 'year'],
+        // Degerlemenin havuza ALMAYACAGI satirlar secenek de uretmez:
+        // agir hasarli isaretli ve fiyat akil-sinir araligi disindaki ilanlar.
+        where: {
+          ...this.observedWhere({ make }),
+          price: { gte: PRICING_LIMITS.priceSanityRange[0], lte: PRICING_LIMITS.priceSanityRange[1] },
+          NOT: { isDamaged: true },
+        },
         _count: { _all: true },
       }),
     );
-    const merged = new Map<string, { value: string; displayLabel: string; listingCount: number }>();
-    let engineHit = false;
+    const out: Array<{ engineField: string; engine: string; trim: string; body: string; year: number; n: number }> = [];
     for (const g of groups as any[]) {
       if (!this.modelMatchesTarget(g.canonicalModel, model)) continue;
-      if (engine && foldTurkish(g.canonicalVariant || '') !== foldTurkish(engine)) continue;
-      engineHit = true;
-      const raw = String(g.canonicalTrim || '').trim();
-      if (!raw) continue;
-      const key = foldTurkish(raw);
-      const prev = merged.get(key);
-      if (prev) prev.listingCount += g._count._all;
-      else merged.set(key, { value: raw, displayLabel: raw, listingCount: g._count._all });
+      const trim = String(g.canonicalTrim || '').trim();
+      const engineField = String(g.canonicalVariant || g.rawVariant || '').trim();
+      const engine = engineField || explicitEngineSignature(trim);
+      const body = String(g.canonicalBodyType || '').trim() || deriveBodyType(trim);
+      out.push({ engineField, engine, trim, body, year: Number(g.year) || 0, n: g._count._all });
     }
-    // Motor kirilimi hic satir vermediyse model duzeyine dus (motor kodu
-    // ilanlarin bir kisminda bostur; secenekler kaybolmasin).
-    if (!engineHit && engine) {
-      for (const g of groups as any[]) {
-        if (!this.modelMatchesTarget(g.canonicalModel, model)) continue;
-        const raw = String(g.canonicalTrim || '').trim();
-        if (!raw) continue;
-        const key = foldTurkish(raw);
-        const prev = merged.get(key);
-        if (prev) prev.listingCount += g._count._all;
-        else merged.set(key, { value: raw, displayLabel: raw, listingCount: g._count._all });
-      }
-    }
-    const out = [...merged.values()].sort((a, b) => b.listingCount - a.listingCount).slice(0, 60);
     await this.cache.set(cacheKey, out, 3600);
     return out;
+  }
+
+  /** Katalog variant etiketinin motor kaniti (alan ayrimi ya da acik imza). */
+  private variantEngineEvidence(name: string): string {
+    const label = String(name || '').trim();
+    if (!label || label === 'UNKNOWN') return '';
+    return splitVariantString(label).engineCode || explicitEngineSignature(label);
+  }
+
+  /**
+   * Degerlemenin Seviye 3 kabul kurali (yakit/sanziman haric): bir ilan,
+   * secilen motor kaniti / kasa / paket / yil ile celismiyorsa kabul edilir.
+   * UNKNOWN celiski DEGILDIR: ilanin kasasi ya da motoru bilinmiyorsa elenmez;
+   * yalnizca BILINEN ve FARKLI olan elenir. Motor bilinmiyorsa paket tek
+   * ayirt edicidir ve ortusmesi gerekir.
+   */
+  private admissible(
+    r: { engine: string; trim: string; body: string; year: number },
+    evidence: string,
+    body: string,
+    pkg: string,
+    year?: number | null,
+    strictEngine = false,
+  ): boolean {
+    if (year && Math.abs(r.year - year) > 2) return false;
+    if (body && r.body && r.body !== body) return false;
+    if (evidence) {
+      if (!r.engine) return false;
+      if (!isEngineCompatible(evidence, r.engine, strictEngine)) return false;
+    } else if (pkg) {
+      const a = foldTurkish(r.trim), b = foldTurkish(pkg);
+      if (!a) return false;
+      if (!(a === b || a.includes(b) || b.includes(a))) return false;
+    }
+    return true;
   }
 
   /** make + model (+motor) icin GERCEK ilanlarda gorulen model yillari. */
