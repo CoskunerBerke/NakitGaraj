@@ -661,9 +661,13 @@ describe('NakitGaraj Fiyatlama Motoru V3', () => {
     });
 
     test('H4. Kayıtlı olmayan araç fiyat üretmez (Seviye 4)', async () => {
+      // NOT: Onceki surum 'Ferrari Roma' kullaniyordu; korpusta 9 GERCEK Roma
+      // ilani var (motor '3.9' tam-model alaninda). Eski kod bunlari yalnizca
+      // motor ALANI bos diye goremiyordu - Audi A3 Sedan 35 TFSI ile ayni hata
+      // sinifi. 'Veri yok' testi gercekten var olmayan bir modelle yapilir.
       const m = await matcher.matchComparableListings({
         make: 'Ferrari',
-        model: 'Roma',
+        model: 'KurguModelYok',
         variant: '3.9 V8',
         year: 2022,
         mileageKm: 10_000,

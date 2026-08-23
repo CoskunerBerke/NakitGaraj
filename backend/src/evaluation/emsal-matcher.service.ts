@@ -12,7 +12,9 @@ import {
   hasStrongDamageSignal,
   isEngineCompatible,
   normalizeBodyType,
+  deriveBodyType,
   splitVariantString,
+  modelNameMatches,
 } from './listing-attributes';
 
 export interface CleanListingItem {
@@ -186,6 +188,12 @@ export class EmsalMatcherService {
     return r.isDamaged === true;
   }
 
+  /** Ilanin kasa kaniti: kalici alan > tam-model metnindeki acik kasa sozcugu. */
+  private bodyOf(r: RawCandidate): string {
+    const stored = (r.canonicalBodyType || '').trim();
+    return stored || deriveBodyType(r.canonicalTrim || '');
+  }
+
   /** Ilanin motor kodu: canonicalVariant > rawVariant */
   private engineOf(r: RawCandidate): string {
     return (r.canonicalVariant || r.rawVariant || '').trim();
@@ -206,11 +214,20 @@ export class EmsalMatcherService {
     return this.engineOf(r) || explicitEngineSignature(r.canonicalTrim || '');
   }
 
+  /**
+   * Ilanin yakiti. Hedef tarafindaki kuralin AYNISI: acik motor kodu, kalici
+   * yakit etiketinden daha guvenilirdir. Olculen: "1.5 TSI Business" ilani,
+   * basliktaki "ELEKTRIKLI BAGAJ" ifadesinden "Elektrik" etiketi almis ve
+   * benzinli hedeften dislanmisti. Celiskide motor kodu kazanir; "Hibrit"
+   * ise yanma motoru koduyla CELISMEZ (benzinli/dizel hibrit) ve korunur.
+   */
   private fuelOf(r: RawCandidate): string {
-    if (r.canonicalFuelType && r.canonicalFuelType.trim()) return r.canonicalFuelType.trim();
-    return (
-      deriveFuelFromEngineCode(this.engineEvidenceOf(r)) || deriveFuelType(r.rawTitle || '')
-    );
+    const stored = (r.canonicalFuelType || '').trim();
+    const fromEngine = deriveFuelFromEngineCode(this.engineEvidenceOf(r));
+    if (stored && fromEngine && stored !== fromEngine) {
+      return stored === 'Hibrit' ? stored : fromEngine;
+    }
+    return stored || fromEngine || deriveFuelType(r.rawTitle || '');
   }
 
   private transmissionOf(r: RawCandidate): string {
@@ -347,19 +364,18 @@ export class EmsalMatcherService {
       },
     })) as unknown as RawCandidate[];
 
-    const target = foldTurkish(cleanModel);
     const seen = new Set<string>();
     const out: RawCandidate[] = [];
     let duplicateCount = 0;
     let damagedCount = 0;
 
     for (const r of rows) {
-      const cm = foldTurkish(r.canonicalModel || '');
-      const rm = foldTurkish(r.rawModel || '');
+      // Sihirbazla AYNI model kurali (token sinirli). Onceki surum kisa
+      // adlarda (<3 karakter) yalniz birebir esliyordu: "A4" hedefi
+      // "A4 A4 Sedan" satirlarini goremiyor, sihirbazin sundugu secenek
+      // degerlemede bos donuyordu.
       const modelHit =
-        cm === target ||
-        rm === target ||
-        (target.length >= 3 && (cm.includes(target) || rm.includes(target)));
+        modelNameMatches(r.canonicalModel, cleanModel) || modelNameMatches(r.rawModel, cleanModel);
       if (!modelHit) continue;
 
       if (seen.has(r.sourceListingId)) {
@@ -414,7 +430,15 @@ export class EmsalMatcherService {
     const paramTrim = (trim || '').trim() || split.trim;
     // Hedefin TAM MODEL kimligi (motor + paket, tekrarsiz). Birebir (L1)
     // eslesme bu string uzerinden NORMALIZE EDILMIS ESITLIK ile yapilir.
-    const targetFullModel = composeFullModel(paramEngine, paramTrim);
+    //
+    // Motor ALANI taninmadiysa variant metni model kimliginin PARCASIDIR ve
+    // atilmaz: "A3 Sedan 35 TFSI" + paket "S Line" -> "A3 Sedan 35 TFSI S Line".
+    // Onceki surumde acik paket verildiginde variant metni tamamen kayboluyor,
+    // tam model yalniz "S Line" kaliyordu (motor kaniti da onunla birlikte).
+    const variantText = (variant || '').trim();
+    const targetFullModel = paramEngine
+      ? composeFullModel(paramEngine, paramTrim)
+      : composeFullModel(variantText, paramTrim);
     // Motor kodu alani bos olsa bile TAM MODEL kendi icinde motor tasiyor
     // olabilir ("1.6 TDI BlueMotion Comfortline"). Bu ACIK kanit kullanilir.
     const paramEngineEvidence = paramEngine || explicitEngineSignature(targetFullModel);
@@ -452,7 +476,11 @@ export class EmsalMatcherService {
       deriveFuelFromEngineCode(paramEngineEvidence) || (params.fuelType || '').trim() || '';
     // Kasa tipi: musteri/katalog girdisi merkezi normalizer'dan gecer.
     // UNKNOWN ise kasa uzerinden hicbir eleme veya exactness URETILMEZ (CASE D).
-    const requestedBody = normalizeBodyType(params.bodyType);
+    // Kasa musteri/katalog alaninda yoksa, musterinin SECTIGI etiketin kendisi
+    // kasa tasiyabilir ("A3 Sedan 35 TFSI" -> SEDAN). Bu musterinin beyanidir,
+    // uydurma degildir. Ilan tarafinda da ayni kanit kullanilir (bodyOf).
+    const requestedBody =
+      normalizeBodyType(params.bodyType) || deriveBodyType(variantText, paramTrim);
     const paramTransmission = (params.transmission || '').trim();
 
     const { candidates, duplicateCount, damagedCount } = await this.fetchCandidates(
@@ -471,7 +499,7 @@ export class EmsalMatcherService {
     // topluca disari atar. Boyle bir etiket kanit degildir: UNKNOWN kabul edilir
     // ve kasa uzerinden eleme yapilmaz (UNKNOWN > WRONG).
     const observedBodies = new Set(
-      candidates.map((c) => (c.canonicalBodyType || '').trim()).filter(Boolean),
+      candidates.map((c) => this.bodyOf(c)).filter(Boolean),
     );
     const bodySignalDropped = Boolean(requestedBody) && !observedBodies.has(requestedBody);
     const paramBody = bodySignalDropped ? '' : requestedBody;
@@ -493,8 +521,16 @@ export class EmsalMatcherService {
       requireFuel: boolean;
       requireTransmission: boolean;
       minCount: number;
+      /** Paket/donanim gevsetilmez: yalniz ayni donanim etiketi. */
+      trimFaithful?: boolean;
     }> = [
       { level: 1, yearSpan: 0, strictEngine: true, requireFuel: true, requireTransmission: true, minCount: PRICING_LIMITS.minCompCountForPricing },
+      // DONANIMA SADIK yil gevsetmesi: ayni motor + AYNI donanim, yil +/-1.
+      // Donanim gevsetmesi ancak bundan SONRA gelir ("veri yok" demeden once
+      // gevset; eldeki birebir donanim yeterliyken DEGIL). Olculen: Passat
+      // "1.5 TSI Elegance" 2021 icin 17 birebir Elegance emsali varken
+      // Business/Impression havuza katilinca nakit teklif %16 dusuyordu.
+      { level: 2, yearSpan: 1, strictEngine: false, requireFuel: true, requireTransmission: false, minCount: PRICING_LIMITS.minCompCountForPricing, trimFaithful: true },
       { level: 2, yearSpan: 1, strictEngine: false, requireFuel: true, requireTransmission: false, minCount: PRICING_LIMITS.minCompCountForPricing },
       { level: 3, yearSpan: 2, strictEngine: false, requireFuel: true, requireTransmission: false, minCount: 4 },
     ];
@@ -512,12 +548,14 @@ export class EmsalMatcherService {
       for (const r of candidates) {
         if (Math.abs(r.year - year) > cfg.yearSpan) continue;
 
-        // BIREBIR kimlik (Seviye 1) TAM MODEL icindeki acik motor imzasini da
-        // kanit sayar. Alt seviyeler (genis fallback) eskisi gibi YALNIZ ayri
-        // motor kodu alanina bakar; boylece motoru gercekten bilinmeyen ilanlar
-        // genis havuzlara sessizce sizmaz.
-        const targetEngine = cfg.level === 1 ? paramEngineEvidence : paramEngine;
-        const engine = cfg.level === 1 ? this.engineEvidenceOf(r) : this.engineOf(r);
+        // Motor KANITI her kademede ayni sekilde kullanilir: ayri motor alani
+        // YA DA tam-model metnindeki ACIK imza. Onceki surumde alt kademeler
+        // yalniz ayri alana bakiyordu; motoru "A3 Sedan 35 TFSI" etiketinde
+        // acikca yazili 429 gercek ilan, alan bos diye L2/L3'te toptan
+        // dusuyordu. Imza olmayan ilan yine dislanir: "bilinmiyor" genis
+        // havuza sizmaz, ama "bilinen" de yok sayilmaz.
+        const targetEngine = paramEngineEvidence;
+        const engine = this.engineEvidenceOf(r);
         if (targetEngine) {
           if (!engine) continue;
           if (!isEngineCompatible(targetEngine, engine, cfg.strictEngine)) continue;
@@ -547,7 +585,8 @@ export class EmsalMatcherService {
         // -> her seviyede dislanir (420d Cabrio, 420d Coupe'nin emsali olamaz).
         // CASE C: adayin kasasi bilinmiyorsa BURADA dislanmaz; buildResult'ta
         // dusuk agirlik alir. UNKNOWN != KNOWN MISMATCH.
-        if (paramBody && r.canonicalBodyType && r.canonicalBodyType !== paramBody) continue;
+        const candidateBody = this.bodyOf(r);
+        if (paramBody && candidateBody && candidateBody !== paramBody) continue;
 
         if (cfg.requireFuel && paramFuel) {
           const f = this.fuelOf(r);
@@ -573,7 +612,12 @@ export class EmsalMatcherService {
         // Seviye 1'de paket kontrolu TAM MODEL esitligiyle zaten yapildi.
         // Hedef aracin motor kodu bilinmiyorsa paketi ayni olmayan ilanlar
         // havuza alinmaz; aksi halde tum motor secenekleri tek fiyatta birlesir.
-        if (!paramEngine && foldedParamTrim && !trimHit) continue;
+        // Motor KANITI biliniyorsa paket gevsetilebilir (ayni arac ailesi,
+        // farkli donanim); bilinmiyorsa paket tek ayirt edici oldugu icin
+        // korunur. Onceki surumde bu koruma motor ALANINA bakiyordu ve kanit
+        // etikette olsa bile tum aileyi eliyordu.
+        if (!paramEngineEvidence && foldedParamTrim && !trimHit) continue;
+        if (cfg.trimFaithful && foldedParamTrim && !trimHit) continue;
         if (trimHit) trimMatchedCount++;
 
         selected.push(r);
@@ -604,16 +648,37 @@ export class EmsalMatcherService {
     }
 
     if (level3Snapshot && level3Snapshot.selected.length > 0) {
-      // Emsal var ama fiyat uretecek kadar degil: uydurma fiyat yerine
-      // "yetersiz veri" don. Servis katmani manuel degerlendirmeye yonlendirir.
+      // DUSUK SAYI != VERI YOK. Ayni arac ailesinden gercek emsal varsa fiyat
+      // URETILIR; sayi azligi guveni dusurur ve manuel kapiya yonlendirir
+      // (servis katmani: Seviye 3 ve <8 emsal zaten MANUAL). Onceki surumde
+      // 1-3 gercek emsal "yetersiz veri"ye cevriliyor, musteri eldeki kanita
+      // ragmen bos sayfa goruyordu.
+      const n = level3Snapshot.selected.length;
+      const built = this.buildResult({
+        level: 3,
+        make,
+        model,
+        paramEngine: paramEngineEvidence,
+        paramTrim,
+        paramFuel,
+        paramBody,
+        year,
+        selected: level3Snapshot.selected,
+        trimMatchedCount: level3Snapshot.trimMatchedCount,
+        annualRate,
+        yearAdjustmentSource,
+        duplicateCount,
+        damagedCount,
+        totalCandidates: candidates.length,
+      });
       return {
-        ...this.emptyResult(make, model, year, duplicateCount, damagedCount),
+        ...built,
         engineEvidence,
-        matchedCount: level3Snapshot.selected.length,
+        isLimitedComps: true,
         explanationNote:
-          `${make} ${model} ${paramEngine} (${year}) için veritabanında yalnızca ` +
-          `${level3Snapshot.selected.length} uyumlu emsal ilan bulundu. Güvenilir fiyat üretmek için ` +
-          `en az ${PRICING_LIMITS.minCompCountForPricing} emsal gereklidir; manuel değerlendirme yapılacaktır.`,
+          `${make} ${model} ${paramEngineEvidence || ''} (${year}) için veritabanında yalnızca ` +
+          `${n} uyumlu emsal ilan bulundu. Emsal sayısı sınırlı olduğu için teklif uzman ` +
+          `kontrolüyle kesinleşecektir.`,
       };
     }
 
@@ -689,7 +754,7 @@ export class EmsalMatcherService {
     const foldedParamTrim = foldTurkish(paramTrim);
 
     for (const r of selected) {
-      const engine = this.engineOf(r) || 'Bilinmiyor';
+      const engine = this.engineEvidenceOf(r) || 'Bilinmiyor';
       const trimName = (r.canonicalTrim || '').trim() || 'Belirtilmemiş';
       engineDist[engine] = (engineDist[engine] || 0) + 1;
       trimDist[trimName] = (trimDist[trimName] || 0) + 1;
@@ -718,7 +783,7 @@ export class EmsalMatcherService {
 
       // CASE C: hedef kasa biliniyor ama adayin kasasi bilinmiyorsa hafif
       // belirsizlik cezasi. CASE B (ayni kasa) tam agirlik alir.
-      if (paramBody && !r.canonicalBodyType) quality *= 0.9;
+      if (paramBody && !this.bodyOf(r)) quality *= 0.9;
 
       if (this.fuelOf(r)) fuelKnownCount++;
       if (this.transmissionOf(r)) transKnownCount++;

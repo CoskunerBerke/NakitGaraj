@@ -435,6 +435,25 @@ export function isEngineCompatible(a: string, b: string, strict: boolean): boole
 /* ------------------------------------------------------------------ */
 
 /**
+ * Model adi eslesmesi: birebir ya da TOKEN SINIRLI icerme.
+ *   "A3"  ~ "A3 A3 Sportback"   (onek)     "316" ~ "3 Serisi 316"      (sonek)
+ *   "Egea" ~ "Egea Cross"        (onek)     "3 Serisi" ~ "3 Serisi 320 d"
+ * Ham alt dizgi KULLANILMAZ ("3" != "320"). Sihirbaz (katalog) ve degerleme
+ * (emsal havuzu) AYNI kurali kullanir; olculen: kisa adlarda (A3/A4/A5/A6)
+ * degerleme yalniz birebir eslerken katalog onekle esliyordu ve 270+ yaprak
+ * sihirbazda gorunup fiyatlanamiyordu.
+ */
+export function modelNameMatches(candidate: string | null | undefined, target: string | null | undefined): boolean {
+  const c = foldTurkish(candidate || '').trim();
+  const t = foldTurkish(target || '').trim();
+  if (!c || !t) return false;
+  if (c === t) return true;
+  if (c.startsWith(t + ' ')) return true;
+  if (c.endsWith(' ' + t)) return true;
+  return c.includes(' ' + t + ' ');
+}
+
+/**
  * Sahibinden satirindaki TAM MODEL hucresini karsilastirilabilir forma getirir.
  *
  * Normalize edilen: unicode formu, Turkce buyuk/kucuk harf, fazla bosluk,
@@ -498,12 +517,71 @@ export function composeFullModel(
  * degildir: bilgi zaten ilanin kendi model hucresinde ACIKCA yazilidir.
  */
 export function explicitEngineSignature(fullModel: string | null | undefined): string {
-  const code = splitVariantString(String(fullModel || '')).engineCode.trim();
-  if (!code) return '';
+  const tokens = String(fullModel || '').trim().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return '';
+
+  // Motor kosusu dizgenin BASINDA olmak zorunda DEGILDIR. Ilan/katalog tam-model
+  // etiketleri model ve kasa onekiyle gelir: "A3 Sedan 35 TFSI",
+  // "A3 Hatchback 1.6 TDI", "3 Serisi 320d". Olculen (Audi A3 Sedan 35 TFSI,
+  // 578 gercek ilan): motor imzasi hep ortada/sondaydi ve capali arama "" donup
+  // 464 gecerli adayin TAMAMINI dusuruyordu -> musteri "yeterli veri yok" aldi.
+  // Kosu, ek tokeniyle ("i", "d", "T") BASLAYAMAZ; bu tokenlar yalniz bir
+  // hacmin hemen ardindan motor sayilir.
+  const isEng = (i: number) =>
+    isEngineToken(tokens[i]) || isPowerIndexEngineStart(tokens, i) || isPremiumCodeStart(tokens, i);
+  let start = -1;
+  for (let i = 0; i < tokens.length; i++) {
+    if (isEng(i) && !SUFFIX_ENGINE_TOKENS.has(normToken(tokens[i]))) { start = i; break; }
+  }
+  if (start < 0) return '';
+  let end = start;
+  for (let i = start + 1; i < tokens.length; i++) {
+    if (isEng(i)) end = i;
+    else break;
+  }
+  const code = tokens.slice(start, end + 1).join(' ');
   const folded = foldTurkish(code);
   const hasDisplacement = /\d\.\d/.test(folded);
   const hasPremiumCode = /\b\d{3}\s?[a-z]{0,3}\b/.test(folded);
-  return hasDisplacement || hasPremiumCode ? code : '';
+  const hasPowerIndex = isPowerIndexEngineStart(tokens, start);
+  return hasDisplacement || hasPremiumCode || hasPowerIndex ? code : '';
+}
+
+/**
+ * Ayri yazilmis PREMIUM motor kodu: "180 d", "350 CDI", "250 D", "740 d".
+ *
+ * Uc basamakli sayi tek basina motor tokeni DEGILDIR ve "d"/"i" gibi ekler
+ * koşu BASLATAMAZ; bu yuzden "CLA 180 d AMG" icindeki kod, sayi ile eki ayri
+ * tokenler halinde geldiginde kacirilirdi (olculen: 9 Mercedes/BMW hedefi
+ * birebir L1 kimligini kaybedip L2'ye dusuyordu). Sayi, hemen ardindan bir ek
+ * tokeni (<=3 harf) ya da motor ailesi sozcugu geldiginde kodun basidir.
+ * Bitisik yazim ("320d") zaten isEngineToken ile tanimlidir.
+ */
+function isPremiumCodeStart(tokens: string[], i: number): boolean {
+  const t = normToken(tokens[i] || '');
+  if (!/^\d{3}$/.test(t)) return false;
+  const next = i + 1 < tokens.length ? normToken(tokens[i + 1]) : '';
+  if (!next) return false;
+  return SUFFIX_ENGINE_TOKENS.has(next) || /^[a-z]{1,3}$/.test(next) || ENGINE_WORDS.has(next);
+}
+
+/**
+ * VW grubu GUC ENDEKSI motor kodu: "35 TFSI", "30 TDI", "40 TFSI", "45 TFSI e".
+ *
+ * Bu yazimda hacim YOKTUR; iki basamakli endeks tek basina motor sayilMAZ
+ * ("35" herhangi bir sey olabilir). Yalnizca HEMEN ARDINDAN bilinen bir motor
+ * ailesi tokeni (TFSI/TDI/TSI/...) geldiginde cift, motor kodudur. Endeks
+ * araligi gercek kullanimi kapsar (25-70); sayfa/yil/km gibi sayilar dislanir.
+ * Marka sabiti YOKTUR: yazim sinifi tanimlanir, marka degil.
+ */
+const RE_POWER_INDEX = /^\d{2}$/;
+function isPowerIndexEngineStart(tokens: string[], i: number): boolean {
+  const t = normToken(tokens[i] || '');
+  if (!RE_POWER_INDEX.test(t)) return false;
+  const n = Number(t);
+  if (n < 20 || n > 80) return false;
+  const next = i + 1 < tokens.length ? normToken(tokens[i + 1]) : '';
+  return Boolean(next) && ENGINE_WORDS.has(next);
 }
 
 /* ------------------------------------------------------------------ */
