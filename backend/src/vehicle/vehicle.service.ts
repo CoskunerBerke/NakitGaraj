@@ -702,13 +702,16 @@ export class VehicleService {
 
     // Yalnizca AYRI motor alani dolu ilanlar gozlenen motor secenegi uretir
     // (etiket icindeki imza katalog variantini destekler, ayri secenek olmaz).
-    // Yil verildiyse degerlemenin kullandigi +/-2 yil penceresi uygulanir;
-    // aksi halde secenek gorunur ama o yil icin fiyatlanamaz.
+    // Yil verildiyse DEGERLEMENIN kullandigi pencere uygulanir: hedef yil ve
+    // daha yenisi (yil..yil+2). Daha eski yildaki motor kaydi, o yil icin
+    // secenek URETEMEZ; aksi halde secenek gorunur ama fiyatlanamaz.
+    // Olculen: Citroen C4 "1.5 BlueHDi" son 2023'te gorulmusken 2024
+    // sihirbazinda sunuluyor ve fiyatsiz kaliyordu (12 ucun 12'si bu sinif).
     const family = await this.familyIdentities(make, model);
     const merged = new Map<string, { value: string; displayLabel: string; listingCount: number }>();
     for (const r of family) {
       if (!r.engineField) continue;
-      if (params.year && Math.abs(r.year - params.year) > 2) continue;
+      if (params.year && (r.year < params.year || r.year - params.year > 2)) continue;
       const key = foldTurkish(r.engineField);
       const prev = merged.get(key);
       if (prev) prev.listingCount += r.n;
