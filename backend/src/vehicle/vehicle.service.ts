@@ -7,8 +7,11 @@ import {
   deriveBodyType,
   explicitEngineSignature,
   foldTurkish,
+  hasExplicitPackageEvidence,
+  hasStrongDamageSignal,
   isEngineCompatible,
   modelNameMatches,
+  packageKey,
   splitVariantString,
 } from '../evaluation/listing-attributes';
 import { PRICING_LIMITS } from '../evaluation/pricing-config';
@@ -365,16 +368,46 @@ export class VehicleService {
       ? await this.getObservedTrims({ make: pkgNames.make, model: pkgNames.model, engine: pkgNames.engine, year: numYear ?? undefined })
       : [];
     if (pkgNames.make && pkgNames.model) {
+      /**
+       * GOZLENEN ILISKI KAPISI, KATALOG PAKETLERININ TAMAMINA UYGULANIR.
+       *
+       * Onceki surum yalnizca motoru bilinmeyen varyantta filtreliyordu;
+       * motoru bilinen varyantin katalog paketleri DENETIMSIZ geciyordu.
+       * Olculen: katalogda 143 adet "TI" adli paket kaydi (ayristirma
+       * artigi) var ve Audi A3/A4/A6 2023-2025'te 30 gercek sihirbaz yolu
+       * "TI" paketiyle sunulup INSUFFICIENT donuyordu.
+       *
+       * Kanit iki kaynaktan gelir ve eslesticiyle (bb51134) AYNIDIR:
+       *   1) yapisal donanim alani (canonicalTrim),
+       *   2) ayni ilanin ACIK metni (rawTitle) -- Audi A3 Sedan'da "S Line"
+       *      yalnizca basliklarda gecer; onu saymamak dogru paketi gizlerdi.
+       *
+       * Ortusme SINIR DUYARLIDIR (packageKey/hasExplicitPackageEvidence):
+       * eski substring kurali "TI"yi "TFSI" icinde gordugu icin gecirirdi.
+       * Gercek kisa paketler (GT, RS, FR) gercekten gozlendigi yerde kalir.
+       */
+      const evRows = await this.packageEvidenceRows(pkgNames.make, numYear);
       const evidence = this.variantEngineEvidence(pkgNames.engine || '');
-      if (!evidence) {
-        // Motor bilinmiyorsa paket tek ayirt edicidir: katalog paketi ancak
-        // gercek ilanlarda gorulen bir donanimla ORTUSUYORSA sunulur.
-        const observedKeys = observedTrims.map((o) => foldTurkish(o.value));
-        packages = packages.filter((pk) => {
-          const name = foldTurkish(String(pk.name || ''));
-          return observedKeys.some((k) => k === name || k.includes(name) || name.includes(k));
-        });
-      }
+      const bodyFromEngine = deriveBodyType(pkgNames.engine || '');
+      const familyRows = evRows.filter((r) => {
+        if (!modelNameMatches(r.model, pkgNames.model) && !modelNameMatches(r.rawModel, pkgNames.model)) return false;
+        if (bodyFromEngine && r.body && r.body !== bodyFromEngine) return false;
+        if (evidence) {
+          if (!r.engine) return false;
+          if (!isEngineCompatible(evidence, r.engine, true)) return false;
+        }
+        return true;
+      });
+      packages = packages.filter((pk) => {
+        const name = String(pk.name || '');
+        if (!packageKey(name)) return false;
+        return familyRows.some(
+          (r) =>
+            hasExplicitPackageEvidence(name, r.trim) ||
+            hasExplicitPackageEvidence(r.trim, name) ||
+            hasExplicitPackageEvidence(name, r.title),
+        );
+      });
     }
     const mergedPackages = this.mergeObserved(packages, observedTrims);
 
@@ -663,13 +696,39 @@ export class VehicleService {
     const cached = await this.cache.get<any[]>(cacheKey);
     if (cached) return cached;
 
-    const groups = await this.withRetry(() =>
-      this.prisma.rawVehicleListing.groupBy({
-        by: ['canonicalModel'],
-        where: this.observedWhere({ make, year: params.year }),
-        _count: { _all: true },
+    /**
+     * MODEL SECENEGI = DEGERLEMENIN KABUL EDECEGI EN AZ BIR ILAN.
+     *
+     * Emsal cekirdegi hasarli ilanlari ve akil-sinir araligi disindaki
+     * fiyatlari havuza ALMAZ; o halde yalnizca boyle ilanlari olan bir model
+     * secenek de OLAMAZ (secilirse fiyatlanamaz). Olculen: 54.903 gercek
+     * sihirbaz yolunun 4'u bu yuzden INSUFFICIENT donuyordu -- ornegin
+     * Volvo 460 (1991) tek ilanliydi ve o ilan hasar isaretliydi.
+     *
+     * Hasar karari eslesticinin `isDamagedListing` semantigiyle AYNIDIR:
+     * baslik varsa metin kazanir (`hasStrongDamageSignal`), yoksa import
+     * bayragina dusulur. Yalnizca bayraga bakmak, basligi temiz gercek
+     * araclari (orn. "EKSPERTIZ" gecen ilanlar) topluca gizlerdi.
+     */
+    const rows = await this.withRetry(() =>
+      this.prisma.rawVehicleListing.findMany({
+        where: {
+          ...this.observedWhere({ make, year: params.year }),
+          price: { gte: PRICING_LIMITS.priceSanityRange[0], lte: PRICING_LIMITS.priceSanityRange[1] },
+        },
+        select: { canonicalModel: true, rawTitle: true, isDamaged: true },
       }),
     );
+    const counts = new Map<string, number>();
+    for (const r of rows) {
+      const title = (r.rawTitle || '').trim();
+      const damaged = title ? hasStrongDamageSignal(title) : r.isDamaged === true;
+      if (damaged) continue;
+      const m = String(r.canonicalModel || '').trim();
+      if (!m) continue;
+      counts.set(m, (counts.get(m) || 0) + 1);
+    }
+    const groups = [...counts.entries()].map(([canonicalModel, n]) => ({ canonicalModel, _count: { _all: n } }));
     const merged = new Map<string, { value: string; displayLabel: string; listingCount: number }>();
     for (const g of groups as any[]) {
       const raw = String(g.canonicalModel || '').trim();
@@ -767,6 +826,45 @@ export class VehicleService {
    * Degerleme motoruyla (emsal-matcher) AYNI kanit tanimi kullanilir; boylece
    * sihirbazin sundugu her yaprak, degerlemenin kabul edecegi bir ilana dayanir.
    */
+  /**
+   * Paket kaniti satirlari: make + yil penceresi (yil..yil+2), degerlemenin
+   * kabul edecegi ilanlar (fiyat akil-siniri icinde, hasarsiz -- hasar
+   * karari eslesticiyle ayni: baslik varsa metin kazanir). Onbellekli.
+   */
+  private async packageEvidenceRows(make: string, year?: number | null): Promise<Array<{
+    model: string; rawModel: string; engine: string; trim: string; body: string; title: string;
+  }>> {
+    const cacheKey = await this.versionedKey(`pkgev:${foldTurkish(make)}:${year || 'all'}`);
+    const cached = await this.cache.get<any[]>(cacheKey);
+    if (cached) return cached;
+    const rows = await this.withRetry(() =>
+      this.prisma.rawVehicleListing.findMany({
+        where: {
+          ...this.observedWhere({ make, year: year || undefined }),
+          price: { gte: PRICING_LIMITS.priceSanityRange[0], lte: PRICING_LIMITS.priceSanityRange[1] },
+        },
+        select: { canonicalModel: true, rawModel: true, canonicalVariant: true, rawVariant: true, canonicalTrim: true, canonicalBodyType: true, rawTitle: true, isDamaged: true },
+      }),
+    );
+    const out: Array<{ model: string; rawModel: string; engine: string; trim: string; body: string; title: string }> = [];
+    for (const r of rows) {
+      const title = (r.rawTitle || '').trim();
+      const damaged = title ? hasStrongDamageSignal(title) : r.isDamaged === true;
+      if (damaged) continue;
+      const trim = String(r.canonicalTrim || '').trim();
+      out.push({
+        model: String(r.canonicalModel || '').trim(),
+        rawModel: String(r.rawModel || '').trim(),
+        engine: String(r.canonicalVariant || r.rawVariant || '').trim() || explicitEngineSignature(trim),
+        trim,
+        body: String(r.canonicalBodyType || '').trim() || deriveBodyType(trim),
+        title,
+      });
+    }
+    await this.cache.set(cacheKey, out, 3600);
+    return out;
+  }
+
   private async familyIdentities(make: string, model: string): Promise<Array<{
     engineField: string; engine: string; trim: string; body: string; year: number; n: number;
   }>> {

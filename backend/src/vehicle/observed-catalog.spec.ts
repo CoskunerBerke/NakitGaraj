@@ -59,18 +59,29 @@ describe('Gozlenen musteri katalogu — model adi korunmasi', () => {
     test('hicbir ilan musteri katalogundan dusmez (ilan sayisi paritesi)', async () => {
       // Ayni modelin yazim varyantlari TEK secenekte BIRLESTIRILEBILIR
       // (orn. "C Serisi C 200 200" -> "C Serisi C 200"); bu kayip degildir.
-      // Kayip olmadigini kanitlayan degismez: seceneklerin ilan sayisi toplami
-      // markanin DB'deki gecerli ilan sayisina esit olmalidir.
+      // Kayip olmadigini kanitlayan degismez: seceneklerin ilan sayisi
+      // toplami, markanin DEGERLEMEYE KABUL EDILEBILIR ilan sayisina esit
+      // olmalidir. Kabul edilebilirlik, model kapisiyla AYNIDIR: VALID +
+      // fiyat akil-siniri + hasarsiz (baslik varsa metin kazanir). Emsal
+      // cekirdeginin havuza almayacagi bir ilan, secenek de SAYILMAZ.
       const svc = new VehicleService(prisma as any, noopCache());
-      const rows = (await prisma.$queryRawUnsafe(
-        "SELECT canonicalMake AS mk, canonicalModel AS m, COUNT(*) AS n FROM RawVehicleListing WHERE canonicalMake <> '' AND canonicalModel <> '' GROUP BY canonicalMake, canonicalModel",
-      )) as Array<{ mk: string; m: string; n: number | bigint }>;
-      if (rows.length === 0) return; // DB bos ise atla
+      const { PRICING_LIMITS } = require('../evaluation/pricing-config');
+      const { hasStrongDamageSignal } = require('../evaluation/listing-attributes');
+      const raw = await prisma.rawVehicleListing.findMany({
+        where: {
+          canonicalMake: { not: '' }, canonicalModel: { not: '' }, parseStatus: 'VALID',
+          price: { gte: PRICING_LIMITS.priceSanityRange[0], lte: PRICING_LIMITS.priceSanityRange[1] },
+        },
+        select: { canonicalMake: true, canonicalModel: true, rawTitle: true, isDamaged: true },
+      });
+      if (raw.length === 0) return; // DB bos ise atla
 
       const expected = new Map<string, number>();
-      for (const r of rows) {
-        if (isUnusableModelName(r.m)) continue;
-        expected.set(r.mk, (expected.get(r.mk) || 0) + Number(r.n));
+      for (const r of raw) {
+        if (isUnusableModelName(r.canonicalModel)) continue;
+        const title = (r.rawTitle || '').trim();
+        if (title ? hasStrongDamageSignal(title) : r.isDamaged === true) continue;
+        expected.set(r.canonicalMake, (expected.get(r.canonicalMake) || 0) + 1);
       }
 
       const mismatches: string[] = [];
@@ -117,3 +128,42 @@ describe('Gozlenen musteri katalogu — model adi korunmasi', () => {
     }, 180_000);
   });
 });
+
+describe('Katalog paket kapisi — gozlenen iliski (gercek veri)', () => {
+  let prisma: PrismaClient;
+  beforeAll(() => { prisma = new PrismaClient(); });
+  afterAll(async () => { await prisma.$disconnect(); });
+
+  test('ayristirma artigi paket ("TI") sunulmaz; gercek paket ("S Line") baslik kanitiyla korunur', async () => {
+    const svc = new VehicleService(prisma as any, noopCache());
+    const b = await prisma.manufacturer.findFirst({ where: { name: 'Audi' } });
+    if (!b) return;
+    const ms = await svc.getModels(b.id, 2025);
+    const a3 = ms.find((m: any) => (m.name ?? m.value) === 'A3');
+    if (!a3) return;
+    const vs = await svc.getVariants(a3.id, b.id, 2025);
+    const sedan = vs.find((v: any) => /Sedan 35 TFSI/i.test(String(v.name ?? v.value ?? '')));
+    if (!sedan) return;
+    const pks = await svc.getPackages(sedan.id, a3.id, b.id, 2025);
+    const names = pks.map((p: any) => String(p.name ?? p.value ?? ''));
+    // Katalogda 143 kez gecen "TI" artigi hicbir gercek ilan donanimida/
+    // basliginda sinir-duyarli gecmez: SUNULMAZ.
+    expect(names.includes('TI')).toBe(false);
+    // "S Line" kaniti bu ailede yalnizca BASLIKTA yazilidir: SUNULUR.
+    expect(names.some((n) => /s line/i.test(n))).toBe(true);
+  }, 120_000);
+
+  test('degerlemenin kabul etmeyecegi tek-ilanli model o yilda SUNULMAZ (hasarli tek destek)', async () => {
+    // Volvo 460 (1991) tek ilanlidir ve o ilan hasar isaretlidir: emsal
+    // cekirdegi onu havuza almaz, katalog da secenek uretmez.
+    const svc = new VehicleService(prisma as any, noopCache());
+    const b = await prisma.manufacturer.findFirst({ where: { name: 'Volvo' } });
+    if (!b) return;
+    const ms = await svc.getModels(b.id, 1991);
+    expect(ms.some((m: any) => (m.name ?? m.value) === '460')).toBe(false);
+    // Ayni model, temiz destegi olan yilda GORUNUR kalir (asiri budama yok).
+    const ms07 = await svc.getModels(b.id, 2007);
+    expect(ms07.some((m: any) => (m.name ?? m.value) === 'S80')).toBe(true);
+  }, 120_000);
+});
+
