@@ -13,13 +13,19 @@
  * Olculen: Abarth 500e Coupe icin tek gercek ilan 2024 / 3.500.000 TL iken
  * 2025 hedefinde piyasa referansi 3.695.000 TL — hic gozlenmemis bir fiyat.
  *
- * Kilometre duzeltmesi kapsam DISIDIR: o, AYNI ilanin farkli kilometreye
- * tasinmasidir (baska bir araca degil) ve fiyat cekirdeginin mevcut kanonik
- * yoludur. N >= 2 davranisi AYNEN korunur.
+ * KILOMETRE de ayni kurala tabidir: tek ilanli havuzda km/fiyat egimi
+ * OGRENILEMEZ (`withKm.length >= 6` saglanmaz) ve daima varsayilan segment
+ * orani kullanilirdi. Bu orani musterinin kilometresine tasimak, gozlenmemis
+ * bir fiyat uretir. Tek gozlem 3.500.000 TL ise piyasa referansi 6.001 km'de
+ * de, 75.000 km'de de 3.500.000 TL'dir. Belirsizlik fiyata degil, guven
+ * skoruna (ekstrapolasyon cezasi -> manuel kontrol) yansir.
+ *
+ * N >= 2 davranisi AYNEN korunur.
  */
 import { PrismaClient } from '@prisma/client';
 import { EmsalMatcherService } from './emsal-matcher.service';
 import { EvaluationService } from './evaluation.service';
+import { RobustPricingCalculator } from './robust-pricing-calculator';
 import { roundToStep } from './quote-rounding';
 
 const ordered = (r: any) =>
@@ -59,6 +65,35 @@ describe('Tek emsal — piyasa referansi (gercek veritabani)', () => {
     const res: any = await core(SOLE.year, SOLE.km);
     expect(res.results.matchedListingCount).toBe(1);
     expect(res.results.marketReferenceValue).toBe(roundToStep(SOLE.price));
+  }, 60000);
+
+  test('A2) piyasa referansi MUSTERI KILOMETRESINDEN bagimsizdir', async () => {
+    // Tek gozlem 3.500.000 TL. 6.001 / 35.000 / 75.000 km'de AYNI referans.
+    for (const km of [6001, 35_000, 75_000]) {
+      const res: any = await core(SOLE.year, km);
+      expect(res.results.matchedListingCount).toBe(1);
+      expect(res.results.marketReferenceValue).toBe(roundToStep(SOLE.price));
+    }
+  }, 120000);
+
+  test('A3) km duzeltmesi UYGULANMAZ (denetim alani)', async () => {
+    const m = await matcher.matchComparableListings({
+      make: SOLE.make, model: SOLE.model, variant: 'Standart', trim: SOLE.trim,
+      year: SOLE.year, mileageKm: 75_000,
+    });
+    expect(m.matchedCount).toBe(1);
+    const out: any = RobustPricingCalculator.computeValuation({
+      cleanListings: m.cleanListings as any, userYear: SOLE.year, userMileage: 75_000,
+      matchedLevel: m.level, baseConfidenceScore: m.confidenceScore,
+      realMatchedListingCount: 1, listingWeights: m.listingWeights,
+    });
+    expect(out.mileageAdjustmentSource).toBe('SINGLE_COMPARABLE_NO_MILEAGE_ADJUSTMENT');
+    expect(out.mileageAdjustment).toBe(0);
+    expect(out.pricingAudit.mileageAdjustmentAmount).toBe(0);
+    // Emsalin fiyati fiyat dagilimina AYNEN girer.
+    expect(out.pricingAudit.fairMarketValueRaw).toBe(SOLE.price);
+    // Belirsizlik fiyata degil GUVENE yansir: ekstrapolasyon cezasi durur.
+    expect(out.pricingAudit.extrapolationConfidencePenalty).toBeGreaterThan(0);
   }, 60000);
 
   test('B) tek emsal INSUFFICIENT_DATA DONDURMEZ, sayisal sonuc verir', async () => {
@@ -105,6 +140,16 @@ describe('Tek emsal — piyasa referansi (gercek veritabani)', () => {
     expect(painted.results.marketReferenceValue).toBe(clean.results.marketReferenceValue);
     // Kondisyon sonrasi beklenen deger DUSER.
     expect(painted.results.conditionAdjustedSaleValue).toBeLessThan(clean.results.conditionAdjustedSaleValue);
+  }, 60000);
+
+  test('E2) yuksek kilometrede de kondisyon piyasa referansini DEGISTIRMEZ', async () => {
+    const painted: any = await core(SOLE.year, 75_000, {
+      damageStatus: 'YES',
+      paintScheme: JSON.stringify({ 'Sol Ön Kapı': 'BOYALI' }),
+      vehicleStatus: JSON.stringify({ heavyDamage: false, scratchOrDent: false, crackedGlass: false, airbagDeployed: false, engineProblem: false, transmissionProblem: false }),
+    });
+    expect(painted.results.marketReferenceValue).toBe(roundToStep(SOLE.price));
+    expect(painted.results.conditionAdjustedSaleValue).toBeLessThan(painted.results.marketReferenceValue);
   }, 60000);
 
   test('F+G) nakit/net/ilan uretilir ve ekonomik siralama korunur', async () => {

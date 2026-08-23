@@ -656,7 +656,11 @@ export class EvaluationService {
     }
 
     aiAnalysis.push(emsalResult.explanationNote);
-    if (calc.referenceMedianMileage) {
+    // Tek gercek emsalde KILOMETRE normalizasyonu da UYGULANMAZ; yapilmamis
+    // bir duzeltmeyi katsayiyla birlikte raporlamak denetimi yanlis yonlendirir.
+    if (calc.mileageAdjustmentSource === 'SINGLE_COMPARABLE_NO_MILEAGE_ADJUSTMENT') {
+      aiAnalysis.push('Kilometre Düzeltmesi: Tek gerçek emsal bulunduğu için piyasa referansı o ilanın kendi fiyatıdır; kilometre düzeltmesi uygulanmamıştır.');
+    } else if (calc.referenceMedianMileage) {
       aiAnalysis.push(`Kilometre Düzeltmesi: Emsal Medyan Km: ${calc.referenceMedianMileage.toLocaleString('tr-TR')} km | Araç Km: ${dto.mileage.toLocaleString('tr-TR')} km | Fark: ${(calc.kmDelta || 0).toLocaleString('tr-TR')} km | Katsayı: %${((calc.kmDecayPer10k || 0) * 100).toFixed(2)}/10.000km (${calc.mileageAdjustmentSource}) | Düzeltme: ${(calc.mileageAdjustment || 0).toLocaleString('tr-TR')} ₺`);
     } else {
       aiAnalysis.push('Emsal ilanlarda kilometre bilgisi bulunmadığı için kilometre düzeltmesi uygulanmamıştır.');

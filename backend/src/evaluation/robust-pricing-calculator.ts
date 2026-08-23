@@ -744,6 +744,29 @@ export class RobustPricingCalculator {
     const excludedCount =
       cleanListings.length - usable.length + (params.excludedListingCount || 0);
 
+    /**
+     * TEK GERCEK EMSAL: PIYASA REFERANSI O ILANIN FIYATIDIR.
+     *
+     * Yil normalizasyonu N=1 icin zaten kapatildi (bkz. emsal-matcher
+     * `singleComparable`). Ayni gerekce KILOMETRE normalizasyonu icin de
+     * gecerlidir: tek ilanli havuzda km/fiyat egimi OGRENILEMEZ
+     * (`withKm.length >= 6` sarti saglanmaz), bu yuzden daima varsayilan
+     * segment orani -- yani kanit DISI bir sayi -- kullanilirdi. Bu orani
+     * musterinin kilometresine tasimak, gozlenmemis bir fiyat uretir.
+     *
+     * Olculen: tek gercek ilan Abarth 500e 2024 / 6.001 km / 3.500.000 TL
+     * iken musteri 75.000 km girdiginde piyasa referansi asagi kayiyordu.
+     * Oysa elimizdeki TEK gozlem 3.500.000 TL'dir.
+     *
+     * Kilometrenin degeri elbette etkiler; ancak bunu SOYLEYECEK veri yoktur.
+     * Belirsizlik fiyata uydurma duzeltme olarak degil, guven skoruna
+     * ekstrapolasyon cezasi olarak yansir (asagida distanceOutsideObservedRange
+     * DEGISMEDEN korunur ve arac manuel kontrole gider).
+     *
+     * N >= 2 davranisi AYNEN korunur.
+     */
+    const singleComparable = usable.length === 1;
+
     // 2) Km bilgisi olan ilanlardan km/fiyat egimini ogren.
     //    Km bilgisi olmayan ilan icin ASLA varsayilan km uydurulmaz.
     const withKm = usable.filter(
@@ -805,6 +828,10 @@ export class RobustPricingCalculator {
       if (slopeTrust < 1) mileageAdjustmentSource = 'LEARNED_SHRUNK_TO_DEFAULT';
     }
 
+    if (singleComparable) {
+      mileageAdjustmentSource = 'SINGLE_COMPARABLE_NO_MILEAGE_ADJUSTMENT';
+    }
+
     // Zaten hesaplanmis kmP10/kmP90 uzerinden turetilir; yeniden hesaplanmaz.
     const distanceOutsideObservedRange =
       kmSorted.length === 0
@@ -829,6 +856,10 @@ export class RobustPricingCalculator {
     //    Km bilgisi olmayan ilan duzeltilmez, agirligi dusurulur.
     const normalized = usable.map((w) => {
       const l = w.listing;
+      // Tek gercek emsal: ilanin fiyati AYNEN piyasa referansidir.
+      if (singleComparable) {
+        return { price: l.price, weight: w.weight };
+      }
       const hasKm = typeof l.mileageKm === 'number' && l.mileageKm > 0;
       if (!hasKm) {
         return { price: l.price, weight: w.weight * 0.5 };
@@ -867,16 +898,16 @@ export class RobustPricingCalculator {
     const effectiveKmDelta =
       referenceMedianMileage !== undefined ? effectiveUserMileage - referenceMedianMileage : 0;
     const mileageAdjustment =
-      referenceMedianMileage !== undefined
-        ? -Math.round(
+      singleComparable || referenceMedianMileage === undefined
+        ? 0
+        : -Math.round(
             basePrice *
               clamp(
                 (effectiveKmDelta / 10000) * learnedRatePer10k,
                 -PRICING_LIMITS.maxKmAdjustmentRatio,
                 PRICING_LIMITS.maxKmAdjustmentRatio,
               ),
-          )
-        : 0;
+          );
 
     return {
       ...out,
