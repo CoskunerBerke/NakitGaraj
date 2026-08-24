@@ -223,6 +223,10 @@ export class TelegramService {
     finalConsignmentPrice: number;
     /** Konsinyede musteriye kalan net. Cekirdek hesaplar; burada TURETILMEZ. */
     customerConsignmentNet?: number | null;
+    /** Kondisyon ONCESI temiz emsal merkezi (kanonik; burada TURETILMEZ). */
+    marketReferenceValue?: number | null;
+    /** Degerleme durumu (SUCCESS / MANUAL_EVALUATION_REQUIRED). */
+    evaluationStatus?: string;
     sellingTimeline?: string;
   }) {
     const desiredText = evalData.userDesiredPrice
@@ -240,6 +244,23 @@ export class TelegramService {
         ? evalData.customerConsignmentNet
         : null;
 
+    // Durum bayiye INSANCA soylenir; ham enum bildirimde gosterilmez.
+    const statusLine =
+      evalData.evaluationStatus === 'MANUAL_EVALUATION_REQUIRED'
+        ? '<b>🧑‍🔧 Durum:</b> Uzman İncelemesi (fiyat ön değerlemedir)\n'
+        : evalData.evaluationStatus === 'SUCCESS'
+          ? '<b>✅ Durum:</b> Otomatik Teklif\n'
+          : '';
+    // Temiz piyasa referansi, kondisyon sonrasi beklenen satistan farkliysa
+    // AYRI satirda gosterilir; bayi iki degeri karistirmaz.
+    const marketRefLine =
+      typeof evalData.marketReferenceValue === 'number' &&
+      Number.isFinite(evalData.marketReferenceValue) &&
+      Math.round(evalData.marketReferenceValue) !== Math.round(evalData.fairMarketValue)
+        ? `<b>📈 Piyasa Referansı (temiz emsal):</b> ${evalData.marketReferenceValue.toLocaleString('tr-TR')} ₺
+`
+        : '';
+
     const caption = `
 <b>🚗 YENİ NAKİTGARAJ ARAÇ DEĞERLEMESİ!</b>
 
@@ -249,7 +270,7 @@ export class TelegramService {
 <b>🛣️ Kilometre:</b> ${evalData.mileage.toLocaleString('tr-TR')} km
 <b>📋 Plaka:</b> ${evalData.licensePlate || '34ABC123'} | <b>Renk:</b> ${evalData.color}
 
-${desiredText}<b>📉 Piyasa Satış Değeri:</b> ${evalData.fairMarketValue.toLocaleString('tr-TR')} ₺
+${desiredText}${statusLine}${marketRefLine}<b>📉 Beklenen Satış Değeri:</b> ${evalData.fairMarketValue.toLocaleString('tr-TR')} ₺
 <b>💵 Anında Nakit Alım Teklifimiz:</b> ${evalData.finalOfferedPrice.toLocaleString('tr-TR')} ₺ <i>(Brüt Marj: ${grossMargin.toLocaleString('tr-TR')} ₺)</i>
 <b>🏪 Önerilen Konsinye İlan Fiyatı:</b> ${evalData.finalConsignmentPrice.toLocaleString('tr-TR')} ₺${netLine !== null ? `
 <b>🤝 Konsinyede Müşteriye Tahmini Net:</b> ${netLine.toLocaleString('tr-TR')} ₺` : ''}
