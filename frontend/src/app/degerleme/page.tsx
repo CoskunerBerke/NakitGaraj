@@ -2471,8 +2471,16 @@ function SearchableCombobox({
             );
           }
 
-          // Case 2: MANUAL_EVALUATION_REQUIRED
-          if (status === 'MANUAL_EVALUATION_REQUIRED') {
+          // Case 2: MANUAL_EVALUATION_REQUIRED — FIYATSIZ ise bilgi karti.
+          //
+          // FIYATLI MANUEL SONUC ARTIK FIYAT KARTIYLA GOSTERILIR: is kurali
+          // "MANUEL fiyatli bir ON degerlemedir, basarisizlik degildir".
+          // Arka uc piyasa/nakit/net/ilan degerlerini hesaplamis ve
+          // saklamisken musteriye yalnizca "uzman incelemesi" karti gostermek,
+          // fiyati gizliyor ve sayfayi hata gibi okutuyordu (olculen: Abarth
+          // N=1 yolu fiyatsiz bilgi karti aliyordu). Uzman kontrolu mesaji
+          // fiyat kartinin USTUNDE ikincil serit olarak verilir (asagida).
+          if (status === 'MANUAL_EVALUATION_REQUIRED' && !valuationResult.results) {
             return (
               <motion.div
                 key="step3-manual"
@@ -2661,6 +2669,24 @@ function SearchableCombobox({
               data-testid="valuation-success-card"
               className="flex flex-col gap-8 w-full"
             >
+              {/* MANUEL: fiyat gorunur kalir; uzman kontrolu IKINCIL mesajdir. */}
+              {status === 'MANUAL_EVALUATION_REQUIRED' && (
+                <div
+                  data-testid="manual-review-banner"
+                  className="glass-card rounded-2xl px-5 py-4 border border-blue-500/30 bg-blue-500/5 flex items-start gap-3"
+                >
+                  <HelpCircle className="w-5 h-5 text-blue-500 shrink-0 mt-0.5" />
+                  <div className="text-left">
+                    <p className="text-sm font-bold text-zinc-900 dark:text-white">
+                      Ön değerlemeniz hazır — nihai teklif için uzman kontrolü öneriyoruz.
+                    </p>
+                    <p className="text-xs text-zinc-500 mt-0.5">
+                      {manualReasonForCustomer(valuationResult.aiAnalysis)} Ekibimiz, bıraktığınız telefon numarasından sizinle iletişime geçecek.
+                    </p>
+                  </div>
+                </div>
+              )}
+
               {/* Header summary */}
               <div className="glass-card rounded-3xl p-6 md:p-8 border border-zinc-800/10 dark:border-white/5 text-center flex flex-col items-center gap-2">
                 <span className="text-[10px] text-brand-orange uppercase font-extrabold tracking-widest bg-brand-orange/10 px-3 py-1 rounded-full border border-brand-orange/20">
