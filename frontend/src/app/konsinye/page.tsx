@@ -25,9 +25,7 @@ import {
 } from 'lucide-react';
 import RealisticCarDamageSchematic from '../../components/RealisticCarDamageSchematic';
 
-const API_BASE = typeof window !== 'undefined'
-  ? `http://${window.location.hostname}:3001/api`
-  : 'http://127.0.0.1:3001/api';
+import { API_BASE } from '@/lib/api';
 import { useLanguage } from '../../context/LanguageContext';
 
 // Validation Schema for Contact Form (Step 6)

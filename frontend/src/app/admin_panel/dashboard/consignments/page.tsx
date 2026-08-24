@@ -4,9 +4,7 @@ import React, { useEffect, useState } from 'react';
 import { UserCheck, MessageSquare, MapPin, PhoneCall, Mail, Clock, ShieldAlert, AlertCircle, ExternalLink } from 'lucide-react';
 import RealisticCarDamageSchematic from '../../../../components/RealisticCarDamageSchematic';
 
-const API_BASE = typeof window !== 'undefined'
-  ? `http://${window.location.hostname}:3001/api`
-  : 'http://127.0.0.1:3001/api';
+import { API_BASE } from '@/lib/api';
 
 const getSahibindenSearchUrl = (cons: any) => {
   const spec = cons?.vehicleSpecification || cons?.vehicleEvaluation?.vehicleSpecification || {};

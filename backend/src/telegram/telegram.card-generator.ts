@@ -37,8 +37,6 @@ function getBaseSchematicBuffer(): Buffer | null {
     path.join(process.cwd(), 'assets/car_damage_schematic.jpg'),
     path.join(process.cwd(), 'backend/assets/car_damage_schematic.jpg'),
     path.join(process.cwd(), 'frontend/public/images/car_damage_schematic.jpg'),
-    'C:/Users/berke/OneDrive/Masaüstü/Büyük proje/backend/assets/car_damage_schematic.jpg',
-    'C:/Users/berke/OneDrive/Masaüstü/Büyük proje/frontend/public/images/car_damage_schematic.jpg',
   ];
   for (const p of possiblePaths) {
     if (fs.existsSync(p)) {

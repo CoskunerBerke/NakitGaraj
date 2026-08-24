@@ -116,26 +116,8 @@ export class VehicleService {
   }
 
   async getBrands() {
-    const DESKTOP_DIR = 'C:\\Users\\berke\\OneDrive\\Masaüstü\\sahibindne ilan';
-    let validNames: string[] = [];
-    try {
-      const fs = require('fs');
-      const path = require('path');
-      if (fs.existsSync(DESKTOP_DIR)) {
-        validNames = fs.readdirSync(DESKTOP_DIR).filter((d: string) => {
-          const p = path.join(DESKTOP_DIR, d);
-          return fs.statSync(p).isDirectory();
-        });
-      }
-    } catch (e) {}
-
     const catalog = await this.withRetry(() =>
       this.prisma.manufacturer.findMany({
-        where: validNames.length > 0 ? {
-          name: {
-            in: validNames,
-          },
-        } : undefined,
         orderBy: { name: 'asc' },
       }),
     );

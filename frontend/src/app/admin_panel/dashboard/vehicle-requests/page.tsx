@@ -4,9 +4,7 @@ import React, { useEffect, useState } from 'react';
 import { HelpCircle, Check, X, Search, Clock, RefreshCw, Car } from 'lucide-react';
 import { formatKm } from '../../../../lib/format';
 
-const API_BASE = typeof window !== 'undefined'
-  ? `http://${window.location.hostname}:3001/api`
-  : 'http://127.0.0.1:3001/api';
+import { API_BASE } from '@/lib/api';
 
 export default function VehicleRequestsPage() {
   const [requests, setRequests] = useState<any[]>([]);

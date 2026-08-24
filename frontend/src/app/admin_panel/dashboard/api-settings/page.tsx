@@ -3,9 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import { FileSpreadsheet, Sparkles, AlertCircle, Settings, CheckCircle2, DollarSign, Cpu, Send, MessageSquare, Bell } from 'lucide-react';
 
-const API_BASE = typeof window !== 'undefined'
-  ? `http://${window.location.hostname}:3001/api`
-  : 'http://127.0.0.1:3001/api';
+import { API_BASE } from '@/lib/api';
 
 export default function ApiSettingsPage() {
   const [selectedProvider, setSelectedProvider] = useState('data_deger');

@@ -8,9 +8,7 @@ import { z } from 'zod';
 import { Lock, Mail, AlertCircle, Key, LayoutDashboard } from 'lucide-react';
 import Link from 'next/link';
 
-const API_BASE = typeof window !== 'undefined'
-  ? `http://${window.location.hostname}:3001/api`
-  : 'http://127.0.0.1:3001/api';
+import { API_BASE } from '@/lib/api';
 
 const loginSchema = z.object({
   email: z.string().email('Geçerli bir e-posta adresi giriniz.'),
