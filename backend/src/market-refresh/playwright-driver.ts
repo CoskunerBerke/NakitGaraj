@@ -28,6 +28,12 @@ export interface RealTargetConfig {
   navigationTimeoutMs?: number;
   /** Ardisik istekler arasi asgari bekleme; kaynak sunucuya saygili davranis. */
   minDelayMs?: number;
+  /**
+   * Basi acik (gorunur pencere) calistirma. Bu bir gizleme TEKNIGI DEGILDIR:
+   * siradan, gorunur bir tarayici penceresi normal gezinmedir. Stealth /
+   * parmak izi sahteciligi bu surucuye hicbir modda EKLENMEZ.
+   */
+  headed?: boolean;
 }
 
 export const REAL_ACCESS_ENV_FLAG = 'MARKET_REFRESH_ALLOW_REAL';
@@ -66,7 +72,7 @@ export class PlaywrightBrowserDriver implements BrowserDriver {
     }
     // Lazy import: fixture testleri Playwright'i hic yuklemez.
     const { chromium } = await import('playwright');
-    this.browser = await chromium.launch({ headless: true });
+    this.browser = await chromium.launch({ headless: !this.target.headed });
     // Temiz baglam: kayitli profil, cerez veya kimlik ENJEKTE EDILMEZ.
     this.context = await this.browser.newContext();
     this._closed = false;

@@ -27,6 +27,23 @@ export interface SnapshotListing {
 export interface SnapshotScope {
   /** Kaynakta gozlenen marka adlari; MISSING sinifi bu kapsamla sinirlidir. */
   makes: string[];
+  /**
+   * Model AILESI adlari (ornek: "A3"). Verilirse referans kapsami markaya
+   * DEGIL, o aileye daraltilir: canonicalModel ya ailenin kendisidir ya da
+   * "aile " ile baslar ("A3 A3 Sportback", "A3 A3 Hatchback"). Bu, eslesticinin
+   * token-sinirli model eslemesiyle ayni ruhtadir ve altin kapsami (Audi A3)
+   * TUM Audi'den ayirir. Bos ise yalniz marka uygulanir.
+   */
+  families?: string[];
+}
+
+/** canonicalModel, verilen ailelerden birine ait mi (kendisi ya da onek). */
+function modelInFamilies(model: string, families: string[]): boolean {
+  const m = String(model || '').toLowerCase().trim();
+  return families.some((f) => {
+    const fl = f.toLowerCase().trim();
+    return m === fl || m.startsWith(fl + ' ') || m.endsWith(' ' + fl) || m.includes(' ' + fl + ' ');
+  });
 }
 
 export interface SnapshotReader {
@@ -62,8 +79,12 @@ export class InMemorySnapshotReader implements SnapshotReader {
 
   async findByScope(source: string, scope: SnapshotScope): Promise<SnapshotListing[]> {
     const makes = new Set(scope.makes.map((m) => m.toLowerCase()));
+    const families = scope.families || [];
     return this.rows.filter(
-      (r) => r.source === source && makes.has(String(r.canonicalMake || '').toLowerCase()),
+      (r) =>
+        r.source === source &&
+        makes.has(String(r.canonicalMake || '').toLowerCase()) &&
+        (families.length === 0 || modelInFamilies(String(r.canonicalModel || ''), families)),
     );
   }
 
@@ -129,8 +150,19 @@ export class PrismaSnapshotReader implements SnapshotReader {
 
   async findByScope(source: string, scope: SnapshotScope): Promise<SnapshotListing[]> {
     if (scope.makes.length === 0) return [];
+    const where: any = { source, canonicalMake: { in: scope.makes } };
+    const families = scope.families || [];
+    if (families.length > 0) {
+      // canonicalModel ailenin kendisi ya da "<aile> ..." oneki. SQLite'ta
+      // buyuk/kucuk harf duyarsizligini kalici veri karsilastirmasiyla
+      // birakiyoruz; korpusta model adlari zaten tutarli bicimdedir.
+      where.OR = families.flatMap((f) => [
+        { canonicalModel: f },
+        { canonicalModel: { startsWith: `${f} ` } },
+      ]);
+    }
     const rows = await this.require().rawVehicleListing.findMany({
-      where: { source, canonicalMake: { in: scope.makes } },
+      where,
       select: this.selection(),
     });
     return rows as SnapshotListing[];

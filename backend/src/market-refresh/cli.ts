@@ -21,6 +21,8 @@ import { runDryRunDiff } from './dry-run-diff';
 import { PrismaSnapshotReader, resolveSnapshotPath } from './snapshot-reference';
 import { summarizeReport, writeRunReport, RunReport } from './run-report';
 import { syntheticListingPage } from './__fixtures__/synthetic-page';
+import { PlaywrightBrowserDriver, realAccessEnabled, REAL_ACCESS_ENV_FLAG } from './playwright-driver';
+import { SahibindenListingExtractor } from './sahibinden-extraction';
 
 const STATE_DIR = path.resolve(__dirname, '../../data/market-refresh');
 const CHECKPOINT_PATH = path.join(STATE_DIR, 'checkpoint.json');
@@ -137,6 +139,7 @@ async function commandDryRun(): Promise<void> {
   const runId = argValue('--run-id');
   if (!runId) throw new Error('dry-run requires --run-id <id>');
   const makes = (argValue('--makes') || '').split(',').map((m) => m.trim()).filter(Boolean);
+  const families = (argValue('--families') || '').split(',').map((m) => m.trim()).filter(Boolean);
   const source = argValue('--source', 'SAHIBINDEN_HTML')!;
 
   const staging = new StagingStore(stagingPathFor(runId));
@@ -145,13 +148,13 @@ async function commandDryRun(): Promise<void> {
   const reader = new PrismaSnapshotReader(resolveSnapshotPath());
   await reader.open();
   try {
-    const diff = await runDryRunDiff({ source, observations, reader, scope: { makes } });
+    const diff = await runDryRunDiff({ source, observations, reader, scope: { makes, families } });
     // Snapshot gercekten degismedi mi — dosya parmak izi ile dogrula.
     reader.assertUnmutated();
 
     console.log(`collector : ${COLLECTOR_VERSION}`);
     console.log(`snapshot  : ${reader.describe().path}`);
-    console.log(`scope     : ${makes.length ? makes.join(', ') : '(none)'}`);
+    console.log(`scope     : ${makes.length ? makes.join(', ') : '(none)'}${families.length ? ' / ' + families.join(', ') : ''}`);
     console.log(`observed  : ${diff.totalObserved} (comparable ${diff.totalComparable})`);
     console.log(`counts    : ${JSON.stringify(diff.counts)}`);
     console.log(`snapshot total: ${diff.snapshotTotal}  scope size: ${diff.snapshotScopeSize}`);
@@ -161,11 +164,93 @@ async function commandDryRun(): Promise<void> {
   }
 }
 
+/**
+ * GERCEK KAYNAK KOSUSU — TEK IS, SINIRLI SAYFA, OPT-IN.
+ *
+ *   market-refresh real --make Audi --family A3 --path audi-a3  *     [--max-pages 3] [--deadline-ms N] [--min-delay-ms 6000] [--resume]
+ *
+ * Kurallar:
+ *   - MARKET_REFRESH_ALLOW_REAL=1 olmadan CALISMAZ (varsayilan kapali).
+ *   - Tek oturum, temiz baglam; profil/cerez/kimlik enjekte edilmez.
+ *   - Erisim engelinde bypass YOK: BLOCKED + checkpoint + temiz kapanis.
+ *   - Sayfa siniri varsayilani 3: ilk gecis ORNEKLEME icindir, tamlik degil.
+ *   - Kaynaga saygi: istekler arasi asgari bekleme (varsayilan 6 sn).
+ */
+async function commandReal(): Promise<void> {
+  if (!realAccessEnabled()) {
+    console.error(`real mode disabled; set ${REAL_ACCESS_ENV_FLAG}=1 deliberately for a dry-run.`);
+    process.exitCode = 2;
+    return;
+  }
+  const make = argValue('--make');
+  const family = argValue('--family');
+  const categoryPath = argValue('--path');
+  if (!make || !family || !categoryPath) {
+    throw new Error('real requires --make <Make> --family <Family> --path <category-path>');
+  }
+  const source = argValue('--source', 'SAHIBINDEN_HTML')!;
+  const maxPages = Number(argValue('--max-pages', '3')) || 3;
+  const deadlineMs = Number(argValue('--deadline-ms', '0')) || null;
+  const minDelayMs = Number(argValue('--min-delay-ms', '6000')) || 6000;
+  const pageSize = 50; // kaynagin liste sayfasi buyuklugu
+
+  const target = {
+    baseUrl: 'https://www.sahibinden.com',
+    source,
+    minDelayMs,
+    headed: process.argv.includes('--headed'),
+    buildPageUrl: (req: { page: number }) => {
+      const offset = (req.page - 1) * pageSize;
+      const suffix = offset > 0 ? `?pagingOffset=${offset}&pagingSize=${pageSize}` : '';
+      return `https://www.sahibinden.com/${categoryPath}${suffix}`;
+    },
+  };
+  const driver = new PlaywrightBrowserDriver(target, new SahibindenListingExtractor());
+
+  const checkpoint = new CheckpointStore(CHECKPOINT_PATH);
+  let runId: string;
+  let queue: JobQueue;
+  let stagingFile: string;
+  if (process.argv.includes('--resume')) {
+    const resumed = resumeQueueFromCheckpoint(checkpoint);
+    runId = resumed.runId;
+    queue = resumed.queue;
+    stagingFile = resumed.stagingFile;
+  } else {
+    runId = argValue('--run-id') || `real-${Date.now()}`;
+    queue = new JobQueue(createJobs([{ source, make, family }]));
+    stagingFile = stagingPathFor(runId);
+  }
+
+  const runner = new CollectorRunner({
+    runId,
+    driver,
+    queue,
+    staging: new StagingStore(stagingFile),
+    checkpoint,
+    snapshotPath: resolveSnapshotPath(),
+    deadlineMs,
+    maxPagesPerJob: maxPages,
+  });
+
+  const result = await runner.run();
+  const quality = evaluateQuality(result.metrics);
+  const report: RunReport = { ...result.report, quality, diff: null };
+  writeRunReport(reportPathFor(runId), report);
+  console.log(summarizeReport(report));
+  console.log(`report    : ${reportPathFor(runId)}`);
+  if (result.accessChallenge) {
+    console.log(`ACCESS CHALLENGE: ${result.accessChallenge} — bypass yok, guvenli durus.`);
+  }
+}
+
 async function main(): Promise<void> {
   const command = process.argv[2];
   switch (command) {
     case 'fixture':
       return commandFixture();
+    case 'real':
+      return commandReal();
     case 'status':
       return commandStatus();
     case 'resume':
