@@ -150,3 +150,21 @@ describe('market-refresh dry-run diff', () => {
     expect(typeof (prismaReader as any).delete).toBe('undefined');
   });
 });
+
+
+describe('SnapshotScope aile filtresi', () => {
+  const { InMemorySnapshotReader } = require('./snapshot-reference');
+  const rows = [
+    { source: 'S', sourceListingId: 'a1', price: 1, mileageKm: 1, year: 2020, canonicalMake: 'Audi', canonicalModel: 'A3 A3 Sportback' },
+    { source: 'S', sourceListingId: 'a2', price: 1, mileageKm: 1, year: 2020, canonicalMake: 'Audi', canonicalModel: 'A3' },
+    { source: 'S', sourceListingId: 'a4', price: 1, mileageKm: 1, year: 2020, canonicalMake: 'Audi', canonicalModel: 'A4 Sedan' },
+    { source: 'S', sourceListingId: 'q3', price: 1, mileageKm: 1, year: 2020, canonicalMake: 'Audi', canonicalModel: 'Q3' },
+  ];
+  test('aile verilince yalniz A3 ailesi; A4/Q3 haric', async () => {
+    const reader = new InMemorySnapshotReader(rows);
+    const scoped = await reader.findByScope('S', { makes: ['Audi'], families: ['A3'] });
+    expect(scoped.map((r: any) => r.sourceListingId).sort()).toEqual(['a1', 'a2']);
+    const allAudi = await reader.findByScope('S', { makes: ['Audi'] });
+    expect(allAudi.length).toBe(4);
+  });
+});
