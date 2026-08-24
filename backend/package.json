@@ -27,7 +27,11 @@
     "rebuild:listings:dry": "ts-node src/scripts/rebuild_raw_listings_v3.ts --dry-run",
     "report:50-cars": "ts-node src/scripts/generate_50_car_report_v3.ts",
     "calibration:init": "ts-node src/scripts/calibration_report.ts --init",
-    "calibration:report": "ts-node src/scripts/calibration_report.ts"
+    "calibration:report": "ts-node src/scripts/calibration_report.ts",
+    "market:refresh:fixture": "ts-node src/market-refresh/cli.ts fixture",
+    "market:refresh:status": "ts-node src/market-refresh/cli.ts status",
+    "market:refresh:resume": "ts-node src/market-refresh/cli.ts resume",
+    "market:refresh:dry-run": "ts-node src/market-refresh/cli.ts dry-run"
   },
   "dependencies": {
     "@napi-rs/canvas": "^1.0.3",
