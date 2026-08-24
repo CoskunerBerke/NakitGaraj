@@ -63,3 +63,7 @@ frontend/test-results/
 # Kalibrasyon: komutla yeniden uretilen dosyalar (gercek saha verisi icerir)
 backend/data/calibration/calibration_cases.csv
 RAPOR_KALIBRASYON.md
+
+# Market refresh toplayici: kosu durumu, staging ve raporlar (uretilen, kaynak degil).
+# Tarayici durumu/profili ve toplanan ham veri ASLA commitlenmez.
+backend/data/market-refresh/
