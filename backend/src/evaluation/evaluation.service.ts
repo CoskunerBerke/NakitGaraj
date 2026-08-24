@@ -589,9 +589,70 @@ export class EvaluationService {
 
     const isFmvTooHigh = calc.fairMarketValue >= 5000000;
     const isLevel3 = emsalResult.level === 3;
-    const hasLowComps = emsalResult.matchedCount < 8;
     const hasLowCompsForHighFmv = isFmvTooHigh && emsalResult.matchedCount < 10;
-    const hasLowConfidence = calc.confidenceScore <= 70;
+
+    /**
+     * OTOMATIK ONAY UYGUNLUGU — KANIT BILESKESI (durum politikasi V1).
+     *
+     * Onceki kural iki KOR esikti: emsal sayisi < 8 ya da guven <= 70 ise
+     * MANUEL. Olculen (3.611 gercek yol, kanit boyutlariyla):
+     *   - 63 OTOMATIK teklif, IQR yayilimi > %25 olan DAGINIK kohortlardan
+     *     geliyordu (sayi cok, kanit zayif) -> yanlis-OTOMATIK.
+     *   - 83 kucuk-N yolu (N=4-7) birebir kimlik + ayni yil + yerel km +
+     *     dar yayilim + motor birebirligiyle geldigi halde sirf N<8 diye
+     *     MANUEL'e dusuyordu (sayi az, kanit guclu) -> gereksiz MANUEL.
+     *
+     * Yeni kural: EMSAL SAYISI TEK BASINA karar veremez; kanit KALITESI
+     * karar verir. Uc olcum birlikte okunur (hepsi mevcut olculerden,
+     * marka/model ayrimi YOK):
+     *   yayilim   kohort fiyatlarinin (P75-P25)/P50 orani
+     *   yerellik  tum kohort ayni model yili + hedef km ve alti
+     *   birebir   motor kaniti birebir orani (engineExactShare)
+     *
+     * SERT kapilar (asla gevsemez): agir hasar, kasa belirsizligi, Seviye 3,
+     * sinirli-emsal (motor bilinmeyen hedef dahil), ekonomik taban/komisyon
+     * (calc.requiresManualApproval), yuksek deger + az emsal, N=1 (tek
+     * gozlemle otomatik taahhut verilmez) ve butunluk hatalari.
+     *
+     * Secim, uc aday politikanin ayni orneklem uzerinde karsilastirilmasiyla
+     * yapildi; secilen politika yanlis-OTOMATIK siniflarinin TAMAMINDA sifir
+     * verendir (ekonomi 0, kasa 0, N=1 0, yuksek-yayilim 0, L3 0).
+     */
+    const cohortPrices: number[] = (emsalResult.cleanListings || []).map((l: any) => l.price).filter((x: number) => x > 0);
+    const qAt = (arr: number[], pos: number): number => {
+      if (!arr.length) return 0;
+      const sorted = [...arr].sort((a, b) => a - b);
+      const i = (sorted.length - 1) * pos;
+      const lo = Math.floor(i), hi = Math.ceil(i);
+      return lo === hi ? sorted[lo] : sorted[lo] + (sorted[hi] - sorted[lo]) * (i - lo);
+    };
+    const cohortSpread = cohortPrices.length >= 2
+      ? (qAt(cohortPrices, 0.75) - qAt(cohortPrices, 0.25)) / Math.max(1, qAt(cohortPrices, 0.5))
+      : 0;
+    const cohortYearsExact = (emsalResult.cleanListings || []).length > 0 &&
+      (emsalResult.cleanListings || []).every((l: any) => l.year === dto.year);
+    const cohortKms: number[] = (emsalResult.cleanListings || []).map((l: any) => l.mileageKm).filter((x: number) => x > 0);
+    const cohortKmLocal = cohortKms.length > 0 && cohortKms.every((k: number) => k <= dto.mileage);
+    const engineExactShare: number = emsalResult.engineExactShare ?? 0;
+    const nComps: number = emsalResult.matchedCount || 0;
+
+    // Yayilim cok genisse sayi kac olursa olsun otomatik taahhut verilmez.
+    const hasWideSpread = cohortSpread > 0.22;
+    // Kohort yeterliligi: genis N ya da KUCUK ama SIKI-YEREL kanit.
+    const tightSmallCohort =
+      nComps >= 4 && cohortSpread <= 0.10 && cohortYearsExact && cohortKmLocal && engineExactShare >= 0.6;
+    const hasInsufficientCohort = !(nComps >= 8 || tightSmallCohort);
+    // Guven: taban 68; daha dusuk guven yalnizca EK kanitla kabul edilir.
+    const hasWeakConfidence = !(
+      calc.confidenceScore >= 68 ||
+      (calc.confidenceScore >= 64 && cohortSpread <= 0.15 && cohortYearsExact) ||
+      (calc.confidenceScore >= 60 && cohortSpread <= 0.10 && cohortYearsExact && nComps >= 5)
+    );
+    // N=1: piyasa referansi tek ilanin fiyatidir (kilitli kural); durum da
+    // MANUEL kalir - tek gozlemle otomatik taahhut verilmez.
+    const isSingleComparable = nComps <= 1;
+    const hasLowComps = hasWideSpread || hasInsufficientCohort || isSingleComparable;
+    const hasLowConfidence = hasWeakConfidence;
     // Butunluk kontrolu HASSAS degerler uzerinde yapilir: calc.fairMarketValue
     // artik musteriye sunulan 5.000 TL adimli ticari degerdir ve 2.500'e kadar
     // asagi yuvarlanabilir; hassas P35 ile karsilastirmak sahte hata uretirdi.
