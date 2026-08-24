@@ -9,4 +9,10 @@ export class AppController {
   getHello(): string {
     return this.appService.getHello();
   }
+
+  // Üretim güvenli canlılık ucu: sürüm/iç bilgi sızdırmaz.
+  @Get('health')
+  getHealth() {
+    return { status: 'ok' };
+  }
 }
