@@ -1,0 +1,57 @@
+<meta charset="utf-8" />
+<title>Market Refresh Autopilot</title>
+<link rel="stylesheet" href="popup.css" />
+
+<div class="wrap">
+  <header>
+    <h1>Market Refresh Autopilot</h1>
+    <span id="state" class="state">IDLE</span>
+  </header>
+
+  <section id="pairing" class="card">
+    <h2>Yerel köprü</h2>
+    <label>
+      Adres
+      <input id="bridgeUrl" type="text" spellcheck="false" placeholder="http://127.0.0.1:8791" />
+    </label>
+    <label>
+      Yetenek jetonu
+      <input id="token" type="password" spellcheck="false" placeholder="bridge-token.txt içeriği" />
+    </label>
+    <p class="hint" id="tokenHint">Jeton yalnızca 127.0.0.1 köprüsüne gönderilir.</p>
+    <button id="save" class="secondary">Kaydet</button>
+  </section>
+
+  <section class="card">
+    <div class="controls">
+      <button id="start" class="primary">Aylık tazelemeyi başlat</button>
+      <button id="pause" class="secondary">Duraklat</button>
+      <button id="resume" class="secondary">Devam et</button>
+      <button id="stop" class="danger">Durdur</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <dl class="status">
+      <div><dt>Koşu</dt><dd id="runId">—</dd></div>
+      <div><dt>Marka</dt><dd id="make">—</dd></div>
+      <div><dt>Seri</dt><dd id="series">—</dd></div>
+      <div><dt>Alt kategori</dt><dd id="subcategory">—</dd></div>
+      <div><dt>Sayfa</dt><dd id="page">—</dd></div>
+      <div><dt>Biten iş</dt><dd id="done">—</dd></div>
+      <div><dt>Bekleyen iş</dt><dd id="pending">—</dd></div>
+      <div><dt>Bloke iş</dt><dd id="blocked">—</dd></div>
+      <div><dt>Gözlenen ilan</dt><dd id="observed">—</dd></div>
+      <div><dt>Yeni</dt><dd id="new">—</dd></div>
+      <div><dt>Değişen</dt><dd id="changed">—</dd></div>
+      <div><dt>Değişmeyen</dt><dd id="unchanged">—</dd></div>
+      <div><dt>Bölünemeyen</dt><dd id="unsplittable">—</dd></div>
+      <div><dt>Koşu tam mı</dt><dd id="complete">—</dd></div>
+      <div><dt>Pencere sonu</dt><dd id="deadline">—</dd></div>
+    </dl>
+  </section>
+
+  <p id="message" class="message"></p>
+</div>
+
+<script src="popup.js"></script>
