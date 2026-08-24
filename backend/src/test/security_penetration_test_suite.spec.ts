@@ -240,6 +240,20 @@ describe('NakitGaraj Comprehensive Hardened Security Penetration Test Suite', ()
       expect([401, 403]).toContain(response.status);
     });
 
+    it('should reject unauthenticated market-price mutation routes with 401/403', async () => {
+      const postRoutes = [
+        '/api/admin/adjust-market-prices',
+        '/api/admin/market-sync-settings',
+        '/api/admin/trigger-market-sync',
+      ];
+      for (const route of postRoutes) {
+        const response = await request(app.getHttpServer()).post(route).send({ percentage: 50 });
+        expect([401, 403]).toContain(response.status);
+      }
+      const getResponse = await request(app.getHttpServer()).get('/api/admin/market-sync-settings');
+      expect([401, 403]).toContain(getResponse.status);
+    });
+
     it('should reject removed public internal mutation route "/api/vehicle-specs/upsert-incremental" with 404', async () => {
       const response = await request(app.getHttpServer()).post('/api/vehicle-specs/upsert-incremental');
       expect(response.status).toBe(404);

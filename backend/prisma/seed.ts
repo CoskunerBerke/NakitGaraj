@@ -60,8 +60,23 @@ async function main() {
   });
 
   // 3. Admin User
-  const seedEmail = process.env.ADMIN_EMAIL || 'admin@nakitgaraj.com';
-  const seedPassword = process.env.ADMIN_PASSWORD || 'ChangeMe123!';
+  // Üretimde bilinen varsayılan yönetici kimliği ASLA oluşturulmaz:
+  // ADMIN_EMAIL + ADMIN_PASSWORD zorunludur ve yerleşik örnek parola reddedilir.
+  const isProduction = process.env.NODE_ENV === 'production';
+  const seedEmail = process.env.ADMIN_EMAIL || (isProduction ? '' : 'admin@nakitgaraj.com');
+  const seedPassword = process.env.ADMIN_PASSWORD || (isProduction ? '' : 'ChangeMe123!');
+  if (isProduction) {
+    if (!seedEmail || !seedPassword) {
+      throw new Error(
+        'Production seed requires ADMIN_EMAIL and ADMIN_PASSWORD environment variables. Refusing to create a default admin credential.',
+      );
+    }
+    if (seedPassword === 'ChangeMe123!' || seedPassword.length < 12) {
+      throw new Error(
+        'Production ADMIN_PASSWORD must be a unique value of at least 12 characters (known defaults are rejected).',
+      );
+    }
+  }
   const adminPasswordHash = await bcrypt.hash(seedPassword, 10);
   await prisma.user.upsert({
     where: { email: seedEmail },

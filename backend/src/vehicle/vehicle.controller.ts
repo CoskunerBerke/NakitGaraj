@@ -1,7 +1,9 @@
-import { BadRequestException, Controller, Get, Post, Body, Query } from '@nestjs/common';
+import { BadRequestException, Controller, Get, Post, Body, Query, UseGuards } from '@nestjs/common';
 import { VehicleService } from './vehicle.service';
 import { MarketSyncCronService, MarketSyncSettings } from './market-sync-cron.service';
 import { CreateVehicleRequestDto } from './dto/create-vehicle-request.dto';
+import { JwtAuthGuard } from '../auth/jwt.guard';
+import { RolesGuard } from '../auth/roles.guard';
 
 @Controller()
 export class VehicleController {
@@ -141,6 +143,7 @@ export class VehicleController {
     return this.vehicleService.createVehicleRequest(dto);
   }
 
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Post('admin/adjust-market-prices')
   async adjustMarketPrices(
     @Body('percentage') percentage: number,
@@ -149,11 +152,13 @@ export class VehicleController {
     return this.vehicleService.adjustMarketPrices(percentage, brandName);
   }
 
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Get('admin/market-sync-settings')
   async getMarketSyncSettings() {
     return this.marketSyncCronService.getSettings();
   }
 
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Post('admin/market-sync-settings')
   async updateMarketSyncSettings(@Body() body: Partial<MarketSyncSettings>) {
     const current = this.marketSyncCronService.getSettings();
@@ -162,6 +167,7 @@ export class VehicleController {
     return updated;
   }
 
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Post('admin/trigger-market-sync')
   async triggerMarketSync() {
     await this.marketSyncCronService.handleMonthlyAutoMarketSync();

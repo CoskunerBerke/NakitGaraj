@@ -7,12 +7,11 @@ module.exports = {
       args: 'run start:prod',
       watch: false,
       max_memory_restart: '1G',
+      // Sırlar burada TUTULMAZ: JWT_SECRET, DATABASE_URL, ALLOWED_ORIGINS vb.
+      // backend/.env dosyasından (ConfigModule) veya makine ortamından gelir.
       env: {
         NODE_ENV: 'production',
-        PORT: 3001,
-        DATABASE_URL: 'file:./dev.db',
-        JWT_SECRET: 'super-secret-key-nakitgaraj-premium-2026',
-        CORS_ORIGIN: 'http://localhost:3000'
+        PORT: 3001
       }
     },
     {
