@@ -33,7 +33,8 @@
     "market:refresh:fixture": "ts-node src/market-refresh/cli.ts fixture",
     "market:refresh:status": "ts-node src/market-refresh/cli.ts status",
     "market:refresh:resume": "ts-node src/market-refresh/cli.ts resume",
-    "market:refresh:dry-run": "ts-node src/market-refresh/cli.ts dry-run"
+    "market:refresh:dry-run": "ts-node src/market-refresh/cli.ts dry-run",
+    "market:autopilot:bridge": "ts-node src/market-refresh/autopilot/autopilot-cli.ts"
   },
   "dependencies": {
     "@napi-rs/canvas": "^1.0.3",

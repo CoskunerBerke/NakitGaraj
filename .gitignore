@@ -70,3 +70,9 @@ backend/data/market-refresh/
 # Yetkili kalici tarayici profili — ASLA commit edilmez (cerez/oturum icerir)
 .local/
 backend/.local/
+
+# Chrome autopilot: kosu dizini (checkpoint/staging/kopru jetonu) ve yerel
+# tarayici profilleri. Uretilen ve GIZLI; kaynak degil.
+backend/data/market-refresh/autopilot/
+**/bridge-token.txt
+chrome-extension/**/*.local.json

@@ -24,16 +24,23 @@ export interface CheckpointPayload {
   snapshotPath: string | null;
 }
 
-interface CheckpointEnvelope {
+interface Envelope<T> {
   checksum: string;
-  payload: CheckpointPayload;
+  payload: T;
 }
 
-function checksumOf(payload: CheckpointPayload): string {
+function checksumOf(payload: unknown): string {
   return crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex');
 }
 
-export class CheckpointStore {
+/**
+ * ATOMIK + CHECKSUM'LU JSON DOSYASI — checkpoint disiplininin tasiyicisi.
+ *
+ * Hem klasik toplayici checkpoint'i hem Chrome autopilot kosu durumu ayni
+ * dayaniklilik garantilerine ihtiyac duyar; garanti TEK yerde tutulur ki iki
+ * kopya birbirinden ayrisip biri sessizce zayiflamasin.
+ */
+export class AtomicChecksummedFile<T> {
   constructor(private readonly filePath: string) {}
 
   get path(): string {
@@ -44,11 +51,10 @@ export class CheckpointStore {
     return fs.existsSync(this.filePath);
   }
 
-  save(payload: CheckpointPayload): void {
-    const dir = path.dirname(this.filePath);
-    fs.mkdirSync(dir, { recursive: true });
+  save(payload: T): void {
+    fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
 
-    const envelope: CheckpointEnvelope = { checksum: checksumOf(payload), payload };
+    const envelope: Envelope<T> = { checksum: checksumOf(payload), payload };
     const tmpPath = `${this.filePath}.tmp-${process.pid}-${Date.now()}`;
 
     const fd = fs.openSync(tmpPath, 'w');
@@ -62,12 +68,12 @@ export class CheckpointStore {
     fs.renameSync(tmpPath, this.filePath);
   }
 
-  load(): CheckpointPayload {
+  load(): T {
     if (!this.exists()) {
       throw new CheckpointCorruptError(`Checkpoint not found at ${this.filePath}`);
     }
 
-    let envelope: CheckpointEnvelope;
+    let envelope: Envelope<T>;
     try {
       envelope = JSON.parse(fs.readFileSync(this.filePath, 'utf-8'));
     } catch (err: any) {
@@ -84,12 +90,6 @@ export class CheckpointStore {
         `Checkpoint at ${this.filePath} failed integrity check (checksum mismatch)`,
       );
     }
-    if (envelope.payload.version !== COLLECTOR_VERSION) {
-      throw new CheckpointCorruptError(
-        `Checkpoint version "${envelope.payload.version}" does not match collector ` +
-          `"${COLLECTOR_VERSION}"`,
-      );
-    }
     return envelope.payload;
   }
 
@@ -98,5 +98,40 @@ export class CheckpointStore {
     const target = `${this.filePath}.corrupt-${Date.now()}`;
     fs.renameSync(this.filePath, target);
     return target;
+  }
+}
+
+export class CheckpointStore {
+  private readonly file: AtomicChecksummedFile<CheckpointPayload>;
+
+  constructor(filePath: string) {
+    this.file = new AtomicChecksummedFile<CheckpointPayload>(filePath);
+  }
+
+  get path(): string {
+    return this.file.path;
+  }
+
+  exists(): boolean {
+    return this.file.exists();
+  }
+
+  save(payload: CheckpointPayload): void {
+    this.file.save(payload);
+  }
+
+  load(): CheckpointPayload {
+    const payload = this.file.load();
+    if (payload.version !== COLLECTOR_VERSION) {
+      throw new CheckpointCorruptError(
+        `Checkpoint version "${payload.version}" does not match collector ` +
+          `"${COLLECTOR_VERSION}"`,
+      );
+    }
+    return payload;
+  }
+
+  quarantine(): string {
+    return this.file.quarantine();
   }
 }
