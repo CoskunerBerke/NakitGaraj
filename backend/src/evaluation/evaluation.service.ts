@@ -195,6 +195,12 @@ export class EvaluationService {
       color: dto.color,
       damageStatus: dto.damageStatus,
       fairMarketValue: res.results!.fairMarketValue,
+      // Bayi bildirimi icin KANONIK baglamin tamami: temiz piyasa referansi
+      // (kondisyon ONCESI) ve degerleme durumu. Bayi, "Otomatik mi, uzman
+      // kontrolu mu" ve "temiz emsal merkezi ne" sorularini bildirimden
+      // okuyabilmelidir; ikisi de zaten hesaplanmis kanonik degerlerdir.
+      marketReferenceValue: res.results!.marketReferenceValue ?? null,
+      evaluationStatus: res.status,
       finalOfferedPrice: res.results!.cashOffer,
       finalConsignmentPrice: res.results!.consignmentListingPrice,
       // Bildirimde ILAN FIYATI ile MUSTERI NETI ayri ayri gorunur; bayi
@@ -399,6 +405,19 @@ export class EvaluationService {
       };
     }
 
+    /**
+     * SPEC YALNIZCA KATALOG KIMLIGIYLE ARANIR.
+     *
+     * manufacturerId/modelId gonderilmemisse (salt-gozlenen hedef) Prisma
+     * `undefined` filtreyi YOK sayar ve sorgu "o yildaki ILK spec"e duser:
+     * olculen — gozlenen Abarth 500e 2024 istegine Renault Megane E-Tech
+     * spec'i eklendi; panelin kimlik yedegi ve teknik zenginlestirme
+     * (hp/motor/MSRP) YANLIS aracтан geldi. Kimliksiz istekte spec aramasi
+     * YAPILMAZ; zenginlestirme bos kalir (dogru davranis: UNKNOWN, yanlis
+     * arac DEGIL). Fiyat cekirdegi spec kullanmaz; para etkilenmez.
+     */
+    const hasCatalogIdentity = Boolean(dto.manufacturerId && dto.modelId);
+
     const whereCondition: any = {
       year: dto.year,
       manufacturerId: dto.manufacturerId,
@@ -422,26 +441,28 @@ export class EvaluationService {
       marketPrices: true,
     };
 
-    let spec = await this.prisma.vehicleSpecification.findFirst({
-      where: whereCondition,
-      include: specInclude,
-    });
+    let spec = hasCatalogIdentity
+      ? await this.prisma.vehicleSpecification.findFirst({
+          where: whereCondition,
+          include: specInclude,
+        })
+      : null;
 
-    if (!spec) {
+    if (!spec && hasCatalogIdentity) {
       // Fallback 1: Drop package/body/fuel/transmission filters for exact year
       const fb1: any = { year: dto.year, manufacturerId: dto.manufacturerId, modelId: dto.modelId };
       if (dto.variantId) fb1.variantId = dto.variantId;
       spec = await this.prisma.vehicleSpecification.findFirst({ where: fb1, include: specInclude });
     }
 
-    if (!spec) {
+    if (!spec && hasCatalogIdentity) {
       // Fallback 2: Drop year filter for variant
       const fb2: any = { manufacturerId: dto.manufacturerId, modelId: dto.modelId };
       if (dto.variantId) fb2.variantId = dto.variantId;
       spec = await this.prisma.vehicleSpecification.findFirst({ where: fb2, include: specInclude });
     }
 
-    if (!spec) {
+    if (!spec && hasCatalogIdentity) {
       // Fallback 3: Broad model lookup
       spec = await this.prisma.vehicleSpecification.findFirst({
         where: { manufacturerId: dto.manufacturerId, modelId: dto.modelId },

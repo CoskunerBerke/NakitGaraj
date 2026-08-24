@@ -134,12 +134,9 @@ export default function AdminLogin() {
           </form>
         </div>
 
-        {/* Demo credentials hint */}
-        <div className="text-center mt-6 p-4 bg-zinc-150/50 dark:bg-white/3 border border-zinc-200 dark:border-white/5 rounded-xl text-[11px] text-zinc-500">
-          <span className="font-semibold text-zinc-650 dark:text-zinc-400">Demo Giriş Bilgileri:</span><br />
-          E-posta: <span className="font-mono text-zinc-800 dark:text-zinc-300 font-bold">admin@nakitgaraj.com</span> | Şifre:{' '}
-          <span className="font-mono text-zinc-800 dark:text-zinc-300 font-bold">Admin123!</span>
-        </div>
+        {/* GIRIS BILGISI SAYFADA GOSTERILMEZ: yonetici hesap bilgisi, herkese
+            acik giris ekraninda yayinlanamaz (gercek seed e-postasiyla ayni
+            oldugu icin dogrudan hesap ifsasiydi). */}
       </div>
     </div>
   );
