@@ -67,3 +67,6 @@ RAPOR_KALIBRASYON.md
 # Market refresh toplayici: kosu durumu, staging ve raporlar (uretilen, kaynak degil).
 # Tarayici durumu/profili ve toplanan ham veri ASLA commitlenmez.
 backend/data/market-refresh/
+# Yetkili kalici tarayici profili — ASLA commit edilmez (cerez/oturum icerir)
+.local/
+backend/.local/

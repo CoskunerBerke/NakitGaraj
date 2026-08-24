@@ -23,6 +23,7 @@ import { summarizeReport, writeRunReport, RunReport } from './run-report';
 import { syntheticListingPage } from './__fixtures__/synthetic-page';
 import { PlaywrightBrowserDriver, realAccessEnabled, REAL_ACCESS_ENV_FLAG } from './playwright-driver';
 import { SahibindenListingExtractor } from './sahibinden-extraction';
+import { runProfileSetup, runProfileCheck, resolveProfileDir } from './persistent-profile';
 
 const STATE_DIR = path.resolve(__dirname, '../../data/market-refresh');
 const CHECKPOINT_PATH = path.join(STATE_DIR, 'checkpoint.json');
@@ -244,6 +245,22 @@ async function commandReal(): Promise<void> {
   }
 }
 
+/** ELLE profil hazirligi: gorunur tarayici, scrape yok, kullaniciya birakilir. */
+async function commandProfileSetup(): Promise<void> {
+  console.log(`profile   : ${resolveProfileDir()}`);
+  await runProfileSetup({ baseUrl: argValue('--url', 'https://www.sahibinden.com')! });
+  console.log('setup tamam: profil dogal olarak diske yazildi (varsa).');
+}
+
+/** Profil saglik kontrolu: SESSION_USABLE / LOGIN_REQUIRED / ACCESS_CHALLENGE. */
+async function commandProfileCheck(): Promise<void> {
+  console.log(`profile   : ${resolveProfileDir()}`);
+  const status = await runProfileCheck({ checkUrl: argValue('--url', 'https://www.sahibinden.com/hesabim')!, headed: process.argv.includes('--headed') });
+  console.log(`session   : ${status}`);
+  if (status === 'ACCESS_CHALLENGE') console.log('ACCESS CHALLENGE — bypass yok, guvenli durus.');
+  if (status !== 'SESSION_USABLE') process.exitCode = 3;
+}
+
 async function main(): Promise<void> {
   const command = process.argv[2];
   switch (command) {
@@ -251,6 +268,10 @@ async function main(): Promise<void> {
       return commandFixture();
     case 'real':
       return commandReal();
+    case 'profile:setup':
+      return commandProfileSetup();
+    case 'profile:check':
+      return commandProfileCheck();
     case 'status':
       return commandStatus();
     case 'resume':
@@ -258,7 +279,7 @@ async function main(): Promise<void> {
     case 'dry-run':
       return commandDryRun();
     default:
-      console.error('Usage: market-refresh <fixture|status|resume|dry-run> [options]');
+      console.error('Usage: market-refresh <fixture|real|profile:setup|profile:check|status|resume|dry-run> [options]');
       process.exitCode = 1;
   }
 }
