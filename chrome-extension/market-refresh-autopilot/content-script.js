@@ -111,6 +111,15 @@
    * Kaynak UI'sinde GERCEKTEN gorunen alt kategoriler. Uydurma gizli filtre
    * URETILMEZ: yalnizca sayisi yazili, ayni kokene ait ve mevcut yoldan farkli
    * baglantilar cocuk sayilir.
+   *
+   * Ayrica YAPININ OKUNABILIRLIGI bildirilir:
+   *   'READ'       kapsayici bulundu ve en az bir sayili alt kategori okundu
+   *   'EMPTY'      kapsayici bulundu ama sayili alt kategori yok
+   *   'UNREADABLE' kategori kapsayicisi hic bulunamadi
+   *
+   * Bu ayrim onemlidir: "cocuk yok" kaynagin cevabi olabilir, ama "kapsayici
+   * bulunamadi" BIZIM secicimizin tutmadigi anlamina gelir. Ikisini ayni
+   * saymak bir secici hatasini veri gercegine cevirirdi.
    */
   function readChildCategories() {
     const here = location.pathname.replace(/\/+$/, '');
@@ -121,7 +130,7 @@
     for (const selector of CATEGORY_CONTAINERS) {
       document.querySelectorAll(selector).forEach((el) => containers.push(el));
     }
-    if (containers.length === 0) return children;
+    if (containers.length === 0) return { children, structure: 'UNREADABLE' };
 
     for (const container of containers) {
       for (const anchor of container.querySelectorAll('a[href]')) {
@@ -153,7 +162,7 @@
         });
       }
     }
-    return children;
+    return { children, structure: children.length > 0 ? 'READ' : 'EMPTY' };
   }
 
   // ------------------------------------------------------------------- kartlar
@@ -216,11 +225,13 @@
     }
 
     if (op && op.type === 'DISCOVER') {
+      const discovered = readChildCategories();
       return {
         ok: true,
         url: location.href,
         count: readResultCount(),
-        children: readChildCategories(),
+        children: discovered.children,
+        childStructure: discovered.structure,
         categoryText: text(document.querySelector('h1')),
       };
     }

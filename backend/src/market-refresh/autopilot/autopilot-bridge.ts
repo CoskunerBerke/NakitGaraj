@@ -20,6 +20,7 @@ import { AddressInfo } from 'net';
 import {
   AccessRestrictionReport,
   AutopilotProtocolError,
+  ChildStructureSignal,
   DiscoveryReport,
   PageBatch,
 } from './autopilot-contracts';
@@ -361,15 +362,24 @@ function parseChildren(value: unknown, field: string) {
   });
 }
 
+const CHILD_STRUCTURE_SIGNALS = new Set(['READ', 'EMPTY', 'UNREADABLE']);
+
 function parseDiscoveryReport(body: unknown): DiscoveryReport {
   const input = requireObject(body);
   const count = input.count;
+  const structure = input.childStructure;
+  if (structure !== undefined && !CHILD_STRUCTURE_SIGNALS.has(String(structure))) {
+    throw new AutopilotProtocolError(
+      `"childStructure" must be one of ${[...CHILD_STRUCTURE_SIGNALS].join(', ')}`,
+    );
+  }
   return {
     runId: requireString(input.runId, 'runId'),
     nodePath: requireString(input.nodePath, 'nodePath'),
     count: typeof count === 'number' && Number.isFinite(count) ? Math.floor(count) : null,
     children: parseChildren(input.children, 'children'),
     secondaryPartitions: parseChildren(input.secondaryPartitions, 'secondaryPartitions'),
+    ...(structure === undefined ? {} : { childStructure: structure as ChildStructureSignal }),
   };
 }
 

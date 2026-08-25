@@ -28,6 +28,42 @@ cd backend && npm run market:autopilot:bridge -- --port 8791 --reference off
 Başlangıç çıktısı bağlanma adresini, koşu dizinini ve **jeton dosyasının yolunu**
 yazar. Jetonun kendisi normal günlüğe **yazılmaz**; dosyadan kopyalanır.
 
+## 1b) İLK CANLI KOŞU: kapsam korumalı duman testi
+
+İlk gerçek koşunun amacı iki kaynak seçici grubunu doğrulamaktır: **sonuç
+sayısı** ve **alt kategori + sayısı**. Bu koşu tek modele kilitlenir ve
+hedefin dışına çıkamaz.
+
+PowerShell'den:
+
+```bash
+cd backend; npm run market:autopilot:bridge -- --port 8791 --run-id smoke-audi-a3 --scope-root /audi-a3 --scope-make Audi --scope-series A3 --max-result-pages 3 --require-child-structure --stop-on-unknown --makes Audi
+```
+
+Git Bash kullanıyorsanız komutun başına `MSYS_NO_PATHCONV=1` ekleyin — aksi
+halde Git Bash `/audi-a3` argümanını bir Windows yoluna çevirir. (Köprü bunu
+fark eder ve açık hata verir; sessizce yanlış kapsamla çalışmaz.) Alternatif:
+`--scope-root https://www.sahibinden.com/audi-a3`.
+
+**Kapsam uzantıdan değil köprüden verilir.** Uzantı güvenilmez bir istemcidir;
+kapsamı genişletebilseydi koruma koruma olmazdı. Panelden yalnızca START'a
+basılır ve açık sekme kapsam dışındaysa köprü başlatmayı reddeder.
+
+Bu koşuda:
+
+| Kural | Davranış |
+| --- | --- |
+| Audi A4 / BMW / başka marka | Kuyruğa **hiç girmez**, sebebiyle `outOfScope` listesine yazılır |
+| Audi A3 altındaki alt kategoriler | >1000 kuralı gerektiriyorsa **özyineleme devam eder** |
+| Sayfa 4 | **Üretilmez**; gönderilse bile reddedilir |
+| Sonuç sayısı okunamazsa | `UNKNOWN_COUNT` → koşu **DURUR** (`ERROR`), hiçbir şey tahmin edilmez |
+| Alt kategori yapısı okunamazsa | `UNKNOWN_CATEGORY_STRUCTURE` → koşu **DURUR** |
+| Snapshot DB | **Salt okunur**; gözlemler yalnızca staging JSONL'e yazılır |
+| Koşu tam mı | Kapsamlı koşu tanımı gereği **HAYIR** — aylık tazeleme sayılamaz |
+
+`--reference off` eklerseniz snapshot hiç açılmaz ve her kart `NEW` sayılır;
+seçici doğrulaması için bu da yeterlidir.
+
 ## 2) Uzantıyı yükle
 
 1. Chrome'da `chrome://extensions` adresini açın

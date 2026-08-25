@@ -6,6 +6,15 @@
  *   npm run market:autopilot:bridge -- --port 8791 --window 02:00-10:00
  *   npm run market:autopilot:bridge -- --port 8791 --reference off   (hizli duman testi)
  *
+ * ILK CANLI DUMAN KOSUSU (kapsam korumali, tek model):
+ *   npm run market:autopilot:bridge -- --port 8791
+ *     --scope-root /audi-a3 --scope-make Audi --scope-series A3
+ *     --max-result-pages 3 --require-child-structure --stop-on-unknown
+ *     --makes Audi
+ *
+ * KAPSAM UZANTIDAN DEGIL BURADAN VERILIR. Uzanti guvenilmez bir istemcidir;
+ * kapsami genisletebilseydi koruma koruma olmazdi.
+ *
  * JETON: kosuya ozel yetenek jetonu URETILIR ve yalnizca gitignore'lu bir
  * dosyaya yazilir. Normal gunlukte DEGERI GORUNMEZ; sadece dosya YOLU basilir.
  * Kullanici jetonu uzanti panelinden bir kez yapistirir.
@@ -22,6 +31,7 @@ import {
   ReferenceLookup,
 } from './autopilot-session';
 import { SnapshotFingerprintLookup } from './snapshot-fingerprint-lookup';
+import { AutopilotScope, normalizeScopeRoot } from './scope-guard';
 import { resolveSnapshotPath } from '../snapshot-reference';
 
 const DEFAULT_SOURCE = 'sahibinden';
@@ -37,6 +47,7 @@ interface CliArgs {
   windowSpec: string | null;
   reference: 'auto' | 'off';
   makes: string[];
+  scope: AutopilotScope | null;
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -47,12 +58,42 @@ function parseArgs(argv: string[]): CliArgs {
     return inline ? inline.slice(name.length + 3) : null;
   };
 
+  const has = (name: string) => argv.includes(`--${name}`);
+
   const makes = (get('makes') || '')
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
 
+  const scopeRoot = get('scope-root');
+  const scopeMake = get('scope-make');
+  const scopeSeries = get('scope-series');
+  const maxResultPages = get('max-result-pages');
+
+  let scope: AutopilotScope | null = null;
+  if (scopeRoot || scopeMake || scopeSeries) {
+    if (!scopeRoot || !scopeMake || !scopeSeries) {
+      throw new Error(
+        'Scope guard needs --scope-root, --scope-make and --scope-series together ' +
+          '(a partial scope would silently allow expansion).',
+      );
+    }
+    const pages = Number(maxResultPages || 3);
+    if (!Number.isInteger(pages) || pages < 1) {
+      throw new Error('--max-result-pages must be a positive integer');
+    }
+    scope = {
+      rootPath: normalizeScopeRoot(scopeRoot, get('base-url') || DEFAULT_BASE_URL),
+      make: scopeMake,
+      series: scopeSeries,
+      maxResultPages: pages,
+      requireChildStructure: has('require-child-structure'),
+      stopOnUnknown: has('stop-on-unknown'),
+    };
+  }
+
   return {
+    scope,
     port: Number(get('port') || 8791),
     runId: get('run-id') || `autopilot-${new Date().toISOString().slice(0, 10)}`,
     source: get('source') || DEFAULT_SOURCE,
@@ -126,6 +167,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
     staging,
     checkpointFile,
     reference: reference.lookup,
+    scope: args.scope,
     snapshotPath: args.reference === 'off' ? null : resolveSnapshotPath(),
   };
 
@@ -164,6 +206,16 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   console.log(`  run dir     ${runDir}`);
   console.log(`  reference   ${reference.describe}`);
   console.log(`  window      ${args.windowSpec || 'unbounded'}`);
+  console.log(
+    `  scope       ${
+      args.scope
+        ? `${args.scope.make} / ${args.scope.series} under ${args.scope.rootPath}, ` +
+          `max ${args.scope.maxResultPages} page(s)/leaf` +
+          `${args.scope.requireChildStructure ? ', stop if child structure unreadable' : ''}` +
+          `${args.scope.stopOnUnknown ? ', stop if count unreadable' : ''}`
+        : 'UNBOUNDED (full monthly refresh)'
+    }`,
+  );
   console.log(`  token file  ${tokenPath}`);
   console.log('  -> Paste the token file contents into the extension popup once.');
   console.log('');

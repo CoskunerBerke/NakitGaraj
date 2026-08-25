@@ -91,6 +91,19 @@ export interface ObservedChildNode {
   count: number;
 }
 
+/**
+ * Alt kategori yapisinin OKUNABILIRLIGI.
+ *
+ * 'READ'       kategori kapsayicisi bulundu ve sayili baglantilar okundu
+ * 'EMPTY'      kapsayici bulundu, sayili alt kategori yok (gercek yaprak olabilir)
+ * 'UNREADABLE' kategori kapsayicisi hic bulunamadi — secici TUTMUYOR olabilir
+ *
+ * 'EMPTY' ile 'UNREADABLE' ayrimi onemlidir: ilki kaynagin dogru cevabi,
+ * ikincisi BIZIM secicimizin basarisizligi olabilir. Duman testinde ikisi de
+ * durdurulur; normal kosuda yalnizca >1000 dugumde onem tasir.
+ */
+export type ChildStructureSignal = 'READ' | 'EMPTY' | 'UNREADABLE';
+
 /** Uzantidan gelen kesif raporu: sayim + gercekten gorunen cocuklar. */
 export interface DiscoveryReport {
   runId: string;
@@ -98,6 +111,8 @@ export interface DiscoveryReport {
   /** Kaynagin bildirdigi ilan sayisi. Okunamadiysa null — "kucuk" VARSAYILMAZ. */
   count: number | null;
   children: ObservedChildNode[];
+  /** Alt kategori seciciler tuttu mu. Verilmezse 'READ' varsayilir (geriye donuk). */
+  childStructure?: ChildStructureSignal;
   /** Kimligi koruyan ikincil bolumler (orn. yil araligi), kaynak destekliyorsa. */
   secondaryPartitions?: ObservedChildNode[];
 }
@@ -158,6 +173,15 @@ export interface AutopilotStatus {
   unchangedCount: number;
   duplicateCount: number;
   unsplittable: Array<{ path: string; label: string; count: number | null }>;
+  /**
+   * Kapsam korumasi aktif mi (duman/test kosusu). Aktifse kosu tanimi geregi
+   * KISMIDIR: aylik tazeleme olarak TAMAMLANMIS sayilamaz.
+   */
+  scopeLimited: boolean;
+  /** Kapsam ozeti (aktif degilse null). */
+  scope: string | null;
+  /** Kapsam disinda kaldigi icin kuyruga ALINMAYAN dugumler. */
+  outOfScope: Array<{ path: string; label: string; reason: string }>;
   /** Aylik kosu SOZLESMESI: yalnizca her sey tamamsa true. */
   runComplete: boolean;
   deadlineAt: string | null;

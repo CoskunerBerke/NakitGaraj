@@ -25,6 +25,7 @@ import {
   PageBatchResult,
   WorkItemView,
 } from './autopilot-contracts';
+import { AutopilotScope, sameScope, ScopeGuard, ScopeRejection } from './scope-guard';
 import { AtomicChecksummedFile } from '../checkpoint-store';
 import { StagingStore } from '../staging-store';
 import { RawObservedListing } from '../contracts';
@@ -53,8 +54,18 @@ export const MAX_PARTITION_DEPTH = 8;
 export type IncompleteReason =
   | 'NO_TRUTHFUL_PARTITION'
   | 'UNKNOWN_COUNT'
+  | 'UNKNOWN_CATEGORY_STRUCTURE'
   | 'EXCEEDS_SOURCE_PAGE_LIMIT'
-  | 'MAX_DEPTH_REACHED';
+  | 'MAX_DEPTH_REACHED'
+  /** Kapsam korumasi kesti — veri butunlugu hatasi DEGIL, kasitli test siniri. */
+  | 'SCOPE_PAGE_LIMIT';
+
+/** Kapsam disinda kaldigi icin kuyruga alinmayan dugum. */
+export interface OutOfScopeNode {
+  path: string;
+  label: string;
+  reason: ScopeRejection;
+}
 
 export interface IncompleteNode {
   path: string;
@@ -119,6 +130,9 @@ export interface AutopilotCheckpointPayload {
   seenPaths: string[];
   counters: Counters;
   incomplete: IncompleteNode[];
+  outOfScope: OutOfScopeNode[];
+  /** Kapsam checkpoint'te tasinir: devam ederken GENISLETILEMEZ. */
+  scope: AutopilotScope | null;
   stagingFile: string;
   snapshotPath: string | null;
   deadlineAtMs: number | null;
@@ -132,6 +146,8 @@ export interface AutopilotSessionOptions {
   staging: StagingStore;
   checkpointFile: AtomicChecksummedFile<AutopilotCheckpointPayload>;
   reference: ReferenceLookup;
+  /** Duman/test kapsami. null = sinirsiz (normal aylik kosu). */
+  scope?: AutopilotScope | null;
   snapshotPath?: string | null;
   /** Yurutme penceresi sonu (epoch ms). null = sinirsiz. */
   deadlineAtMs?: number | null;
@@ -157,6 +173,8 @@ export class AutopilotSession {
   private readonly seenPaths = new Set<string>();
   private counters: Counters = emptyCounters();
   private incomplete: IncompleteNode[] = [];
+  private outOfScope: OutOfScopeNode[] = [];
+  private guard: ScopeGuard | null;
   private deduper = new GlobalListingDeduper();
   private createdAt = new Date().toISOString();
   private updatedAt = this.createdAt;
@@ -167,6 +185,12 @@ export class AutopilotSession {
   private constructor(private readonly opts: AutopilotSessionOptions) {
     this.now = opts.now || (() => Date.now());
     this.deadlineAtMs = opts.deadlineAtMs ?? null;
+    this.guard = opts.scope ? new ScopeGuard(opts.scope) : null;
+  }
+
+  /** Yaprak basina izin verilen azami sayfa: kaynak tavani VE kapsam tavani. */
+  private get pageCeiling(): number {
+    return Math.min(MAX_PAGES_PER_LEAF, this.guard ? this.guard.maxResultPages : MAX_PAGES_PER_LEAF);
   }
 
   // ---------------------------------------------------------------- lifecycle
@@ -183,7 +207,21 @@ export class AutopilotSession {
     opts.staging.open();
 
     for (const root of roots) {
-      session.enqueue({ path: root.path, label: root.label, count: null }, 0, []);
+      if (!session.enqueue({ path: root.path, label: root.label, count: null }, 0, [])) {
+        const rejected = session.outOfScope.find(
+          (n) => normalizeNodePath(opts.baseUrl, root.path) === n.path,
+        );
+        if (rejected) {
+          // Kok bile kapsam disindaysa kosu BASLAMAZ: sessizce bos kuyruk yerine acik hata.
+          throw new AutopilotProtocolError(
+            `Root "${root.path}" is outside the configured scope ` +
+              `(${session.guard!.describe()}): ${rejected.reason}`,
+          );
+        }
+      }
+    }
+    if (session.items.length === 0) {
+      throw new AutopilotProtocolError('start: no root survived the scope guard');
     }
     session.state = 'RUNNING';
     session.persist();
@@ -217,6 +255,23 @@ export class AutopilotSession {
     for (const p of payload.seenPaths) session.seenPaths.add(p);
     session.counters = { ...emptyCounters(), ...payload.counters };
     session.incomplete = [...payload.incomplete];
+    session.outOfScope = [...(payload.outOfScope || [])];
+
+    /**
+     * Kapsam GENISLETILEMEZ. Checkpoint kapsamli bir kosuya aitse, devam
+     * ederken farkli (ya da kaldirilmis) bir kapsamla surdurmek, dar bir duman
+     * kosusunu sessizce genis bir gezintiye cevirirdi.
+     */
+    const storedScope = payload.scope ?? null;
+    const requestedScope = opts.scope ?? null;
+    if (!sameScope(storedScope, requestedScope)) {
+      throw new AutopilotProtocolError(
+        'Resume refused: the checkpoint was written under a different scope. ' +
+          'Restart the bridge with the same scope flags, or start a new run id.',
+      );
+    }
+    session.guard = storedScope ? new ScopeGuard(storedScope) : null;
+
     session.createdAt = payload.createdAt;
     session.updatedAt = payload.updatedAt;
     session.lastError = payload.lastError;
@@ -309,6 +364,17 @@ export class AutopilotSession {
     }
 
     const page = item.pagesDone + 1;
+    if (page > this.pageCeiling) {
+      /**
+       * Buraya normalde gelinmez (yaprak tavanda tamamlanir). Bozuk ya da elle
+       * duzenlenmis bir checkpoint tavani asan sayfa uretmesin diye SERT kapi:
+       * is kapatilir ve bir sonraki yonerge uretilir.
+       */
+      item.status = 'COMPLETE';
+      this.pushIncomplete(item, this.guard ? 'SCOPE_PAGE_LIMIT' : 'EXCEEDS_SOURCE_PAGE_LIMIT');
+      this.persist();
+      return this.nextDirective();
+    }
     return {
       type: 'COLLECT_PAGE',
       runId: this.opts.runId,
@@ -336,14 +402,26 @@ export class AutopilotSession {
     const item = this.requireItem(report.nodePath, 'DISCOVER');
 
     const count = normalizeCount(report.count);
+    const structure = report.childStructure ?? 'READ';
+
+    /**
+     * SECICI DOGRULAMA MODU (duman kosusu). Alt kategori yapisini okuyamadiysak
+     * bunu "cocuk yok" diye yorumlamak, bir secici hatasini veri gercegine
+     * cevirmek olurdu. Tahmin YOK: dur ve kullaniciya sor.
+     */
+    if (this.guard && this.guard.config.requireChildStructure && structure !== 'READ') {
+      return this.haltOnUnreadable(item, 'UNKNOWN_CATEGORY_STRUCTURE', structure);
+    }
+
+    /** Sayim okunamadi: "kucuk" VARSAYILMAZ; duman modunda kosu durur. */
+    if (count === null && this.guard && this.guard.config.stopOnUnknown) {
+      return this.haltOnUnreadable(item, 'UNKNOWN_COUNT', structure);
+    }
 
     if (count !== null && count <= LEAF_CAP) {
       item.kind = 'LEAF';
       item.count = count;
-      item.expectedPages = Math.min(
-        expectedPagesFor(count, AUTOPILOT_PAGE_SIZE),
-        MAX_PAGES_PER_LEAF,
-      );
+      item.expectedPages = Math.min(expectedPagesFor(count, AUTOPILOT_PAGE_SIZE), this.pageCeiling);
       item.status = 'PENDING';
       this.persist();
       return { outcome: 'LEAF', enqueued: 0 };
@@ -502,7 +580,8 @@ export class AutopilotSession {
     this.counters.parseFailures += Number(batch.parseFailures) || 0;
 
     const expectedPages = item.expectedPages ?? 1;
-    const atSourceCap = batch.page >= MAX_PAGES_PER_LEAF;
+    const ceiling = this.pageCeiling;
+    const atCeiling = batch.page >= ceiling;
 
     if (repeated) {
       result.paginationLoopStopped = true;
@@ -515,16 +594,23 @@ export class AutopilotSession {
        * bildirilmis. Sessizce kesmek veri kaybidir; kaynak tavanina kadar
        * devam edilir.
        */
-      item.expectedPages = Math.min(expectedPages + 1, MAX_PAGES_PER_LEAF);
+      item.expectedPages = Math.min(expectedPages + 1, ceiling);
     }
 
-    if (item.status !== 'COMPLETE' && atSourceCap) {
-      if (batch.hasNextPage) {
-        // Tavanda hala devam var: bu yaprak KAYNAKTA TAM GORUNMUYOR.
+    if (item.status !== 'COMPLETE' && atCeiling) {
+      if (!batch.hasNextPage) {
+        item.status = 'COMPLETE';
+      } else if (this.guard) {
+        /**
+         * KAPSAM tavani: kasitli test siniri, veri butunlugu hatasi degil.
+         * Is kapatilir ama kosu EKSIK isaretlenir — bu yaprak tam degildir.
+         */
+        item.status = 'COMPLETE';
+        this.pushIncomplete(item, 'SCOPE_PAGE_LIMIT');
+      } else {
+        // Kaynak tavaninda hala devam var: bu yaprak KAYNAKTA TAM GORUNMUYOR.
         item.status = 'FAILED';
         this.pushIncomplete(item, 'EXCEEDS_SOURCE_PAGE_LIMIT');
-      } else {
-        item.status = 'COMPLETE';
       }
     }
 
@@ -563,6 +649,9 @@ export class AutopilotSession {
       unchangedCount: this.counters.unchangedCount,
       duplicateCount: this.counters.duplicateCount,
       unsplittable: this.incomplete.map((n) => ({ path: n.path, label: n.label, count: n.count })),
+      scopeLimited: this.guard !== null,
+      scope: this.guard ? this.guard.describe() : null,
+      outOfScope: this.outOfScope.map((n) => ({ ...n })),
       runComplete: this.isRunComplete(),
       deadlineAt: this.deadlineAtMs === null ? null : new Date(this.deadlineAtMs).toISOString(),
       lastError: this.lastError,
@@ -576,8 +665,17 @@ export class AutopilotSession {
    *   tum isler COMPLETE + bloke/hatali is yok + bolunemeyen dugum yok.
    */
   isRunComplete(): boolean {
+    /**
+     * Kapsamli bir kosu TANIMI GEREGI kismidir: hedef disi her sey hic
+     * gezilmemistir. Aylik tazeleme olarak "tamam" demek yanlis olurdu.
+     */
+    if (this.guard) return false;
     if (this.incomplete.length > 0) return false;
     return this.items.every((i) => i.status === 'COMPLETE');
+  }
+
+  outOfScopeNodes(): OutOfScopeNode[] {
+    return this.outOfScope.map((n) => ({ ...n }));
   }
 
   incompleteNodes(): IncompleteNode[] {
@@ -620,6 +718,18 @@ export class AutopilotSession {
   ): boolean {
     const key = normalizeNodePath(this.opts.baseUrl, node.path);
     if (this.seenPaths.has(key)) return false; // ayni dugum iki kez islenmez
+
+    // KAPSAM KAPISI: hedef disi dugum kuyruga HIC girmez, sebebiyle kaydedilir.
+    if (this.guard) {
+      const decision = this.guard.evaluate(key);
+      if (!decision.allowed) {
+        if (!this.outOfScope.some((n) => n.path === key)) {
+          this.outOfScope.push({ path: key, label: node.label, reason: decision.reason! });
+        }
+        return false;
+      }
+    }
+
     this.seenPaths.add(key);
 
     const count = normalizeCount(node.count);
@@ -631,7 +741,7 @@ export class AutopilotSession {
       trail: [...parentTrail, node.label],
       count,
       expectedPages: isLeaf
-        ? Math.min(expectedPagesFor(count as number, AUTOPILOT_PAGE_SIZE), MAX_PAGES_PER_LEAF)
+        ? Math.min(expectedPagesFor(count as number, AUTOPILOT_PAGE_SIZE), this.pageCeiling)
         : null,
       pagesDone: 0,
       status: 'PENDING',
@@ -640,6 +750,26 @@ export class AutopilotSession {
       lastPageIds: [],
     });
     return true;
+  }
+
+  /**
+   * Kaynak sayfasi TAHMIN gerektiren bir hale geldi (sayim ya da kategori
+   * yapisi okunamiyor). Kosu DURUR: is bloke edilir, sebep kaydedilir,
+   * checkpoint yazilir ve kullanicidan sayfaya bakmasi istenir.
+   */
+  private haltOnUnreadable(item: WorkItem, reason: IncompleteReason, structure: string) {
+    item.status = 'BLOCKED';
+    this.pushIncomplete(item, reason);
+    this.state = 'ERROR';
+    this.lastError =
+      reason +
+      ' at "' +
+      item.path +
+      '" (childStructure=' +
+      structure +
+      '). Source selectors could not read the page truthfully; nothing was guessed.';
+    this.persist();
+    return { outcome: 'INCOMPLETE' as const, enqueued: 0 };
   }
 
   private markIncomplete(item: WorkItem, reason: IncompleteReason) {
@@ -697,6 +827,8 @@ export class AutopilotSession {
       seenPaths: [...this.seenPaths],
       counters: this.counters,
       incomplete: this.incomplete,
+      outOfScope: this.outOfScope,
+      scope: this.guard ? this.guard.config : null,
       stagingFile: this.opts.staging.path,
       snapshotPath: this.opts.snapshotPath ?? null,
       deadlineAtMs: this.deadlineAtMs,

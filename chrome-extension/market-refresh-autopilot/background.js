@@ -214,6 +214,7 @@ async function runLoop() {
             nodePath: directive.nodePath,
             count: observation.count,
             children: observation.children,
+            childStructure: observation.childStructure,
           },
         });
       } else {
