@@ -10,8 +10,34 @@ tamamlanma sözleşmesi) `127.0.0.1` üzerindeki yerel köprüde yaşar.
   proxy/hesap rotasyonu **yoktur**.
 - Giriş/SMS otomasyonu yapmaz. Bunlar **manuel** işlerdir.
 - Hesap bilgisi saklamaz.
-- Üretim JWT/admin kimliğini kullanmaz; koşuya özel yerel bir yetenek jetonu vardır.
+- Üretim JWT/admin kimliğini kullanmaz.
 - Satılabilir uygulamaya veya snapshot DB'sine yazmaz.
+
+## Köprü güvenliği — jeton yok
+
+Dönen yetenek jetonu **kaldırıldı**: tamamen yerel bu iş akışında yalnızca
+sürtünme ve tekrarlanan 401 üretiyordu. Yerine dört katman var:
+
+| Katman | Ne yapar |
+| --- | --- |
+| `127.0.0.1` bağlama | LAN'dan erişilemez. `0.0.0.0` asla |
+| Geri döngü bağlantısı | Uzak istemci reddedilir |
+| `Host` doğrulaması | DNS rebinding'i keser |
+| Origin + `X-NakitGaraj-Extension: 1` | Web sayfalarını dışarıda tutar |
+
+Son satır asıl korumadır: özel bir başlık, tarayıcıyı ön-kontrole (preflight)
+zorlar; ön-kontrole yalnızca `chrome-extension://` kökenine izin verildiği için
+sıradan bir web sayfası isteği **hiç gönderemez**. Başlık **gizli değildir** ve
+kimlik doğrulaması değildir. Tüm yollarda zorunludur — basit bir cross-origin
+GET ön-kontrolsüz gider ve `GET /autopilot/next` durum değiştirir.
+
+> Dürüstlük notu: bu katmanların hiçbiri **aynı makinedeki başka bir yerel
+> süreçten** korumaz; o süreç iki başlığı da gönderebilir. Köprü yalnızca siz
+> başlattığınızda çalışır, yalnızca gitignore'lu bir staging dizinine yazar ve
+> snapshot DB'sine hiçbir şekilde dokunmaz.
+
+Eski koşu dizinlerinde kalan `bridge-token.txt` dosyaları artık işe yaramaz;
+dilerseniz silebilirsiniz.
 
 ## 1) Köprüyü başlat
 
@@ -25,8 +51,8 @@ cd backend && npm run market:autopilot:bridge -- --port 8791 --window 02:00-10:0
 cd backend && npm run market:autopilot:bridge -- --port 8791 --reference off
 ```
 
-Başlangıç çıktısı bağlanma adresini, koşu dizinini ve **jeton dosyasının yolunu**
-yazar. Jetonun kendisi normal günlüğe **yazılmaz**; dosyadan kopyalanır.
+Başlangıç çıktısı bağlanma adresini ve koşu dizinini yazar. Kopyalanacak jeton
+**yoktur**.
 
 ## 1b) İLK CANLI KOŞU: kapsam korumalı duman testi
 
@@ -89,10 +115,10 @@ seçici doğrulaması için bu da yeterlidir.
 
 Chrome Web Store gerekmez.
 
-## 3) Eşleştir ve başlat
+## 3) Bağlan ve başlat
 
-1. Uzantı panelini açın, köprü adresini (`http://127.0.0.1:8791`) ve
-   `bridge-token.txt` içeriğini yapıştırıp **Kaydet**'e basın
+1. Uzantı panelini açın, köprü adresini (`http://127.0.0.1:8791`) yazıp
+   **Kaydet**'e basın. Panelde **Köprü: BAĞLI** görmelisiniz. Jeton yoktur
 2. Normal Chrome'da kaynak siteye **elle giriş yapın** (gerekiyorsa SMS'i elle girin)
 3. Toplanacak kategori sayfasını açın (örn. tek model denemesi için Audi A3)
 4. Panelden **Aylık tazelemeyi başlat**'a basın
@@ -110,8 +136,10 @@ sayfa tıklamak gerekmez: uzantı kategori ağacını gezer, >1000 düğümleri 
 | `PAUSED` | Kullanıcı duraklattı; `Devam et` kaldığı yerden sürer |
 | `ACCESS_RESTRICTED` | Erişim kısıtlandı. **Manuel müdahale gerekiyor**: oturumu elle düzeltin, sonra `Devam et` |
 | `DEADLINE_REACHED` | Yürütme penceresi kapandı; bir sonraki pencerede `Devam et` |
-| `COMPLETE` | Kuyruk bitti (koşunun *tam* olup olmadığı ayrı gösterilir) |
-| `ERROR` | Köprü/gezinme hatası; sessiz yeniden deneme yapılmaz |
+| `COMPLETE` | Kuyruk bitti **ve koşu gerçekten tam**. Başka hiçbir durumda gösterilmez |
+| `SMOKE_LIMIT_REACHED` | Kuyruk bitti; tek eksiklik duman testinin kasıtlı sayfa kırpması |
+| `INCOMPLETE` | Kuyruk bitti ama bölünemeyen/bloke/güvenilmez düğüm var |
+| `ERROR` | Köprü/gezinme hatası ya da güvenilmez kaynak okuması; sessiz yeniden deneme yapılmaz |
 
 **Koşu tam mı** alanı yalnızca şu durumda `EVET` olur: tüm bölümler tamamlandı,
 bölünemeyen aşırı büyük düğüm yok, bloke/başarısız iş yok.
@@ -120,7 +148,7 @@ bölünemeyen aşırı büyük düğüm yok, bloke/başarısız iş yok.
 
 | Yetki | Sebep |
 | --- | --- |
-| `storage` | Köprü adresi/jetonu ve koşu bayrağı |
+| `storage` | Köprü adresi ve koşu bayrağı (kimlik bilgisi saklanmaz) |
 | `scripting` | Kaynak sekmesine gözlem betiğini enjekte etmek |
 | `tabs` | Tek adanmış kaynak sekmesini yönetmek |
 | `alarms` | MV3 servis çalışanı öldürülürse döngüyü ayağa kaldırmak |

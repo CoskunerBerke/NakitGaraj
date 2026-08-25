@@ -59,6 +59,13 @@ input {
 
 .hint { margin: 0 0 8px; font-size: 11px; color: var(--muted); }
 
+.bridge-line {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; margin: 0 0 8px; font-size: 11px; color: var(--muted);
+}
+.conn { font-weight: 600; color: var(--danger); }
+.conn[data-connected="true"] { color: var(--ok); }
+
 .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .controls .primary { grid-column: 1 / -1; }
 

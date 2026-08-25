@@ -1,20 +1,35 @@
 /**
- * YEREL KOPRU — 127.0.0.1'E BAGLI, YETENEK JETONUYLA KORUNUR.
+ * YEREL KOPRU — YALNIZCA 127.0.0.1, UZANTI ICIN.
  *
- * GUVENLIK DURUSU:
- *   - Yalnizca 127.0.0.1'e baglanir. 0.0.0.0 ASLA. Uzaktan erisilebilir bir
- *     yuzey acmak, yerel bir yardimci arac icin gereksiz bir risktir.
- *   - URETIM JWT/ADMIN KIMLIGI KULLANILMAZ. Kosuya ozel, kisa omurlu bir
- *     yetenek jetonu vardir; uygulamanin kimlik alani buraya sizmaz.
- *   - Jeton `X-Autopilot-Token` basliginda gelir ve SABIT ZAMANLI karsilastirilir.
- *   - Ozel baslik gerektigi icin tarayici on-kontrol (preflight) zorunlu olur;
- *     Origin yalnizca `chrome-extension://` olabilir. Boylece rastgele bir web
- *     sayfasi kopruyu CSRF ile surukleyemez.
+ * JETON YOK. Donen bir yetenek jetonu bu tamamen yerel is akisinda yalnizca
+ * surtunme ve tekrarlanan 401 uretiyordu; kullanicinin her kosudan sonra bir
+ * dosya bulup jeton yapistirmasi guvenlik degil zahmetti.
+ *
+ * YERINE GECEN KORUMA KATMANLARI:
+ *   - Yalnizca 127.0.0.1'e baglanir. 0.0.0.0 ASLA. LAN'dan erisilemez.
+ *   - Baglanti geri dongu adresinden gelmeli (uzak istemci reddedilir).
  *   - Host basligi 127.0.0.1/localhost olmalidir (DNS rebinding korumasi).
- *   - Govde boyutu sinirlidir; JSON disi/bozuk govde 400 olur, kosu BOZULMAZ.
- *   - Jeton DEGERI normal gunlukte YAZILMAZ.
+ *   - Origin VARSA yalnizca `chrome-extension://` olabilir. Sirandan bir web
+ *     sayfasi cross-origin fetch'te Origin'i HER ZAMAN gonderir, dolayisiyla
+ *     bu tek kural web sayfalarini disarida tutar.
+ *   - Sabit, GIZLI OLMAYAN bir uzanti isareti (`X-NakitGaraj-Extension: 1`)
+ *     TUM yollarda zorunludur. Amaci kimlik dogrulamak DEGIL, tarayiciyi
+ *     on-kontrole (preflight) zorlamaktir; on-kontrol yalnizca uzanti
+ *     kokenine cevap aldigi icin web sayfasi istegi hic gonderemez.
+ *
+ * ISARET NEDEN /status VE /next DAHIL HER YOLDA:
+ *   Basit (simple) bir cross-origin GET on-kontrol GEREKTIRMEZ; tarayici
+ *   yaniti gizler ama istek SUNUCUYA ULASIR. `GET /autopilot/next` durum
+ *   degistirir (isi IN_PROGRESS yapar, checkpoint yazar). Isareti yalnizca
+ *   POST'larda istemek bu yolu acik birakirdi.
+ *
+ * URETIM JWT/ADMIN KIMLIGI KULLANILMAZ.
+ *
+ * DURUSTLUK NOTU: bu katmanlarin hicbiri AYNI MAKINEDEKI baska bir yerel
+ * surece karsi koruma degildir — o surec iki basligi da kolayca gonderebilir.
+ * Kopru yalnizca kullanici baslattiginda calisir, yalnizca gitignore'lu bir
+ * staging dizinine yazar ve snapshot DB'sine hicbir sekilde dokunmaz.
  */
-import * as crypto from 'crypto';
 import * as http from 'http';
 import { AddressInfo } from 'net';
 import {
@@ -26,7 +41,12 @@ import {
 } from './autopilot-contracts';
 import { AutopilotSession } from './autopilot-session';
 
-export const AUTOPILOT_TOKEN_HEADER = 'x-autopilot-token';
+/**
+ * Sabit, GIZLI OLMAYAN uzanti isareti. Kimlik dogrulama DEGILDIR; ozel baslik
+ * oldugu icin tarayiciyi on-kontrole zorlar ve web sayfasi isteklerini keser.
+ */
+export const AUTOPILOT_EXTENSION_HEADER = 'x-nakitgaraj-extension';
+export const AUTOPILOT_EXTENSION_MARKER = '1';
 
 /** 4 MB: 50 kartlik bir sayfa paketi icin fazlasiyla yeterli. */
 export const MAX_BODY_BYTES = 4 * 1024 * 1024;
@@ -43,7 +63,6 @@ export interface BridgeSessionProvider {
 }
 
 export interface BridgeOptions {
-  token: string;
   provider: BridgeSessionProvider;
   /** 0 = isletim sistemi bos port secsin (testler icin). */
   port?: number;
@@ -60,14 +79,9 @@ interface RequestContext {
 
 export class AutopilotBridge {
   private server: http.Server | null = null;
-  private readonly tokenBuffer: Buffer;
   private readonly log: (line: string) => void;
 
   constructor(private readonly opts: BridgeOptions) {
-    if (!opts.token || opts.token.length < 32) {
-      throw new Error('AutopilotBridge: capability token must be at least 32 characters');
-    }
-    this.tokenBuffer = Buffer.from(opts.token, 'utf-8');
     this.log = opts.log || (() => undefined);
   }
 
@@ -124,10 +138,13 @@ export class AutopilotBridge {
       return;
     }
 
-    // 4) Yetenek jetonu — sabit zamanli.
-    if (!this.hasValidToken(req)) {
-      this.log(`${req.method} ${req.url} -> 401`);
-      return sendJson(res, 401, { error: 'UNAUTHORIZED' }, origin);
+    /**
+     * 4) Uzanti isareti — TUM yollarda. Gizli degildir; on-kontrolu zorunlu
+     *    kilarak web sayfasi isteklerini keser. Eksikse istek reddedilir.
+     */
+    if (!hasExtensionMarker(req)) {
+      this.log(`${req.method} ${req.url} -> 403 (missing extension marker)`);
+      return sendJson(res, 403, { error: 'MISSING_EXTENSION_MARKER' }, origin);
     }
 
     let body: unknown = null;
@@ -226,21 +243,15 @@ export class AutopilotBridge {
     return session;
   }
 
-  private hasValidToken(req: http.IncomingMessage): boolean {
-    const raw = req.headers[AUTOPILOT_TOKEN_HEADER];
-    const provided = Array.isArray(raw) ? raw[0] : raw;
-    if (typeof provided !== 'string' || provided.length === 0) return false;
-    const providedBuffer = Buffer.from(provided, 'utf-8');
-    if (providedBuffer.length !== this.tokenBuffer.length) return false;
-    return crypto.timingSafeEqual(providedBuffer, this.tokenBuffer);
-  }
+}
+
+function hasExtensionMarker(req: http.IncomingMessage): boolean {
+  const raw = req.headers[AUTOPILOT_EXTENSION_HEADER];
+  const provided = Array.isArray(raw) ? raw[0] : raw;
+  return typeof provided === 'string' && provided.trim() === AUTOPILOT_EXTENSION_MARKER;
 }
 
 // ------------------------------------------------------------------ helpers
-
-export function generateCapabilityToken(): string {
-  return crypto.randomBytes(32).toString('hex');
-}
 
 function isLoopbackAddress(remote: string): boolean {
   const addr = remote.replace(/^::ffff:/, '');
@@ -259,7 +270,7 @@ function corsHeaders(origin: string | null): Record<string, string> {
   if (origin && isExtensionOrigin(origin)) {
     headers['Access-Control-Allow-Origin'] = origin;
     headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS';
-    headers['Access-Control-Allow-Headers'] = `content-type, ${AUTOPILOT_TOKEN_HEADER}`;
+    headers['Access-Control-Allow-Headers'] = `content-type, ${AUTOPILOT_EXTENSION_HEADER}`;
     headers['Access-Control-Max-Age'] = '600';
   }
   return headers;

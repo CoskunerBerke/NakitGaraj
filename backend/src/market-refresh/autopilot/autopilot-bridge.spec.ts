@@ -1,9 +1,10 @@
 /**
  * YEREL KOPRU — GUVENLIK VE DOGRULAMA SOZLESMELERI.
  *
- * Kopru yerel bir yardimci arac olsa da guvenilmez bir istemciye (tarayici
- * uzantisi) acilir. Bu testler jetonsuz erisimin, yabanci Origin'in, sahte
- * Host'un ve bozuk govdenin kosuyu suruklemesini imkansiz kilar.
+ * Kopruda JETON YOKTUR. Koruma dort katmandan gelir: geri dongu baglantisi,
+ * geri dongu Host'u, uzanti kokeni ve tum yollarda zorunlu (gizli olmayan)
+ * uzanti isareti. Bu testler bir web sayfasinin ya da bicimsiz bir istegin
+ * kosuyu suruklemesini imkansiz kilar.
  */
 import * as fs from 'fs';
 import * as http from 'http';
@@ -13,9 +14,9 @@ import { AtomicChecksummedFile } from '../checkpoint-store';
 import { StagingStore } from '../staging-store';
 import {
   AutopilotBridge,
-  AUTOPILOT_TOKEN_HEADER,
+  AUTOPILOT_EXTENSION_HEADER,
+  AUTOPILOT_EXTENSION_MARKER,
   BridgeSessionProvider,
-  generateCapabilityToken,
 } from './autopilot-bridge';
 import {
   AutopilotCheckpointPayload,
@@ -31,7 +32,6 @@ const EXTENSION_ORIGIN = `chrome-extension://${'a'.repeat(32)}`;
 let tmpDir: string;
 let bridge: AutopilotBridge;
 let port: number;
-let token: string;
 let session: AutopilotSession | null;
 
 function sessionOptions(): AutopilotSessionOptions {
@@ -50,7 +50,8 @@ function sessionOptions(): AutopilotSessionOptions {
 }
 
 interface CallOptions {
-  token?: string | null;
+  /** null = isareti HIC gonderme; string = bu degeri gonder. */
+  marker?: string | null;
   origin?: string | null;
   host?: string;
   body?: unknown;
@@ -63,8 +64,8 @@ function call(
   options: CallOptions = {},
 ): Promise<{ status: number; headers: http.IncomingHttpHeaders; json: any }> {
   const headers: Record<string, string> = {};
-  const authToken = options.token === undefined ? token : options.token;
-  if (authToken !== null) headers[AUTOPILOT_TOKEN_HEADER] = authToken;
+  const marker = options.marker === undefined ? AUTOPILOT_EXTENSION_MARKER : options.marker;
+  if (marker !== null) headers[AUTOPILOT_EXTENSION_HEADER] = marker;
   if (options.origin) headers['origin'] = options.origin;
   if (options.host) headers['host'] = options.host;
 
@@ -108,7 +109,6 @@ async function startRun() {
 
 beforeEach(async () => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ng-bridge-'));
-  token = generateCapabilityToken();
   session = null;
 
   const provider: BridgeSessionProvider = {
@@ -126,7 +126,7 @@ beforeEach(async () => {
     },
   };
 
-  bridge = new AutopilotBridge({ token, provider, port: 0 });
+  bridge = new AutopilotBridge({ provider, port: 0 });
   const bound = await bridge.listen();
   port = bound.port;
   expect(bound.host).toBe('127.0.0.1');
@@ -156,33 +156,63 @@ describe('BRIDGE BIND', () => {
 
 // -------------------------------------------------------------------- capability
 
-describe('BRIDGE AUTHORIZATION', () => {
-  it('rejects a request with no capability token', async () => {
-    const res = await call('GET', '/autopilot/status', { token: null });
-    expect(res.status).toBe(401);
-  });
-
-  it('rejects a wrong token of the same length', async () => {
-    const wrong = 'b'.repeat(token.length);
-    const res = await call('GET', '/autopilot/status', { token: wrong });
-    expect(res.status).toBe(401);
-  });
-
-  it('rejects a wrong token of a different length', async () => {
-    const res = await call('GET', '/autopilot/status', { token: 'short' });
-    expect(res.status).toBe(401);
-  });
-
-  it('accepts the issued token', async () => {
+describe('BRIDGE NEEDS NO SECRET', () => {
+  it('serves status with no token of any kind', async () => {
     const res = await call('GET', '/autopilot/status');
     expect(res.status).toBe(200);
     expect(res.json.state).toBe('IDLE');
   });
 
-  it('never uses production auth: no JWT or admin header is accepted', async () => {
-    const res = await call('GET', '/autopilot/status', { token: null });
-    expect(res.status).toBe(401);
+  it('starts a run with no token of any kind', async () => {
+    const res = await startRun();
+    expect(res.status).toBe(200);
+    expect(res.json.state).toBe('RUNNING');
+  });
+
+  it('never answers with an authentication challenge', async () => {
+    const res = await call('GET', '/autopilot/status');
+    expect(res.status).not.toBe(401);
     expect(res.headers['www-authenticate']).toBeUndefined();
+  });
+});
+
+describe('BRIDGE EXTENSION MARKER', () => {
+  /**
+   * Isaret gizli DEGILDIR; isi tarayiciyi on-kontrole zorlamaktir. Yine de
+   * TUM yollarda zorunludur, cunku basit bir cross-origin GET on-kontrolsuz
+   * gider ve `GET /autopilot/next` durum degistirir.
+   */
+  it('rejects a state-changing POST with no extension marker', async () => {
+    const res = await call('POST', '/autopilot/start', {
+      marker: null,
+      body: { roots: [{ path: '/audi-a3', label: 'Audi A3' }] },
+    });
+    expect(res.status).toBe(403);
+    expect(res.json.error).toBe('MISSING_EXTENSION_MARKER');
+  });
+
+  it('rejects the state-changing GET /autopilot/next with no marker', async () => {
+    await startRun();
+    const res = await call('GET', '/autopilot/next', { marker: null });
+    expect(res.status).toBe(403);
+    expect(res.json.error).toBe('MISSING_EXTENSION_MARKER');
+  });
+
+  it('rejects status with no marker as well', async () => {
+    const res = await call('GET', '/autopilot/status', { marker: null });
+    expect(res.status).toBe(403);
+  });
+
+  it('rejects a marker carrying the wrong value', async () => {
+    const res = await call('GET', '/autopilot/status', { marker: 'nope' });
+    expect(res.status).toBe(403);
+  });
+
+  it('leaves the run untouched when a request is rejected', async () => {
+    await startRun();
+    await call('POST', '/autopilot/stop', { marker: null });
+    const status = await call('GET', '/autopilot/status');
+    expect(status.json.state).toBe('RUNNING');
   });
 });
 
@@ -198,11 +228,24 @@ describe('BRIDGE ORIGIN POLICY', () => {
   it('answers the preflight for a chrome extension origin', async () => {
     const res = await call('OPTIONS', '/autopilot/status', {
       origin: EXTENSION_ORIGIN,
-      token: null,
+      marker: null,
     });
     expect(res.status).toBe(204);
     expect(res.headers['access-control-allow-origin']).toBe(EXTENSION_ORIGIN);
-    expect(res.headers['access-control-allow-headers']).toContain(AUTOPILOT_TOKEN_HEADER);
+    expect(res.headers['access-control-allow-headers']).toContain(AUTOPILOT_EXTENSION_HEADER);
+  });
+
+  /**
+   * Bir web sayfasinin on-kontrolu CORS izni ALMAZ, dolayisiyla tarayici asil
+   * istegi hic gondermez. Kopruyu web sayfalarindan koruyan mekanizma budur.
+   */
+  it('gives a web page preflight no CORS grant', async () => {
+    const res = await call('OPTIONS', '/autopilot/start', {
+      origin: 'https://www.sahibinden.com',
+      marker: null,
+    });
+    expect(res.status).toBe(403);
+    expect(res.headers['access-control-allow-origin']).toBeUndefined();
   });
 
   it('serves a chrome extension origin with the matching CORS header', async () => {

@@ -2,7 +2,8 @@
  * PANEL — YALNIZCA KOMUT VE GOSTERIM.
  *
  * Panel kopruye DOGRUDAN konusmaz; her sey arka plan calisanindan gecer.
- * Jeton DEGERI panele geri okunmaz (yalnizca "ayarli mi" bilgisi doner).
+ * Jeton alani YOKTUR: kopru yerel, jetonsuz ve yalnizca uzanti kokenine
+ * aciktir. Kullanicidan istenen tek sey kopru adresidir.
  */
 
 const $ = (id) => document.getElementById(id);
@@ -57,9 +58,11 @@ function render(state) {
   setText('deadline', status.deadlineAt ? new Date(status.deadlineAt).toLocaleString() : 'sınırsız');
 
   $('bridgeUrl').placeholder = state.config.bridgeUrl;
-  $('tokenHint').textContent = state.config.tokenSet
-    ? 'Jeton ayarlı. Yalnızca 127.0.0.1 köprüsüne gönderilir.'
-    : 'Jeton ayarlı değil: bridge-token.txt içeriğini yapıştırın.';
+
+  const connected = state.bridgeConnected === true;
+  const connection = $('bridgeConnection');
+  connection.textContent = connected ? 'BAĞLI' : 'BAĞLI DEĞİL';
+  connection.dataset.connected = String(connected);
 
   const message = state.lastError || state.bridgeError || status.lastError || '';
   $('message').textContent = message;
@@ -81,13 +84,7 @@ async function command(op, extra = {}) {
   await refresh();
 }
 
-$('save').addEventListener('click', async () => {
-  await command('SAVE_CONFIG', {
-    bridgeUrl: $('bridgeUrl').value,
-    token: $('token').value,
-  });
-  $('token').value = '';
-});
+$('save').addEventListener('click', () => command('SAVE_CONFIG', { bridgeUrl: $('bridgeUrl').value }));
 
 $('start').addEventListener('click', () => command('START'));
 $('pause').addEventListener('click', () => command('PAUSE'));

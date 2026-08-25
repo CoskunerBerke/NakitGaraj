@@ -16,11 +16,16 @@
 
 const STORAGE_KEY = 'autopilot';
 const KEEPALIVE_ALARM = 'autopilot-keepalive';
-const TOKEN_HEADER = 'x-autopilot-token';
+/**
+ * Sabit, GIZLI OLMAYAN uzanti isareti. Kimlik dogrulama DEGILDIR: ozel bir
+ * baslik oldugu icin tarayiciyi on-kontrole zorlar ve siradan bir web sayfasi
+ * kopruye sessizce kontrol istegi gonderemez.
+ */
+const EXTENSION_HEADER = 'x-nakitgaraj-extension';
+const EXTENSION_MARKER = '1';
 
 const DEFAULTS = {
   bridgeUrl: 'http://127.0.0.1:8791',
-  token: '',
   /** Sabit, muhafazakar tempo. Rastgele "insan taklidi" YOK. */
   pacingMs: 1500,
   sourceOrigin: 'https://www.sahibinden.com',
@@ -45,7 +50,7 @@ async function writeConfig(patch) {
   return next;
 }
 
-/** Kopru adresi YALNIZCA geri donguye isaret edebilir: jeton baska yere gitmez. */
+/** Kopru adresi YALNIZCA geri donguye isaret edebilir. */
 function assertLoopbackBridge(bridgeUrl) {
   const url = new URL(bridgeUrl);
   if (url.protocol !== 'http:' || (url.hostname !== '127.0.0.1' && url.hostname !== 'localhost')) {
@@ -58,12 +63,11 @@ function assertLoopbackBridge(bridgeUrl) {
 
 async function bridgeFetch(config, path, { method = 'GET', body } = {}) {
   const origin = assertLoopbackBridge(config.bridgeUrl);
-  if (!config.token) throw new Error('Bridge token is not set; paste it in the popup first.');
 
   const response = await fetch(`${origin}${path}`, {
     method,
     headers: {
-      [TOKEN_HEADER]: config.token,
+      [EXTENSION_HEADER]: EXTENSION_MARKER,
       ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
     },
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
@@ -276,13 +280,13 @@ async function handleCommand(message) {
       }
       return {
         ok: true,
-        // Jeton DEGERI panele geri VERILMEZ; yalnizca ayarli olup olmadigi.
         config: {
           bridgeUrl: config.bridgeUrl,
           pacingMs: config.pacingMs,
           sourceOrigin: config.sourceOrigin,
-          tokenSet: Boolean(config.token),
         },
+        /** Kopru ulasilabilir mi — panelde BAGLI / BAGLI DEGIL olarak gosterilir. */
+        bridgeConnected: bridgeStatus !== null,
         shouldRun: config.shouldRun,
         lastState: config.lastState,
         lastError: config.lastError,
@@ -296,9 +300,6 @@ async function handleCommand(message) {
       if (typeof message.bridgeUrl === 'string' && message.bridgeUrl.trim()) {
         assertLoopbackBridge(message.bridgeUrl.trim());
         patch.bridgeUrl = message.bridgeUrl.trim();
-      }
-      if (typeof message.token === 'string' && message.token.trim()) {
-        patch.token = message.token.trim();
       }
       if (Number.isFinite(message.pacingMs) && message.pacingMs >= 500) {
         patch.pacingMs = Math.floor(message.pacingMs);

@@ -15,15 +15,15 @@
  * KAPSAM UZANTIDAN DEGIL BURADAN VERILIR. Uzanti guvenilmez bir istemcidir;
  * kapsami genisletebilseydi koruma koruma olmazdi.
  *
- * JETON: kosuya ozel yetenek jetonu URETILIR ve yalnizca gitignore'lu bir
- * dosyaya yazilir. Normal gunlukte DEGERI GORUNMEZ; sadece dosya YOLU basilir.
- * Kullanici jetonu uzanti panelinden bir kez yapistirir.
+ * JETON YOK. Kopru yalnizca 127.0.0.1'e baglanir, Host'u dogrular, web sayfasi
+ * kokenlerini reddeder ve tum yollarda sabit (gizli olmayan) uzanti isaretini
+ * arar. Kullanicinin bir dosya bulup jeton yapistirmasi GEREKMEZ.
  */
 import * as fs from 'fs';
 import * as path from 'path';
 import { AtomicChecksummedFile } from '../checkpoint-store';
 import { StagingStore } from '../staging-store';
-import { AutopilotBridge, generateCapabilityToken, BridgeSessionProvider } from './autopilot-bridge';
+import { AutopilotBridge, BridgeSessionProvider } from './autopilot-bridge';
 import {
   AutopilotCheckpointPayload,
   AutopilotSession,
@@ -148,10 +148,6 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   const runDir = path.resolve(__dirname, '../../../data/market-refresh/autopilot', args.runId);
   fs.mkdirSync(runDir, { recursive: true });
 
-  const tokenPath = path.join(runDir, 'bridge-token.txt');
-  const token = generateCapabilityToken();
-  fs.writeFileSync(tokenPath, token, { encoding: 'utf-8', mode: 0o600 });
-
   const staging = new StagingStore(path.join(runDir, 'staging.jsonl'));
   const checkpointFile = new AtomicChecksummedFile<AutopilotCheckpointPayload>(
     path.join(runDir, 'checkpoint.json'),
@@ -189,10 +185,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   };
 
   const bridge = new AutopilotBridge({
-    token,
     provider,
     port: args.port,
-    // Jeton DEGERI burada asla gecmez — yalnizca metot/yol/durum.
     log: (line) => console.log(`[autopilot] ${line}`),
   });
 
@@ -216,8 +210,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
         : 'UNBOUNDED (full monthly refresh)'
     }`,
   );
-  console.log(`  token file  ${tokenPath}`);
-  console.log('  -> Paste the token file contents into the extension popup once.');
+  console.log('  auth        none — loopback bind + Host check + extension origin/marker');
+  console.log('  -> Just set the bridge address in the extension popup and press START.');
   console.log('');
 
   const shutdown = async () => {
