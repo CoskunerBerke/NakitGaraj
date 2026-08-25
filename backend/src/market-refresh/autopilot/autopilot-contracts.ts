@@ -24,7 +24,12 @@ export type AutopilotState =
   | 'PAUSED'
   | 'ACCESS_RESTRICTED'
   | 'DEADLINE_REACHED'
+  /** Kuyruk bitti VE her sey gercekten tamam. Baska hicbir durumda kullanilmaz. */
   | 'COMPLETE'
+  /** Kuyruk bitti ama kosu EKSIK: bolunemeyen/bloke/guvenilmez dugum var. */
+  | 'INCOMPLETE'
+  /** Kuyruk bitti; tek eksiklik duman testinin kasitli sayfa kirpmasi. */
+  | 'SMOKE_LIMIT_REACHED'
   | 'ERROR';
 
 /** Kopru -> uzanti: bir sonraki TEK adim. Uzanti kendi basina karar vermez. */
@@ -84,11 +89,18 @@ export interface PageBatch {
   parseFailures: number;
 }
 
-/** Kaynakta GORULEN alt kategori (uydurma yok). */
+/**
+ * Kaynakta GORULEN alt kategori ADAYI.
+ *
+ * Bunlar HAM adaylardir: neyin gercek cocuk sayilacagina kopru karar verir
+ * (kesin alt soy olmali). Sayim `countText`ten koprude cozulur.
+ */
 export interface ObservedChildNode {
   path: string;
   label: string;
-  count: number;
+  /** Sayimi tasiyan ham metin; verilirse sayisal `count`u ezer. */
+  countText?: string | null;
+  count?: number | null;
 }
 
 /**
@@ -108,8 +120,18 @@ export type ChildStructureSignal = 'READ' | 'EMPTY' | 'UNREADABLE';
 export interface DiscoveryReport {
   runId: string;
   nodePath: string;
-  /** Kaynagin bildirdigi ilan sayisi. Okunamadiysa null — "kucuk" VARSAYILMAZ. */
-  count: number | null;
+  /**
+   * Onceden cozulmus sayim. `countText` verildiginde YOK SAYILIR; sayimi
+   * koprudeki test edilmis ayristirici cozer. Ikisi de yoksa sayim
+   * BILINMIYOR demektir ve dugum "kucuk" VARSAYILMAZ.
+   */
+  count?: number | null;
+  /**
+   * Sayimi tasiyan HAM metin (orn. '"Audi A3 ..." aramanizda 6.559 ilan bulundu.').
+   * Verildiginde sayim BURADAN, koprudeki test edilmis ayristiriciyla cozulur ve
+   * sayisal `count` alanini EZER. Uzanti sayi ayristirmaz.
+   */
+  countText?: string | null;
   children: ObservedChildNode[];
   /** Alt kategori seciciler tuttu mu. Verilmezse 'READ' varsayilir (geriye donuk). */
   childStructure?: ChildStructureSignal;
@@ -140,12 +162,20 @@ export interface PageBatchResult {
   leafComplete: boolean;
   /** Sayfalama dongusu tespit edildi mi (ayni ID kumesi tekrarlandi). */
   paginationLoopStopped: boolean;
+  /**
+   * Bildirilen sayim kaynagin gerceginle celisti mi. true ise bu sayfadan
+   * HICBIR SEY staging'e yazilmadi ve dugum toplanmadi.
+   */
+  countMismatch: boolean;
 }
 
 export interface WorkItemView {
   kind: 'DISCOVER' | 'LEAF';
+  /** SPLIT_REQUIRED / COLLECTABLE_LEAF / ... — buyukluk kararinin kaydi. */
+  nodeState: string;
   path: string;
   label: string;
+  parentPath: string | null;
   trail: string[];
   count: number | null;
   expectedPages: number | null;

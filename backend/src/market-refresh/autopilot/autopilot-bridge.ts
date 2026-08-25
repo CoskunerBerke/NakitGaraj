@@ -348,6 +348,11 @@ function parseRoots(value: unknown): Array<{ path: string; label: string }> {
   });
 }
 
+/**
+ * Alt kategori ADAYLARI. Sayim burada SAYIYA CEVRILMEZ ve aday burada
+ * ELENMEZ: her ikisi de test edilmis kopru mantiginin isidir (count-text ve
+ * taxonomy). Burasi yalnizca sekli dogrular.
+ */
 function parseChildren(value: unknown, field: string) {
   if (value === undefined || value === null) return [];
   if (!Array.isArray(value)) throw new AutopilotProtocolError(`"${field}" must be an array`);
@@ -357,7 +362,8 @@ function parseChildren(value: unknown, field: string) {
     return {
       path: requireString(node.path, `${field}[${i}].path`),
       label: typeof node.label === 'string' ? node.label : String(node.path),
-      count: typeof count === 'number' && Number.isFinite(count) ? Math.floor(count) : -1,
+      countText: typeof node.countText === 'string' ? node.countText : null,
+      count: typeof count === 'number' && Number.isFinite(count) ? Math.floor(count) : null,
     };
   });
 }
@@ -377,6 +383,8 @@ function parseDiscoveryReport(body: unknown): DiscoveryReport {
     runId: requireString(input.runId, 'runId'),
     nodePath: requireString(input.nodePath, 'nodePath'),
     count: typeof count === 'number' && Number.isFinite(count) ? Math.floor(count) : null,
+    /** Ham sayim metni: verildiginde sayiyi KOPRU cozer, uzanti degil. */
+    ...(typeof input.countText === 'string' ? { countText: input.countText } : {}),
     children: parseChildren(input.children, 'children'),
     secondaryPartitions: parseChildren(input.secondaryPartitions, 'secondaryPartitions'),
     ...(structure === undefined ? {} : { childStructure: structure as ChildStructureSignal }),

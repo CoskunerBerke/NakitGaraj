@@ -16,9 +16,25 @@ function setText(id, value) {
   $(id).textContent = value === null || value === undefined || value === '' ? '—' : String(value);
 }
 
+/**
+ * DURUM ONCELIGI — "COMPLETE" YALNIZCA GERCEKTEN TAMSA.
+ *
+ * Ilk canli kosuda ust satir COMPLETE derken alt satir "Koşu tam mı: HAYIR"
+ * diyordu. Tamamlanma tek bir gercekten turer: runComplete. Kopru artik
+ * INCOMPLETE / SMOKE_LIMIT_REACHED durumlarini kendisi gonderiyor; bu kapi,
+ * eski bir kopru ya da beklenmedik bir durum COMPLETE'i geri sizdiramasin
+ * diye panelde de duruyor.
+ */
+function displayState(status, fallback) {
+  const shown = status.state || fallback || 'IDLE';
+  if (shown !== 'COMPLETE') return shown;
+  if (status.runComplete === true) return 'COMPLETE';
+  return status.scopeLimited ? 'SMOKE_LIMIT_REACHED' : 'INCOMPLETE';
+}
+
 function render(state) {
   const status = state.bridgeStatus || {};
-  const shown = status.state || state.lastState || 'IDLE';
+  const shown = displayState(status, state.lastState);
 
   $('state').textContent = shown;
   $('state').dataset.state = shown;

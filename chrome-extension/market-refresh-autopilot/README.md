@@ -53,13 +53,28 @@ Bu koşuda:
 
 | Kural | Davranış |
 | --- | --- |
-| Audi A4 / BMW / başka marka | Kuyruğa **hiç girmez**, sebebiyle `outOfScope` listesine yazılır |
-| Audi A3 altındaki alt kategoriler | >1000 kuralı gerektiriyorsa **özyineleme devam eder** |
+| Audi A3 kökü (6.559 ilan) | `SPLIT_REQUIRED` — ilan sayfaları **gezilmez ve toplanmaz** |
+| A3 Cabrio (101) / A3 Hatchback (366) | `COLLECTABLE_LEAF` — 50/sayfa ile toplanır |
+| A3 Sedan (3.132) / A3 Sportback (2.960) | `SPLIT_REQUIRED` — bir seviye daha bölünür |
+| Audi A4 / BMW / kırılım yolu / sayfalama | Alt soy değil: **çocuk sayılmaz** |
 | Sayfa 4 | **Üretilmez**; gönderilse bile reddedilir |
 | Sonuç sayısı okunamazsa | `UNKNOWN_COUNT` → koşu **DURUR** (`ERROR`), hiçbir şey tahmin edilmez |
 | Alt kategori yapısı okunamazsa | `UNKNOWN_CATEGORY_STRUCTURE` → koşu **DURUR** |
+| Sayfalar bildirilen sayımdan fazla ilan gösterirse | `REPORTED_COUNT_MISMATCH` → **hiçbir satır yazılmaz**, düğüm toplanmaz |
 | Snapshot DB | **Salt okunur**; gözlemler yalnızca staging JSONL'e yazılır |
 | Koşu tam mı | Kapsamlı koşu tanımı gereği **HAYIR** — aylık tazeleme sayılamaz |
+
+`max-result-pages` **yalnızca uçtaki toplanabilir yapraklara** uygulanır. Aşırı
+büyük bir ebeveyni sahte yaprağa çeviremez: düğümün büyüklüğü kaynağın bildirdiği
+sayımdan gelir, duman testinin sayfa sınırından değil.
+
+Üst satırdaki durum, `Koşu tam mı: HAYIR` iken **`COMPLETE` göstermez**;
+`SMOKE_LIMIT_REACHED` (yalnızca sayfa sınırı kırptı) ya da `INCOMPLETE`
+(bölünemeyen/bloke/güvenilmez düğüm var) gösterir.
+
+> Not: ilk duman koşusunun (`autopilot-v1`) checkpoint'i artık **devam
+> ettirilemez** — o koşu sayımı yanlış okuyordu. İkinci koşu için **yeni bir
+> `--run-id`** kullanın.
 
 `--reference off` eklerseniz snapshot hiç açılmaz ve her kart `NEW` sayılır;
 seçici doğrulaması için bu da yeterlidir.

@@ -41,7 +41,10 @@ h2 { font-size: 11px; margin: 0 0 6px; color: var(--muted); text-transform: uppe
   border: 1px solid var(--line); color: var(--muted); white-space: nowrap;
 }
 .state[data-state="RUNNING"] { color: var(--ok); border-color: currentColor; }
-.state[data-state="PAUSED"], .state[data-state="DEADLINE_REACHED"] { color: var(--warn); border-color: currentColor; }
+.state[data-state="PAUSED"],
+.state[data-state="DEADLINE_REACHED"],
+.state[data-state="SMOKE_LIMIT_REACHED"],
+.state[data-state="INCOMPLETE"] { color: var(--warn); border-color: currentColor; }
 .state[data-state="ACCESS_RESTRICTED"], .state[data-state="ERROR"] { color: var(--danger); border-color: currentColor; }
 .state[data-state="COMPLETE"] { color: var(--ok); border-color: currentColor; }
 

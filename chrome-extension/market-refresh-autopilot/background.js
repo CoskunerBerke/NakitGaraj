@@ -160,6 +160,8 @@ async function setState(state, error = null) {
     ACCESS_RESTRICTED: { text: '!', color: '#b42318' },
     DEADLINE_REACHED: { text: '⏱', color: '#9a6700' },
     COMPLETE: { text: '✓', color: '#1a7f37' },
+    SMOKE_LIMIT_REACHED: { text: '◐', color: '#9a6700' },
+    INCOMPLETE: { text: '◐', color: '#9a6700' },
     ERROR: { text: '!', color: '#b42318' },
     IDLE: { text: '', color: '#57606a' },
   }[state] || { text: '', color: '#57606a' };
@@ -212,7 +214,8 @@ async function runLoop() {
           body: {
             runId: directive.runId,
             nodePath: directive.nodePath,
-            count: observation.count,
+            // Ham metin: sayiyi kopru cozer, uzanti ayristirmaz.
+            countText: observation.countText,
             children: observation.children,
             childStructure: observation.childStructure,
           },

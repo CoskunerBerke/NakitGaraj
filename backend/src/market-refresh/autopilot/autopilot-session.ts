@@ -20,12 +20,13 @@ import {
   AutopilotState,
   AutopilotStatus,
   DiscoveryReport,
-  ObservedChildNode,
   PageBatch,
   PageBatchResult,
   WorkItemView,
 } from './autopilot-contracts';
 import { AutopilotScope, sameScope, ScopeGuard, ScopeRejection } from './scope-guard';
+import { extractReportedCount } from './count-text';
+import { filterImmediateChildren, TaxonomyChild } from './taxonomy';
 import { AtomicChecksummedFile } from '../checkpoint-store';
 import { StagingStore } from '../staging-store';
 import { RawObservedListing } from '../contracts';
@@ -42,7 +43,12 @@ import {
   normalizeNodePath,
 } from './source-url';
 
-export const AUTOPILOT_VERSION = 'autopilot-v1';
+/**
+ * v2: v1 checkpoint'leri REDDEDILIR. v1 sayimi metinden yanlis okuyabiliyordu
+ * ("A3" -> 3) ve o sayima dayanan bir kosuyu devam ettirmek yanlis siniflamayi
+ * surdururdu. Yeni kosu ID'siyle bastan baslanir.
+ */
+export const AUTOPILOT_VERSION = 'autopilot-v2';
 
 /**
  * Ozyineleme derinlik tavani. Kaynak kendi kendini isaret eden bir cocuk
@@ -51,12 +57,28 @@ export const AUTOPILOT_VERSION = 'autopilot-v1';
  */
 export const MAX_PARTITION_DEPTH = 8;
 
+/** Bir dugumun kaynak-buyuklugune gore sinifi (sozlesme dili). */
+export type NodeState =
+  | 'PENDING_DISCOVERY'
+  | 'SPLIT_REQUIRED'
+  | 'COLLECTABLE_LEAF'
+  | 'UNSPLITTABLE_OVERSIZED';
+
+export interface DiscoveryOutcome {
+  outcome: 'COLLECTABLE_LEAF' | 'SPLIT_REQUIRED' | 'INCOMPLETE';
+  enqueued: number;
+  count: number | null;
+  nodeState: NodeState;
+}
+
 export type IncompleteReason =
   | 'NO_TRUTHFUL_PARTITION'
   | 'UNKNOWN_COUNT'
   | 'UNKNOWN_CATEGORY_STRUCTURE'
   | 'EXCEEDS_SOURCE_PAGE_LIMIT'
   | 'MAX_DEPTH_REACHED'
+  /** Kaynak, bildirdigi sayimdan FAZLA sonuc gosteriyor: sayim guvenilmez. */
+  | 'REPORTED_COUNT_MISMATCH'
   /** Kapsam korumasi kesti — veri butunlugu hatasi DEGIL, kasitli test siniri. */
   | 'SCOPE_PAGE_LIMIT';
 
@@ -93,8 +115,12 @@ export class MapReferenceLookup implements ReferenceLookup {
 
 interface WorkItem {
   kind: 'DISCOVER' | 'LEAF';
+  /** Kaynak-buyuklugune gore sinif; kararin denetlenebilir kaydi. */
+  nodeState: NodeState;
   path: string;
   label: string;
+  /** Bu dugumu ureten ebeveyn taksonomi yolu (kok icin null). */
+  parentPath: string | null;
   /** Kokten buraya kaynak etiket izi — panelde marka/seri/alt kategori olur. */
   trail: string[];
   count: number | null;
@@ -250,6 +276,8 @@ export class AutopilotSession {
     session.items = payload.items.map((i) => ({
       ...i,
       trail: Array.isArray(i.trail) ? [...i.trail] : [i.label],
+      nodeState: i.nodeState || 'PENDING_DISCOVERY',
+      parentPath: i.parentPath ?? null,
       lastPageIds: [...(i.lastPageIds || [])],
     }));
     for (const p of payload.seenPaths) session.seenPaths.add(p);
@@ -342,12 +370,17 @@ export class AutopilotSession {
 
     const item = this.pickNext();
     if (!item) {
-      this.state = 'COMPLETE';
+      /**
+       * DURUM ONCELIGI — "COMPLETE" SADECE GERCEKTEN TAMSA.
+       *
+       * Panelde ust satirin COMPLETE derken altta "Kosu tam mi: HAYIR"
+       * yazmasi kullaniciyi yaniltti. Tamamlanma tek bir kaynaktan turer:
+       * isRunComplete(). Degilse durum, EKSIKLIGIN SEBEBINI soyler.
+       */
+      const drained = this.drainedState();
+      this.state = drained.state;
       this.persist();
-      return this.halt(
-        'COMPLETE',
-        this.isRunComplete() ? 'All partitions complete' : 'Queue drained but run is INCOMPLETE',
-      );
+      return this.halt(drained.state, drained.reason);
     }
 
     item.status = 'IN_PROGRESS';
@@ -395,13 +428,23 @@ export class AutopilotSession {
    *   count >  LEAF_CAP + ikincil  -> ikincil bolumlerle bol
    *   aksi halde                   -> EKSIK isaretle (sessiz kayip YASAK)
    */
-  submitDiscovery(
-    report: DiscoveryReport,
-  ): { outcome: 'LEAF' | 'SPLIT' | 'INCOMPLETE'; enqueued: number } {
+  submitDiscovery(report: DiscoveryReport): DiscoveryOutcome {
     this.requireRun(report.runId);
     const item = this.requireItem(report.nodePath, 'DISCOVER');
 
-    const count = normalizeCount(report.count);
+    /**
+     * SAYIM METINDEN BURADA cozulur (uzantida DEGIL).
+     *
+     * Canli kosuda kanitlandi: uzanti metindeki ilk rakam dizisini aliyordu ve
+     * '"Audi A3 ..." aramanizda 6.559 ilan bulundu.' basliginda "A3" icindeki
+     * 3'u yakaliyordu. 6.559 ilanlik EBEVEYN 3 ilanli bir yaprak sanildi ve
+     * sayfalandi. Artik sayim "ilan" sozcugune bagli, test edilmis bir
+     * ayristiriciyla cozuluyor ve tek dogru burada.
+     */
+    const count =
+      report.countText !== undefined && report.countText !== null
+        ? extractReportedCount(report.countText)
+        : normalizeCount(report.count);
     const structure = report.childStructure ?? 'READ';
 
     /**
@@ -418,45 +461,108 @@ export class AutopilotSession {
       return this.haltOnUnreadable(item, 'UNKNOWN_COUNT', structure);
     }
 
-    if (count !== null && count <= LEAF_CAP) {
-      item.kind = 'LEAF';
-      item.count = count;
-      item.expectedPages = Math.min(expectedPagesFor(count, AUTOPILOT_PAGE_SIZE), this.pageCeiling);
-      item.status = 'PENDING';
-      this.persist();
-      return { outcome: 'LEAF', enqueued: 0 };
+    item.count = count;
+
+    /**
+     * SERT SOZLESME — SIRALAMA BURADA ONEMLIDIR.
+     *
+     * Once BUYUKLUK karari verilir, sonra her sey. count > LEAF_CAP olan bir
+     * dugum ASLA yaprak olamaz: kaynak o dugumun tamamini gosteremez, dolayisiyla
+     * sayfalamak sessizce eksik veri uretir. Bu dal, yaprak dalindan ONCE gelir
+     * ki bir gun eklenen bir "kucuk optimizasyon" sirayi bozamasin.
+     */
+    if (count === null || count > LEAF_CAP) {
+      return this.requireSplit(item, count, report);
     }
 
-    item.count = count;
+    // Buradan sonrasi kesinlikle <= LEAF_CAP: kaynak bu dugumu tam gosterebilir.
+    item.kind = 'LEAF';
+    item.nodeState = 'COLLECTABLE_LEAF';
+    /**
+     * DOGAL beklenen sayfa: kaynagin bildirdigi sayimdan turer ve KAPSAM
+     * tavanindan BAGIMSIZDIR. Duman testinin sayfa siniri bir yapragi kirpar,
+     * ama asla bir dugumun buyuklugunu degistiremez.
+     */
+    item.expectedPages = Math.min(expectedPagesFor(count, AUTOPILOT_PAGE_SIZE), MAX_PAGES_PER_LEAF);
+    item.status = 'PENDING';
+    this.persist();
+    return { outcome: 'COLLECTABLE_LEAF', enqueued: 0, count, nodeState: 'COLLECTABLE_LEAF' };
+  }
+
+  /**
+   * count > LEAF_CAP (ya da okunamadi): dugum SPLIT_REQUIRED'dir.
+   * Ebeveynin ilan sayfalari HICBIR KOSULDA gezilmez ya da toplanmaz.
+   */
+  private requireSplit(
+    item: WorkItem,
+    count: number | null,
+    report: DiscoveryReport,
+  ): DiscoveryOutcome {
+    item.nodeState = 'SPLIT_REQUIRED';
+
+    if (count === null) {
+      // "Kucuk" VARSAYILMAZ. Kapsamli kosuda dur, aksi halde dugumu eksik isaretle.
+      if (this.guard && this.guard.config.stopOnUnknown) {
+        return this.haltOnUnreadable(item, 'UNKNOWN_COUNT', 'READ');
+      }
+      return this.markIncomplete(item, 'UNKNOWN_COUNT');
+    }
 
     if (item.depth >= MAX_PARTITION_DEPTH) {
       return this.markIncomplete(item, 'MAX_DEPTH_REACHED');
     }
 
-    const children = sanitizeChildren(report.children);
+    // Cocuklar KESIN ALT SOY olmali: sayfalama/breadcrumb/kardes/reklam elenir.
+    const children = filterImmediateChildren(
+      item.path,
+      report.children,
+      item.depth + 1,
+      (path) => normalizeNodePath(this.opts.baseUrl, path),
+    );
     if (children.length > 0) {
-      // Ebeveyn TOPLANMAZ: >1000 sonuc kaynakta tam gorunmez.
-      item.status = 'COMPLETE';
-      let enqueued = 0;
-      for (const child of children) {
-        if (this.enqueue(child, item.depth + 1, item.trail)) enqueued += 1;
-      }
-      this.persist();
-      return { outcome: 'SPLIT', enqueued };
+      return this.splitInto(item, children);
     }
 
-    const secondary = sanitizeChildren(report.secondaryPartitions);
+    /**
+     * Gercek alt kategori yok: kimligi KORUYAN, kaynagin kendi UI'sinde
+     * TRUTHFUL sekilde secilebilen ikincil bolumler (orn. yil) denenir.
+     */
+    const secondary = filterImmediateChildren(
+      item.path,
+      report.secondaryPartitions,
+      item.depth + 1,
+      (path) => normalizeNodePath(this.opts.baseUrl, path),
+    );
     if (secondary.length > 0) {
-      item.status = 'COMPLETE';
-      let enqueued = 0;
-      for (const part of secondary) {
-        if (this.enqueue(part, item.depth + 1, item.trail)) enqueued += 1;
-      }
-      this.persist();
-      return { outcome: 'SPLIT', enqueued };
+      return this.splitInto(item, secondary);
     }
 
-    return this.markIncomplete(item, count === null ? 'UNKNOWN_COUNT' : 'NO_TRUTHFUL_PARTITION');
+    /**
+     * Hicbir gercek bolum yok. ILK 1000'I ALIP "tamam" DEMEK YASAK.
+     * Kapsamli (secici dogrulama) kosusunda bu ayni zamanda taksonomi
+     * seciciminin tutmadigi anlamina gelebilir, o yuzden kosu durur.
+     */
+    if (this.guard && this.guard.config.requireChildStructure) {
+      return this.haltOnUnreadable(item, 'UNKNOWN_CATEGORY_STRUCTURE', 'EMPTY');
+    }
+    return this.markIncomplete(item, 'NO_TRUTHFUL_PARTITION');
+  }
+
+  private splitInto(item: WorkItem, children: TaxonomyChild[]): DiscoveryOutcome {
+    // Ebeveyn TOPLANMAZ: yalnizca bolunmus sayilir.
+    item.status = 'COMPLETE';
+    item.nodeState = 'SPLIT_REQUIRED';
+    let enqueued = 0;
+    for (const child of children) {
+      if (this.enqueue(child, child.depth, item.trail, item.path)) enqueued += 1;
+    }
+    this.persist();
+    return {
+      outcome: 'SPLIT_REQUIRED',
+      enqueued,
+      count: item.count,
+      nodeState: 'SPLIT_REQUIRED',
+    };
   }
 
   // --------------------------------------------------------------- page batch
@@ -502,7 +608,32 @@ export class AutopilotSession {
       invalid: 0,
       leafComplete: false,
       paginationLoopStopped: false,
+      countMismatch: false,
     };
+
+    /**
+     * SAYIM/GERCEKLIK KARSILASTIRMASI — HERHANGI BIR SATIR STAGING'E YAZILMADAN ONCE.
+     *
+     * Kaynak bu dugum icin N ilan bildirdiyse, sayfalar N'den anlamli olcude
+     * fazla kart tasiyamaz. Tasiyorsa bildirilen sayim yanlistir; yanlis sayima
+     * dayanan YAPRAK karari da yanlistir ve bu kartlar aslinda ASIRI BUYUK bir
+     * ebeveyne aittir. Canli kosuda tam olarak bu oldu: 3 ilanli sanilan dugum
+     * ilk sayfada 50 kart getirdi ve 151 satir yazildi.
+     *
+     * Dogru davranis: HICBIR SEY yazma, dur, sebebi kaydet.
+     */
+    if (item.count !== null) {
+      const remaining = Math.max(0, item.count - item.observedCount);
+      const promoAllowance = MAX_CARDS_PER_PAGE - AUTOPILOT_PAGE_SIZE;
+      const allowedThisPage = Math.min(AUTOPILOT_PAGE_SIZE, remaining) + promoAllowance;
+      if (cards.length > allowedThisPage) {
+        return this.stopOnCountMismatch(item, batch, {
+          ...result,
+          invalid: cards.length,
+        });
+      }
+    }
+
 
     for (const card of cards) {
       const id = String(card?.sourceListingId || '').trim();
@@ -579,39 +710,51 @@ export class AutopilotSession {
     this.counters.invalidCount += result.invalid;
     this.counters.parseFailures += Number(batch.parseFailures) || 0;
 
+    /**
+     * IKI AYRI TAVAN — KARISTIRILMAMALI.
+     *
+     * expectedPages  kaynagin BILDIRDIGI sayimdan turer. Dugumun gercek
+     *                buyuklugudur ve duman testinden etkilenmez.
+     * scopeCeiling   duman kosusunun kasitli kirpma siniridir.
+     *
+     * Ikisini tek degiskende birlestirmek, kapsam sinirini bir "buyukluk"
+     * gibi gostererek asiri buyuk bir dugumu sahte yaprak yapabilirdi —
+     * canli kosuda tam olarak bu oldu.
+     */
     const expectedPages = item.expectedPages ?? 1;
-    const ceiling = this.pageCeiling;
-    const atCeiling = batch.page >= ceiling;
+    const scopeCeiling = this.pageCeiling;
+    const scopeTruncates = scopeCeiling < expectedPages;
 
     if (repeated) {
       result.paginationLoopStopped = true;
       item.status = 'COMPLETE';
     } else if (!batch.hasNextPage) {
       item.status = 'COMPLETE';
+    } else if (batch.page >= scopeCeiling && scopeTruncates) {
+      /**
+       * KAPSAM tavani: kasitli test siniri, veri butunlugu hatasi degil.
+       * Is kapatilir ama kosu EKSIK isaretlenir — bu yaprak tam degildir.
+       */
+      item.status = 'COMPLETE';
+      this.pushIncomplete(item, 'SCOPE_PAGE_LIMIT');
+    } else if (batch.page >= MAX_PAGES_PER_LEAF) {
+      /**
+       * Kaynak tavaninda hala devam var: bu yaprak KAYNAKTA TAM GORUNMUYOR.
+       * Sayim celiskisinden ONCE gelir cunku daha ozel ve daha eyleme donuk
+       * bir teshistir: bu dugum kaynagin liste gorunumune sigmiyor.
+       */
+      item.status = 'FAILED';
+      this.pushIncomplete(item, 'EXCEEDS_SOURCE_PAGE_LIMIT');
     } else if (batch.page >= expectedPages) {
       /**
-       * Kaynak bildirilen sayimdan FAZLA sayfa gosteriyor: sayim eksik
-       * bildirilmis. Sessizce kesmek veri kaybidir; kaynak tavanina kadar
-       * devam edilir.
+       * Kaynak, bildirdigi sayimin gerektirdiginden FAZLA sayfa gosteriyor.
+       *
+       * Eskiden burada beklenti sessizce bir artiriliyordu; canli kosuda bu,
+       * yanlis okunan bir sayimin (6.559 yerine 3) ustunu ortup 6.559 ilanlik
+       * bir EBEVEYNI sayfalatti. Artik bu bir KIRMIZI BAYRAK: sayim
+       * guvenilmezse dugumun sinifi da guvenilmez, o yuzden toplama DURUR.
        */
-      item.expectedPages = Math.min(expectedPages + 1, ceiling);
-    }
-
-    if (item.status !== 'COMPLETE' && atCeiling) {
-      if (!batch.hasNextPage) {
-        item.status = 'COMPLETE';
-      } else if (this.guard) {
-        /**
-         * KAPSAM tavani: kasitli test siniri, veri butunlugu hatasi degil.
-         * Is kapatilir ama kosu EKSIK isaretlenir — bu yaprak tam degildir.
-         */
-        item.status = 'COMPLETE';
-        this.pushIncomplete(item, 'SCOPE_PAGE_LIMIT');
-      } else {
-        // Kaynak tavaninda hala devam var: bu yaprak KAYNAKTA TAM GORUNMUYOR.
-        item.status = 'FAILED';
-        this.pushIncomplete(item, 'EXCEEDS_SOURCE_PAGE_LIMIT');
-      }
+      return this.stopOnCountMismatch(item, batch, result);
     }
 
     result.leafComplete = item.status === 'COMPLETE';
@@ -685,8 +828,10 @@ export class AutopilotSession {
   itemsView(): WorkItemView[] {
     return this.items.map((i) => ({
       kind: i.kind,
+      nodeState: i.nodeState,
       path: i.path,
       label: i.label,
+      parentPath: i.parentPath,
       trail: [...i.trail],
       count: i.count,
       expectedPages: i.expectedPages,
@@ -703,6 +848,32 @@ export class AutopilotSession {
 
   // ------------------------------------------------------------------ private
 
+  /** Kuyruk bittiginde hangi durum dogruyu soyler. */
+  private drainedState(): { state: AutopilotState; reason: string } {
+    if (this.isRunComplete()) {
+      return { state: 'COMPLETE', reason: 'All partitions complete' };
+    }
+
+    const reasons = this.incomplete.map((n) => n.reason);
+    const blocking = reasons.filter((r) => r !== 'SCOPE_PAGE_LIMIT');
+
+    if (blocking.length === 0 && this.guard) {
+      return {
+        state: 'SMOKE_LIMIT_REACHED',
+        reason:
+          `Smoke run finished within its ${this.guard.maxResultPages}-page limit. ` +
+          'This is a scoped test slice, not a complete monthly refresh.',
+      };
+    }
+    return {
+      state: 'INCOMPLETE',
+      reason:
+        `Queue drained but the run is INCOMPLETE: ${
+          blocking.length > 0 ? [...new Set(blocking)].join(', ') : 'scope-limited'
+        }.`,
+    };
+  }
+
   private pickNext(): WorkItem | null {
     return (
       this.items.find((i) => i.status === 'IN_PROGRESS') ||
@@ -715,6 +886,7 @@ export class AutopilotSession {
     node: { path: string; label: string; count: number | null },
     depth: number,
     parentTrail: string[],
+    parentPath: string | null = null,
   ): boolean {
     const key = normalizeNodePath(this.opts.baseUrl, node.path);
     if (this.seenPaths.has(key)) return false; // ayni dugum iki kez islenmez
@@ -736,12 +908,20 @@ export class AutopilotSession {
     const isLeaf = count !== null && count <= LEAF_CAP;
     this.items.push({
       kind: isLeaf ? 'LEAF' : 'DISCOVER',
+      /**
+       * Sayimi BILINEN ve <=LEAF_CAP olan cocuk dogrudan toplanabilir yapraktir;
+       * digeri (buyuk YA DA sayimi bilinmeyen) once kesfedilmelidir. Sayimsiz
+       * dugum ASLA yaprak sayilmaz.
+       */
+      nodeState: isLeaf ? 'COLLECTABLE_LEAF' : 'PENDING_DISCOVERY',
       path: key,
       label: node.label,
+      parentPath,
       trail: [...parentTrail, node.label],
       count,
+      /** DOGAL sayfa beklentisi — kapsam tavanindan bagimsiz. */
       expectedPages: isLeaf
-        ? Math.min(expectedPagesFor(count as number, AUTOPILOT_PAGE_SIZE), this.pageCeiling)
+        ? Math.min(expectedPagesFor(count as number, AUTOPILOT_PAGE_SIZE), MAX_PAGES_PER_LEAF)
         : null,
       pagesDone: 0,
       status: 'PENDING',
@@ -757,7 +937,11 @@ export class AutopilotSession {
    * yapisi okunamiyor). Kosu DURUR: is bloke edilir, sebep kaydedilir,
    * checkpoint yazilir ve kullanicidan sayfaya bakmasi istenir.
    */
-  private haltOnUnreadable(item: WorkItem, reason: IncompleteReason, structure: string) {
+  private haltOnUnreadable(
+    item: WorkItem,
+    reason: IncompleteReason,
+    structure: string,
+  ): DiscoveryOutcome {
     item.status = 'BLOCKED';
     this.pushIncomplete(item, reason);
     this.state = 'ERROR';
@@ -769,14 +953,47 @@ export class AutopilotSession {
       structure +
       '). Source selectors could not read the page truthfully; nothing was guessed.';
     this.persist();
-    return { outcome: 'INCOMPLETE' as const, enqueued: 0 };
+    return { outcome: 'INCOMPLETE', enqueued: 0, count: item.count, nodeState: item.nodeState };
   }
 
-  private markIncomplete(item: WorkItem, reason: IncompleteReason) {
+  /**
+   * Bildirilen sayim ile kaynagin gercekte gosterdigi arasinda celiski var.
+   * Sayima guvenilemiyorsa dugumun SINIFINA da guvenilemez, o yuzden bu yaprak
+   * toplanmaz. Kapsamli (secici dogrulama) kosusunda tum kosu durur ki
+   * kullanici seciciye baksin.
+   */
+  private stopOnCountMismatch(
+    item: WorkItem,
+    batch: PageBatch,
+    result: PageBatchResult,
+  ): PageBatchResult {
+    item.status = 'BLOCKED';
+    item.nodeState = 'PENDING_DISCOVERY';
+    this.pushIncomplete(item, 'REPORTED_COUNT_MISMATCH');
+
+    const detail =
+      `REPORTED_COUNT_MISMATCH at "${item.path}": source reported ${item.count} listing(s) ` +
+      `but page ${batch.page} still carries results. The reported count cannot be trusted, ` +
+      'so this node was not collected. Nothing was staged from it.';
+
+    if (this.guard) {
+      this.state = 'ERROR';
+      this.lastError = detail;
+    } else {
+      this.lastError = detail;
+    }
+    this.persist();
+    return { ...result, countMismatch: true, leafComplete: false };
+  }
+
+  private markIncomplete(item: WorkItem, reason: IncompleteReason): DiscoveryOutcome {
     item.status = 'FAILED';
+    if (reason === 'NO_TRUTHFUL_PARTITION' || reason === 'MAX_DEPTH_REACHED') {
+      item.nodeState = 'UNSPLITTABLE_OVERSIZED';
+    }
     this.pushIncomplete(item, reason);
     this.persist();
-    return { outcome: 'INCOMPLETE' as const, enqueued: 0 };
+    return { outcome: 'INCOMPLETE', enqueued: 0, count: item.count, nodeState: item.nodeState };
   }
 
   private pushIncomplete(item: WorkItem, reason: IncompleteReason): void {
@@ -841,14 +1058,6 @@ export class AutopilotSession {
 function normalizeCount(count: number | null | undefined): number | null {
   if (typeof count !== 'number' || !Number.isFinite(count) || count < 0) return null;
   return Math.floor(count);
-}
-
-function sanitizeChildren(children: ObservedChildNode[] | undefined): ObservedChildNode[] {
-  if (!Array.isArray(children)) return [];
-  return children.filter(
-    (c) =>
-      c && typeof c.path === 'string' && c.path.trim().length > 0 && typeof c.label === 'string',
-  );
 }
 
 function sameIdSet(a: string[], b: string[]): boolean {

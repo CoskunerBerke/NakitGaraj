@@ -21,15 +21,16 @@
 
   const text = (node) => (node && node.textContent ? node.textContent.replace(/\s+/g, ' ').trim() : '');
 
-  /** "(1.694)" / "1.694 ilan" -> 1694. Cozulemezse null (UYDURMA YOK). */
-  function readCountFromText(raw) {
-    const value = String(raw || '');
-    const match = value.match(/(\d{1,3}(?:\.\d{3})+|\d+)/);
-    if (!match) return null;
-    const digits = match[1].replace(/\./g, '');
-    const parsed = Number(digits);
-    return Number.isFinite(parsed) ? parsed : null;
-  }
+  /**
+   * SAYI AYRISTIRMA BURADA YAPILMAZ.
+   *
+   * Eskiden bu betik metindeki ilk rakam dizisini sayim sayiyordu ve gercek
+   * baslikta ('"Audi A3 ..." aramanizda 6.559 ilan bulundu.') "A3" icindeki
+   * 3'u yakaliyordu; 6.559 ilanlik ebeveyn 3 ilanli bir yaprak sanildi.
+   * Artik HAM METIN tasinir ve sayiyi koprudeki test edilmis, "ilan"
+   * sozcugune bagli ayristirici cozer.
+   */
+  const COUNT_PATTERN = /\d[\d.]*\s*(?:adet\s*)?ilan\b/i;
 
   // ------------------------------------------------------------- erisim engeli
 
@@ -68,28 +69,33 @@
   // ------------------------------------------------------------------- sayimlar
 
   /**
-   * Kaynagin bildirdigi sonuc sayisi. Bulunamazsa null doner ve kopru dugumu
-   * "bilinmeyen sayim" olarak EKSIK isaretler — kucuk VARSAYILMAZ.
+   * Sayimi TASIYAN ham metni bulur. Cozumleme koprude yapilir; burada tek is
+   * dogru metni secmektir. Bulunamazsa null doner ve kopru dugumu
+   * "bilinmeyen sayim" olarak isaretler — kucuk VARSAYILMAZ.
    */
   const COUNT_SELECTORS = [
     '.result-text',
     '#searchResultsSearchForm .result-text',
     '.searchResultsHeader .result-text',
+    '.search-result-message',
     '.classified-count',
     '.resultCount',
   ];
 
-  function readResultCount() {
+  /** Sayim metni ADAY mi: "<sayi> ilan" kalibini tasiyan KISA bir metin. */
+  function countCandidate(value) {
+    return value && value.length <= 200 && COUNT_PATTERN.test(value);
+  }
+
+  function readResultCountText() {
     for (const selector of COUNT_SELECTORS) {
-      const value = readCountFromText(text(document.querySelector(selector)));
-      if (value !== null) return value;
+      const value = text(document.querySelector(selector));
+      if (countCandidate(value)) return value;
     }
-    // Son care: "N ilan" kalibi tasiyan ilk kisa metin dugumu.
-    const nodes = document.querySelectorAll('h1, h2, span, div, strong, b');
-    for (const node of nodes) {
+    // Son care: gorunur baslik/ozet alanlarinda "N ilan" kalibini ara.
+    for (const node of document.querySelectorAll('h1, h2, h3, p, span, div, strong, b')) {
       const value = text(node);
-      if (value.length > 60) continue;
-      if (/^\d{1,3}(?:\.\d{3})*\s+ilan$/i.test(value)) return readCountFromText(value);
+      if (countCandidate(value)) return value;
     }
     return null;
   }
@@ -106,6 +112,27 @@
     'div[class*="categor"]',
     'ul[class*="categor"]',
   ];
+
+  /**
+   * Taksonomi OLMAYAN bolgeler. Kirilim yolu, sayfalama, ust/alt menu ve
+   * oneri baglantilari alt kategori DEGILDIR; koprudeki "kesin alt soy"
+   * kurali cogunu zaten eler ama gurultuyu kaynaginda kesmek daha durusttur.
+   */
+  const NON_TAXONOMY_REGIONS = [
+    'nav[class*="breadcrumb"]',
+    '[class*="breadcrumb"]',
+    '[class*="pagination"]',
+    '[class*="prevNext"]',
+    '[class*="promo"]',
+    '[class*="banner"]',
+    '[class*="recommend"]',
+    'header',
+    'footer',
+  ].join(',');
+
+  function insideNonTaxonomyRegion(element) {
+    return Boolean(element.closest(NON_TAXONOMY_REGIONS));
+  }
 
   /**
    * Kaynak UI'sinde GERCEKTEN gorunen alt kategoriler. Uydurma gizli filtre
@@ -134,6 +161,8 @@
 
     for (const container of containers) {
       for (const anchor of container.querySelectorAll('a[href]')) {
+        if (insideNonTaxonomyRegion(anchor)) continue;
+
         let url;
         try {
           url = new URL(anchor.getAttribute('href'), location.href);
@@ -145,21 +174,22 @@
         const label = text(anchor);
         if (!label) continue;
 
-        // Sayi YAZMIYORSA cocuk kabul edilmez: sayimsiz dal bolumleme icin
-        // kullanilamaz ve kopru onu zaten "bilinmeyen sayim" sayardi.
-        const countMatch = label.match(/\((\d{1,3}(?:\.\d{3})*|\d+)\)\s*$/);
-        if (!countMatch) continue;
-
         const path = `${url.pathname.replace(/\/+$/, '')}${url.search}`;
         if (!path || path === here) continue;
         if (seen.has(path)) continue;
-        seen.add(path);
 
-        children.push({
-          path,
-          label: label.replace(/\s*\(\d[\d.]*\)\s*$/, '').trim(),
-          count: readCountFromText(countMatch[1]),
-        });
+        /**
+         * Sayim etiketin icinde ("A3 Sedan (3.132)") ya da AYRI bir elemanda
+         * olabilir. Ikisi de HAM METIN olarak tasinir; sayiyi kopru cozer.
+         * Sayi izi hic yoksa aday bile degildir: sayimsiz bir dal bolumleme
+         * karari veremez.
+         */
+        const countNode = anchor.querySelector('[class*="count"], span, b, em');
+        const countText = countNode ? text(countNode) : '';
+        if (!/\d/.test(label) && !/\d/.test(countText)) continue;
+
+        seen.add(path);
+        children.push({ path, label, countText: countText || null });
       }
     }
     return { children, structure: children.length > 0 ? 'READ' : 'EMPTY' };
@@ -224,12 +254,20 @@
       return { ok: false, accessRestricted: restriction, url: location.href };
     }
 
+    /**
+     * KESIF ADIMI ILAN OKUMAZ.
+     *
+     * Sira sozlesmesi: once dugumun BUYUKLUGU okunur, sonra toplanip
+     * toplanmayacagina karar verilir. Kesif yanitinda `cards` alani yoktur;
+     * asiri buyuk bir ebeveynin DOM'unda kartlar dursa bile buradan hicbir
+     * ilan cikmaz.
+     */
     if (op && op.type === 'DISCOVER') {
       const discovered = readChildCategories();
       return {
         ok: true,
         url: location.href,
-        count: readResultCount(),
+        countText: readResultCountText(),
         children: discovered.children,
         childStructure: discovered.structure,
         categoryText: text(document.querySelector('h1')),
