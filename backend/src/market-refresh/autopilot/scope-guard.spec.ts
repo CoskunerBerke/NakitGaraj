@@ -173,10 +173,32 @@ describe('TARGET CANNOT ESCAPE TO ANOTHER SERIES', () => {
       ]),
     );
 
-    expect(outcome).toEqual({ outcome: 'SPLIT', enqueued: 1 });
+    // A4 Audi A3'un alt soyu DEGIL: taksonomi filtresi onu cocuk saymaz.
+    expect(outcome).toMatchObject({ outcome: 'SPLIT_REQUIRED', enqueued: 1 });
     expect(session.itemsView().map((i) => i.path)).toEqual(['/audi-a3', '/audi-a3-sportback']);
-    expect(session.outOfScopeNodes()).toEqual([
-      { path: '/audi-a4', label: 'A4', reason: 'OUTSIDE_ROOT' },
+  });
+
+  /**
+   * Kapsam koku kosu kokunden DAHA DAR olabilir. O zaman gecerli bir alt soy
+   * bile kapsam disinda kalir ve KAPSAM KORUMASI devreye girer.
+   */
+  it('records a genuine descendant that falls outside a narrower scope root', () => {
+    const narrow: AutopilotScope = { ...SMOKE_SCOPE, rootPath: '/audi-a3-sedan' };
+    const session = AutopilotSession.start(makeOptions({ scope: narrow }), [
+      { path: '/audi-a3-sedan', label: 'A3 Sedan' },
+    ]);
+    session.nextDirective();
+
+    session.submitDiscovery(
+      discovery('/audi-a3-sedan', 3132, [
+        { path: '/audi-a3-sedan-16-tdi', label: '1.6 TDI', count: 400 },
+        { path: '/audi-a3-sedan.htm', label: 'other', count: 10 },
+      ]),
+    );
+
+    expect(session.itemsView().map((i) => i.path)).toEqual([
+      '/audi-a3-sedan',
+      '/audi-a3-sedan-16-tdi',
     ]);
   });
 
@@ -201,9 +223,7 @@ describe('TARGET CANNOT ESCAPE TO ANOTHER MAKE', () => {
       ]),
     );
 
-    expect(session.itemsView().map((i) => i.path)).not.toContain('/bmw-3-serisi');
-    expect(session.outOfScopeNodes().map((n) => n.path)).toEqual(['/bmw-3-serisi']);
-    expect(session.status().outOfScope).toHaveLength(1);
+    expect(session.itemsView().map((i) => i.path)).toEqual(['/audi-a3', '/audi-a3-hatchback']);
   });
 
   it('never issues a navigation directive for an out-of-scope path', () => {
@@ -222,13 +242,23 @@ describe('TARGET CANNOT ESCAPE TO ANOTHER MAKE', () => {
 // ---------------------------------------------------------- 3) max result pages
 
 describe('MAX RESULT PAGES', () => {
-  it('caps the expected pages at the configured limit, not the source ceiling', () => {
+  /**
+   * Kapsam siniri bir dugumun BUYUKLUGUNU degistirmez; yalnizca kac sayfasinin
+   * toplanacagini kirpar. Ikisini tek degiskene karistirmak, asiri buyuk bir
+   * ebeveyni sahte yaprak yapan canli hatanin yarisiydi.
+   */
+  it('keeps the natural page expectation and truncates only the collection', () => {
     const session = startScoped();
     session.nextDirective();
-    // 900 ilan = 18 sayfa; kapsam 3 diyor.
+    // 900 ilan = 18 sayfa DOGAL beklenti; kapsam yalnizca 3 sayfa toplar.
     session.submitDiscovery(discovery('/audi-a3', 900));
 
-    expect(session.itemsView()[0]).toMatchObject({ kind: 'LEAF', expectedPages: 3 });
+    expect(session.itemsView()[0]).toMatchObject({
+      kind: 'LEAF',
+      nodeState: 'COLLECTABLE_LEAF',
+      expectedPages: 18,
+    });
+    expect(session.nextDirective()).toMatchObject({ type: 'COLLECT_PAGE', page: 1 });
   });
 
   it('stops after page 3 and never issues page 4', () => {

@@ -142,7 +142,7 @@ describe('RECURSIVE PARTITION', () => {
       ],
     });
 
-    expect(outcome).toEqual({ outcome: 'SPLIT', enqueued: 3 });
+    expect(outcome).toMatchObject({ outcome: 'SPLIT_REQUIRED', enqueued: 3, count: 11265 });
 
     const items = session.itemsView();
     const parent = items.find((i) => i.path === '/bmw-3-serisi')!;
@@ -228,7 +228,7 @@ describe('RECURSIVE PARTITION', () => {
       ],
     });
 
-    expect(outcome).toEqual({ outcome: 'SPLIT', enqueued: 2 });
+    expect(outcome).toMatchObject({ outcome: 'SPLIT_REQUIRED', enqueued: 2 });
     expect(session.isRunComplete()).toBe(false);
   });
 
@@ -346,16 +346,26 @@ describe('AUTOMATIC PAGINATION', () => {
     expect(session.isRunComplete()).toBe(true);
   });
 
-  it('keeps paging past an under-reported count instead of silently truncating', () => {
-    const session = AutopilotSession.start(makeOptions(), [{ path: '/audi-a3', label: 'A3' }]);
+  /**
+   * Eskiden burada beklenti sessizce artiriliyordu. Canli kosuda bu davranis,
+   * yanlis okunan bir sayimin ustunu ortup 6.559 ilanlik bir EBEVEYNI
+   * sayfalatti. Sayim celiskisi artik bir DURDURMA sebebidir.
+   */
+  it('stops instead of paging past a count the source contradicts', () => {
+    const opts = makeOptions();
+    const session = AutopilotSession.start(opts, [{ path: '/audi-a3', label: 'A3' }]);
     discoverLeaf(session, '/audi-a3', 40); // kaynak "1 sayfa" diyor
 
     session.nextDirective();
-    const first = session.submitPageBatch(batch('/audi-a3', 1, cardsFor('p1', 50), true));
-    expect(first.leafComplete).toBe(false);
+    const first = session.submitPageBatch(batch('/audi-a3', 1, cardsFor('p1', 40), true));
 
-    const second: any = session.nextDirective();
-    expect(second).toMatchObject({ type: 'COLLECT_PAGE', page: 2 });
+    expect(first).toMatchObject({ countMismatch: true, leafComplete: false });
+    expect(session.incompleteNodes()[0].reason).toBe('REPORTED_COUNT_MISMATCH');
+    expect(session.itemsView()[0].status).toBe('BLOCKED');
+    expect(session.isRunComplete()).toBe(false);
+
+    // Ikinci sayfa ASLA istenmez.
+    expect(session.nextDirective().type).toBe('HALT');
   });
 });
 
