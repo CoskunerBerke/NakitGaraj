@@ -144,7 +144,8 @@ const step2Schema = z.object({
 });
 
 import { API_BASE } from '@/lib/api';
-import VehicleHierarchyWizard, { HierarchyNode } from '@/components/VehicleHierarchyWizard';
+import VehicleSelectionSteps from '@/components/VehicleSelectionSteps';
+import { useVehicleHierarchy, type HierarchyNode } from '@/hooks/useVehicleHierarchy';
 
 const VEHICLE_FEATURES = {
   security: [
@@ -206,10 +207,15 @@ export default function ValuationWizard() {
    * asagida `!USE_HIERARCHY_WIZARD` altinda duruyor ve eski akislar bozulmuyor.
    * Uretimde kullanici agaci adim adim yuruyor ve KESIN yaprak kimligi
    * degerlemeye gonderiliyor.
+   *
+   * DURUM TEK YERDE: `useVehicleHierarchy`. Ayri bir `hierarchyLeaf` kopyasi
+   * TUTULMAZ; kopya, ustteki bir adim degistiginde eskiyip yanlis yaprağin
+   * istekte kalmasina yol acardi. Yaprak daima YOLUN SONUNDAN turer.
    */
   const USE_HIERARCHY_WIZARD = true;
-  const [hierarchyLeaf, setHierarchyLeaf] = useState<HierarchyNode | null>(null);
-  const [hierarchyPath, setHierarchyPath] = useState<HierarchyNode[]>([]);
+  const hierarchy = useVehicleHierarchy();
+  const hierarchyLeaf: HierarchyNode | null = hierarchy.leaf;
+  const hierarchyPath: HierarchyNode[] = hierarchy.path;
 
   const [selectedBrand, setSelectedBrand] = useState<string>('');
   const [selectedModel, setSelectedModel] = useState<string>('');
@@ -1336,55 +1342,84 @@ function SearchableCombobox({
               )}
             </div>
 
-            {/* ARAC SECIMI — KAYNAGIN GERCEK KATEGORI AGACI */}
-            {USE_HIERARCHY_WIZARD && (
-              <div className="flex flex-col gap-3 p-5 rounded-2xl bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-200 dark:border-zinc-800">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h3 className="text-sm font-bold text-zinc-800 dark:text-zinc-100">Aracınız</h3>
-                    <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-0.5">
-                      Her adımda yalnızca seçtiğiniz kategorinin alt seçenekleri gösterilir.
-                    </p>
-                  </div>
-                  {hierarchyLeaf && (
-                    <span className="text-xs font-bold text-emerald-500 flex items-center gap-1 bg-emerald-500/10 px-2.5 py-1 rounded-full border border-emerald-500/20">
-                      <CheckCircle className="w-3.5 h-3.5" /> Seçildi
-                    </span>
-                  )}
-                </div>
-                {/*
-                  MODEL YILI. Eski akista bu alan katalog bloklarinin icindeydi;
-                  sihirbaza gecince onlarla birlikte gizlenmisti ve degerleme
-                  motorunun ZORUNLU girdisi kayboluyordu. Sihirbaz akisinin
-                  kendi yil alani burada.
-                */}
-                <label className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 mt-1">
-                  Model yılı
-                </label>
-                <select
-                  value={selectedYear}
-                  onChange={(e) => setSelectedYear(e.target.value === '' ? '' : Number(e.target.value))}
-                  data-testid="hierarchy-year"
-                  className="glass-input rounded-xl p-3.5 text-sm w-full font-semibold"
-                >
-                  <option value="">Model yılı seçin</option>
-                  {years.map((y) => (
-                    <option key={y} value={y}>
-                      {y}
-                    </option>
-                  ))}
-                </select>
+            {/*
+              ARAC SECIMI — ESKI TASARIM, GERCEK KATEGORI AGACI.
 
-                <VehicleHierarchyWizard
-                  onChange={(path) => {
-                    // Ust seviye degisince ALT seciMler temizlenir; eski yaprak
-                    // hicbir sekilde istekte kalmaz.
-                    setHierarchyPath(path);
-                    setHierarchyLeaf(null);
-                  }}
-                  onComplete={(leaf) => setHierarchyLeaf(leaf)}
-                />
-              </div>
+              Sorular TEK TEK gelir: ekranda cevaplanmis adimlar ve SIRADAKI
+              tek soru bulunur. Kac adim olacagi veriden gelir (gercek
+              datasette 1-7 seviye), bu yuzden ilerideki adimlar onceden
+              cizilmez.
+            */}
+            {USE_HIERARCHY_WIZARD && (
+              <>
+                <VehicleSelectionSteps hierarchy={hierarchy} />
+
+                {/*
+                  MODEL YILI — eski tasarimin numarali kart dili.
+
+                  Arac secimi TAMAMLANMADAN sorulmaz: eski akista da yil
+                  markadan sonra gelir ve kilitli goruunurdu. Bu alan
+                  degerleme motorunun ZORUNLU girdisidir; katalog bloklariyla
+                  birlikte gizlenip kaybolmamalidir.
+                */}
+                <div
+                  className={`flex flex-col gap-3 p-5 rounded-2xl border transition-all ${
+                    hierarchyLeaf
+                      ? 'bg-zinc-50 dark:bg-zinc-900/50 border-zinc-200 dark:border-zinc-800'
+                      : 'bg-zinc-100/40 dark:bg-zinc-900/20 border-zinc-200/50 dark:border-zinc-800/40 opacity-60 pointer-events-none select-none'
+                  }`}
+                  data-testid="vehicle-year-card"
+                >
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="text-sm font-bold text-zinc-900 dark:text-white flex items-center gap-2">
+                        <span
+                          className={`w-6 h-6 rounded-full text-xs font-extrabold flex items-center justify-center ${
+                            hierarchyLeaf
+                              ? 'bg-brand-orange text-white'
+                              : 'bg-zinc-300 dark:bg-zinc-700 text-zinc-500'
+                          }`}
+                        >
+                          {hierarchyPath.length + 1}
+                        </span>
+                        Aracınızın Model Yılını Seçin
+                      </h3>
+                      <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-0.5">
+                        Aracınızın ruhsatında yazan imalat/model yılını seçin.
+                      </p>
+                    </div>
+                    {!hierarchyLeaf ? (
+                      <span className="text-[10px] font-semibold text-amber-500 bg-amber-500/10 px-2 py-0.5 rounded-md">
+                        🔒 Önce Aracınızı Seçiniz
+                      </span>
+                    ) : selectedYear ? (
+                      <span className="text-xs font-bold text-emerald-500 flex items-center gap-1 bg-emerald-500/10 px-2.5 py-1 rounded-full border border-emerald-500/20">
+                        <CheckCircle className="w-3.5 h-3.5" /> Seçildi
+                      </span>
+                    ) : null}
+                  </div>
+                  <select
+                    value={selectedYear}
+                    disabled={!hierarchyLeaf}
+                    onChange={(e) =>
+                      setSelectedYear(e.target.value === '' ? '' : Number(e.target.value))
+                    }
+                    data-testid="hierarchy-year"
+                    aria-label="Model yılı seçimi"
+                    suppressHydrationWarning
+                    className="glass-input rounded-xl p-3.5 text-sm w-full font-semibold disabled:cursor-not-allowed"
+                  >
+                    <option value="">
+                      {hierarchyLeaf ? '-- Model Yılını Seçiniz --' : 'Önce Aracınızı Seçiniz'}
+                    </option>
+                    {years.map((y) => (
+                      <option key={y} value={y}>
+                        {y} Yılı
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </>
             )}
 
             {/* ESKI SABIT KATALOG SECIMI — silinmedi, uretimde kapali */}

@@ -248,6 +248,52 @@ describe('KIMLIK TAM YOLDUR, SON ISIM DEGIL', () => {
     expect(a3.fullPath).toBe('Audi / A3 / A3 Sportback / 35 TFSI / Advanced');
     expect(a4.fullPath).toBe('Audi / A4 / A4 Sedan / 40 TDI / Advanced');
   });
+
+  /**
+   * KORPUSTAN GERCEK VAKA: "Peugeot 206" ara seviyesi kardeslerden turetilir,
+   * "Peugeot 206 +" ise kaynakta AYRI bir model sayfasidir. Slug harf/rakam
+   * disini attigi icin ikisi de "peugeot/206" uretir.
+   *
+   * Onceki davranis ikincisini SESSIZCE DUSURUYORDU (413 gercek ilan agacta
+   * hic gorunmuyordu). Ilanlari mevcut dugume katmak ise KARDES SIZINTISI
+   * olurdu. Dogru sonuc: iki AYRI dugum, iki AYRI havuz.
+   */
+  it('slug cakismasi yasayan iki farkli etiketi AYRI dugum olarak tutar', () => {
+    const tree = buildHierarchy(
+      [
+        { categoryString: 'Peugeot 206 1.4', listingCount: 10, sourceFiles: ['206-1.4.html'] },
+        { categoryString: 'Peugeot 206 1.6', listingCount: 10, sourceFiles: ['206-1.6.html'] },
+        { categoryString: 'Peugeot 206 +', listingCount: 413, sourceFiles: ['206-plus.html'] },
+      ],
+      { knownMakes: ['Peugeot'] },
+    );
+
+    const base = findByPath(tree, ['Peugeot', '206'])!;
+    /**
+     * Kaynak "206"yi "206 +"nin ONEKI olarak gosterdigi icin agac onu 206'nin
+     * ALTINA yerlestirir — ayni kural "A3 / A3 Sportback"i de uretir. Onemli
+     * olan dugumun VAR olmasi ve havuzunun ayri kalmasidir.
+     */
+    const plus = findByPath(tree, ['Peugeot', '206', '+'])!;
+
+    expect(base).toBeTruthy();
+    expect(plus).toBeTruthy();
+    expect(plus.id).not.toBe(base.id);
+
+    // "206 +" ilanlari KENDI dugumunde kalir, "206" havuzuna karismaz.
+    expect(plus.ownListingCount).toBe(413);
+    expect(plus.sourceFiles).toEqual(['206-plus.html']);
+    expect(base.sourceFiles).not.toContain('206-plus.html');
+
+    // Kaynakta ayri sayfasi oldugu icin turetilmis DEGILDIR ve yapraktir.
+    expect(plus.derived).toBe(false);
+    expect(plus.isLeaf).toBe(true);
+
+    // Yol cozumlemesi de birbirine karismaz: ayni slug, AYRI dugumler.
+    expect(plus.id.startsWith(base.id)).toBe(true);
+    expect(findByPath(tree, ['Peugeot', '206', '+'])!.id).toBe(plus.id);
+    expect(findByPath(tree, ['Peugeot', '206'])!.id).toBe(base.id);
+  });
 });
 
 // -------------------------------------------------------------- DOSYA ADI PARSE
@@ -271,6 +317,35 @@ describe('KAYNAK DOSYA ADINDAN KATEGORI', () => {
     expect(
       categoryStringFromSourceFile("2.El Arabalar ve Satılık Sıfır Km Otomobil Fiyatları.html"),
     ).toBe('');
+  });
+
+  /**
+   * KORPUSTAN GERCEK VAKA: bu dosyalarda "ı" bozuk kodlanmis (UTF-8 C4 B1
+   * baytlari CP437 olarak cozulup "─▒" yazilmis). Kalip tam harf esitligi
+   * bekledigi icin kuyruk temizlenemiyor ve kullaniciya 169 adet
+   * "190 Fiyatlar─▒ & Modelleri" secenegi gosteriliyordu.
+   */
+  it('bozuk kodlanmis Turkce harf tasiyan kuyrugu da temizler', () => {
+    expect(
+      categoryStringFromSourceFile(
+        "C:/x/Mercedes-Benz/Mercedes-Benz 190 Fiyatlar─▒ & Modelleri sahibinden.com'da - 2.html",
+      ),
+    ).toBe('Mercedes-Benz 190');
+  });
+
+  it('marka duzeyi sayfasinin kuyrugunu atinca markanin kendisi kalir', () => {
+    expect(
+      categoryStringFromSourceFile(
+        "Mercedes-Benz Fiyatlar─▒ & Modelleri sahibinden.com'da.html",
+      ),
+    ).toBe('Mercedes-Benz');
+  });
+
+  it('"Fiyat Listesi" ve "Arama Sonucu" sayfa kuyruklarini da temizler', () => {
+    expect(
+      categoryStringFromSourceFile('The London Taxi TX4 TX4 Fiyat Listesi - sahibinden.com.html'),
+    ).toBe('The London Taxi TX4 TX4');
+    expect(categoryStringFromSourceFile('Nieve _ Arama Sonucu - sahibinden.com.html')).toBe('Nieve');
   });
 });
 

@@ -20,12 +20,28 @@
  * iliskilerinden turetilir — tahminle degil.
  */
 
-/** Kaynagin liste sayfasi basliklarina ekledigi pazarlama kuyruklari. */
+/**
+ * Kaynagin liste sayfasi basliklarina ekledigi pazarlama kuyruklari.
+ *
+ * "Fiyatlar" sonrasi TEK BIR TURKCE HARF beklenmez. Kaydedilen dosyalarin bir
+ * bolumunde "ı" (U+0131) bozuk kodlanmis: UTF-8 baytlari (C4 B1) CP437 olarak
+ * cozulup "─▒" (U+2500 U+2592) olarak yazilmis. Bu dosyalar korpusta
+ * gercekten var ve neredeyse tamami Mercedes-Benz'e ait; kalip tam esitlik
+ * bekledigi icin kuyruk TEMIZLENEMIYOR ve kullaniciya "190 Fiyatlar─▒ &
+ * Modelleri" gibi 169 bozuk secenek gosteriliyordu.
+ *
+ * Bu yuzden harf yerine "&"e kadar en fazla birkac bosluksuz karakter kabul
+ * edilir; kalip yine "& Modelleri" ile baglandigi icin gercek bir model adini
+ * yutmaz. (Olculdu: bozukluk YALNIZCA bu kuyrukta; hicbir gercek etikette yok.)
+ */
 const LISTING_SUFFIXES: RegExp[] = [
-  /\s*Fiyatlar[ıi]\s*&\s*Modelleri\b.*$/i,
+  /\s*Fiyatlar[^\s&]{0,3}\s*&\s*Modelleri\b.*$/i,
   /\s*2\s*\.?\s*El\s+Arabalar\b.*$/i,
   /\s*Sat[ıi]l[ıi]k\s+S[ıi]f[ıi]r\s+Km\b.*$/i,
-  /\s*sahibinden\.com'?da\b.*$/i,
+  /\s*Fiyat\s+Listesi\b.*$/i,
+  /\s*_?\s*Arama\s+Sonucu\b.*$/i,
+  // "…'da" ekli ve eksiz iki bicim de gozlendi ("- sahibinden.com").
+  /\s*-?\s*sahibinden\.com('?da)?\b.*$/i,
 ];
 
 /** Kaydedilen dosyanin "- 3" gibi kopya numarasi ve uzantisi. */
@@ -54,7 +70,8 @@ export function categoryStringFromSourceFile(sourceFile: string | null | undefin
   // Kuyruk temizliginden sonra tekrar olusabilen kopya numarasi.
   for (const noise of FILE_NOISE) value = value.replace(noise, '');
 
-  value = value.replace(/\s+/g, ' ').trim();
+  // Kuyruk atildiktan sonra geride kalan baglayici noktalama ("… -", "… _").
+  value = value.replace(/\s+/g, ' ').replace(/[\s\-_]+$/, '').trim();
   return isNonCategoryPage(value) ? '' : value;
 }
 

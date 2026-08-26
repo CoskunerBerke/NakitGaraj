@@ -15,9 +15,8 @@ import {
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
-import { HierarchyNode, HierarchyTree } from './hierarchy-tree';
+import { findByPath, HierarchyNode, HierarchyTree } from './hierarchy-tree';
 import { artifactToTree, loadArtifact, resolveArtifactPath } from './hierarchy-source';
-import { nodeIdFromPath } from './category-path';
 import { identityFromPath, LeafTargetIdentity } from './leaf-target';
 
 /** Frontend'in ihtiyaci olan asgari dugum sozlesmesi. */
@@ -134,10 +133,16 @@ export class VehicleHierarchyService {
     return chain.map(toDto);
   }
 
-  /** Tam yolla cozumleme — son isme gore DEGIL. */
+  /**
+   * Tam yolla cozumleme — son isme gore DEGIL.
+   *
+   * Kimlik slug'dan YENIDEN uretilmez; `findByPath` bulunan dugumun
+   * segmentlerini birebir dogrular. Aksi halde slug cakismasi yasayan
+   * dugumler ("Peugeot / 206" ve "Peugeot / 206 +") birbirine cozulurdu.
+   */
   resolvePath(segments: string[]): HierarchyNodeDto {
     const tree = this.require();
-    const node = tree.nodes.get(nodeIdFromPath(segments));
+    const node = findByPath(tree, segments);
     if (!node) throw new NotFoundException(`Unknown hierarchy path "${segments.join(' / ')}"`);
     return toDto(node);
   }

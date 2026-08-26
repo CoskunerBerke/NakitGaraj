@@ -1,42 +1,20 @@
 'use client';
 
 /**
- * ARAC SECIM SIHIRBAZI — KAYNAK AGACINI BIREBIR IZLER.
+ * ARAC SECIM SIHIRBAZI — GELISTIRME/TESHIS EKRANI (`/arac-secimi`).
  *
- * SABIT ADIM YOKTUR. Bilesen hicbir yerde "marka/seri/model/motor/paket"
- * diye bes asama varsaymaz; yalnizca su donguyu calistirir:
+ * URETIM AKISI BU DEGILDIR: kullanici `/degerleme` uzerinden, eski NakitGaraj
+ * kart/select tasarimiyla ilerler. Bu ekran agaci ciplak halde gormek icin
+ * durur.
  *
- *   currentNode = kok
- *   while currentNode.hasChildren:
- *       currentNode'un DOGRUDAN cocuklarini sor
- *       currentNode = secilen cocuk
- *   currentNode.isLeaf -> secim tamam
- *
- * Derinlik veriden gelir: gercek datasette 2 ile 7 seviye arasinda degisir.
- *
- * FAIL-CLOSED: cocuk listesi yuklenemezse dugum YAPRAK SAYILMAZ. "Bilinmiyor"
- * ile "yaprak" ayni sey degildir; karistirmak kullaniciya ust seviyenin
- * (yanlis) piyasa sonucunu gostermek olurdu.
+ * GEZINME MANTIGI BURADA YOKTUR. Tum durum `useVehicleHierarchy` icinde;
+ * boylece iki ekran ayni agaci ayni kurallarla yurur ve ikinci bir
+ * implementasyon olusmaz.
  */
-import { useCallback, useEffect, useState } from 'react';
-import { API_BASE } from '@/lib/api';
+import { useEffect } from 'react';
+import { useVehicleHierarchy, type HierarchyNode } from '@/hooks/useVehicleHierarchy';
 
-export interface HierarchyNode {
-  id: string;
-  name: string;
-  parentId: string | null;
-  depth: number;
-  fullPath: string;
-  pathSegments: string[];
-  resultCount: number | null;
-  totalCount: number;
-  hasChildren: boolean;
-  isLeaf: boolean;
-  derived: boolean;
-}
-
-/** Adim durumu — UNKNOWN asla LEAF ile birlestirilmez. */
-type StepState = 'LOADING' | 'HAS_CHILDREN' | 'LEAF' | 'ERROR';
+export type { HierarchyNode };
 
 /**
  * Soru basligi. Semantik tip KESIN bilinmedigi icin derinlige gore nazik bir
@@ -56,17 +34,10 @@ function questionFor(depth: number, parentName: string | null): string {
     case 4:
       return 'Hangi paket / donanım?';
     default:
-      return parentName ? `${parentName} için bir sonraki seçeneği seçin` : 'Bir sonraki seçeneği seçin';
+      return parentName
+        ? `${parentName} için bir sonraki seçeneği seçin`
+        : 'Bir sonraki seçeneği seçin';
   }
-}
-
-async function fetchJson<T>(url: string): Promise<T> {
-  const response = await fetch(url);
-  if (!response.ok) {
-    const body = await response.json().catch(() => null);
-    throw new Error(body?.message || `İstek başarısız (${response.status})`);
-  }
-  return response.json();
 }
 
 export interface VehicleHierarchyWizardProps {
@@ -80,55 +51,14 @@ export default function VehicleHierarchyWizard({
   onComplete,
   onChange,
 }: VehicleHierarchyWizardProps) {
-  /** Kokten simdiye kadar SECILEN dugumler. Sabit alanlar yok, saf yol. */
-  const [path, setPath] = useState<HierarchyNode[]>([]);
-  const [options, setOptions] = useState<HierarchyNode[]>([]);
-  const [state, setState] = useState<StepState>('LOADING');
-  const [error, setError] = useState<string | null>(null);
-
-  const current = path.length > 0 ? path[path.length - 1] : null;
-
-  const load = useCallback(async (node: HierarchyNode | null) => {
-    setState('LOADING');
-    setError(null);
-    try {
-      const url = node
-        ? `${API_BASE}/vehicle-hierarchy/children?parentId=${encodeURIComponent(node.id)}`
-        : `${API_BASE}/vehicle-hierarchy/roots`;
-      const children = await fetchJson<HierarchyNode[]>(url);
-      setOptions(children);
-      // Cocuk listesi BOS gelirse yaprak; ama hata durumunda ASLA yaprak degil.
-      setState(children.length > 0 ? 'HAS_CHILDREN' : 'LEAF');
-    } catch (err) {
-      setOptions([]);
-      setError(err instanceof Error ? err.message : 'Araç listesi yüklenemedi.');
-      setState('ERROR');
-    }
-  }, []);
-
-  useEffect(() => {
-    void load(current);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [current?.id]);
+  const { path, options, state, error, leaf, current, select, goTo, retry } =
+    useVehicleHierarchy();
 
   useEffect(() => {
     onChange?.(path);
-    if (state === 'LEAF' && current) onComplete?.(current, path);
+    if (leaf) onComplete?.(leaf, path);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [path, state]);
-
-  const select = (node: HierarchyNode) => {
-    if (state === 'LOADING') return; // yuklenirken eski secenege tiklanmasin
-    setPath((prev) => [...prev, node]);
-  };
-
-  /** Breadcrumb'da geri donuldugunde SONRAKI secimler temizlenir. */
-  const goTo = (index: number) => {
-    if (state === 'LOADING') return;
-    setPath((prev) => prev.slice(0, index));
-  };
-
-  const complete = state === 'LEAF' && current !== null;
+  }, [path, leaf]);
 
   return (
     <div className="w-full" data-testid="vehicle-hierarchy-wizard">
@@ -164,7 +94,10 @@ export default function VehicleHierarchyWizard({
       {path.length > 0 && (
         <ul className="mb-4 space-y-1" data-testid="vh-selected">
           {path.map((node) => (
-            <li key={node.id} className="flex items-center gap-2 text-sm text-zinc-600 dark:text-zinc-300">
+            <li
+              key={node.id}
+              className="flex items-center gap-2 text-sm text-zinc-600 dark:text-zinc-300"
+            >
               <span className="text-brand-orange font-bold">✓</span>
               <span>{node.name}</span>
             </li>
@@ -183,7 +116,7 @@ export default function VehicleHierarchyWizard({
           <p className="text-xs opacity-80">{error}</p>
           <button
             type="button"
-            onClick={() => void load(current)}
+            onClick={retry}
             className="mt-3 px-3 py-1.5 rounded-md bg-red-600 text-white text-xs font-medium hover:bg-red-700 transition"
           >
             Tekrar dene
@@ -232,7 +165,7 @@ export default function VehicleHierarchyWizard({
         </div>
       )}
 
-      {complete && (
+      {leaf && (
         <div
           data-testid="vh-complete"
           className="rounded-lg border border-emerald-300 bg-emerald-50 dark:border-emerald-900 dark:bg-emerald-950/40 p-4"
@@ -240,12 +173,15 @@ export default function VehicleHierarchyWizard({
           <p className="text-sm font-semibold text-emerald-800 dark:text-emerald-200">
             Araç seçimi tamamlandı
           </p>
-          <p className="mt-1 text-xs text-emerald-700 dark:text-emerald-300" data-testid="vh-full-path">
-            {current!.fullPath}
+          <p
+            className="mt-1 text-xs text-emerald-700 dark:text-emerald-300"
+            data-testid="vh-full-path"
+          >
+            {leaf.fullPath}
           </p>
-          {current!.resultCount !== null && (
+          {leaf.resultCount !== null && (
             <p className="mt-2 text-xs text-emerald-700/80 dark:text-emerald-300/80">
-              Bu seçim için {current!.resultCount.toLocaleString('tr-TR')} ilan gözlendi.
+              Bu seçim için {leaf.resultCount.toLocaleString('tr-TR')} ilan gözlendi.
             </p>
           )}
         </div>

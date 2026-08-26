@@ -209,16 +209,29 @@ export function buildHierarchy(
   // 4) Dugumleri kur.
   const nodes = new Map<string, HierarchyNode>();
   const rootIds: string[] = [];
+  /**
+   * Gozlenen dize -> ATANMIS dugum kimligi.
+   *
+   * Ebeveyn kimligi yeniden HESAPLANMAZ, buradan OKUNUR. Yeniden hesaplamak,
+   * asagidaki cakisma ayrimini gorunmez kilardi: ebeveyn ayri bir kimlik
+   * aldiysa cocuklari yine eski (cakisan) kimlige baglanirdi.
+   *
+   * Dizeler sozcuk sayisina gore artan sirada islendigi ve bir dizenin
+   * ebeveyni daima DAHA AZ sozcuklu oldugu icin ebeveyn her zaman onceden
+   * atanmis olur.
+   */
+  const idByString = new Map<string, string>();
   const sorted = [...observed].sort((a, b) => a.split(' ').length - b.split(' ').length);
 
   for (const value of sorted) {
     const parentString = longestObservedPrefix(value, observed);
     const label = parentString ? value.slice(parentString.length).trim() : value;
-    const parentId = parentString ? nodeIdFromPath(segmentsOf(parentString, nodes, observed)) : null;
+    const parentId = parentString ? idByString.get(parentString) ?? null : null;
     const parentNode = parentId ? nodes.get(parentId) : null;
     const pathSegments = parentNode ? [...parentNode.pathSegments, label] : [label];
-    const id = nodeIdFromPath(pathSegments);
-    if (nodes.has(id)) continue;
+    const id = uniqueNodeId(pathSegments, nodes);
+    if (!id) continue; // birebir ayni yol: gercekten ayni dugum.
+    idByString.set(value, id);
 
     const source = byString.get(value);
     nodes.set(id, {
@@ -261,16 +274,47 @@ export function buildHierarchy(
   return { nodes, rootIds, unresolved };
 }
 
-/** Bir kategori dizesinin segmentlerini, kurulmus dugumlerden geri okur. */
-function segmentsOf(
-  value: string,
+/**
+ * CAKISMAYAN DUGUM KIMLIGI.
+ *
+ * Slug uretimi harf/rakam disindaki karakterleri atar; bu yuzden GERCEKTEN
+ * FARKLI iki etiket ayni kimlige dusebilir. Korpusta gozlenen ornek:
+ * "Peugeot 206" (kardeslerden turetilmis ara seviye) ile "Peugeot 206 +"
+ * (kaynakta AYRI bir model sayfasi) — ikisi de "peugeot/206" uretiyordu.
+ *
+ * Onceki davranis ikinciyi SESSIZCE DUSURUYORDU: kullanicinin elle topladigi
+ * 413 ilan agacta hic gorunmuyordu. Iki yanlis secenek daha var ve ikisi de
+ * reddedildi:
+ *   - ilanlari mevcut dugume katmak -> "206 +" ilanlarini "206" havuzuna
+ *     karistirmak, yani KARDES SIZINTISI ve yanlis fiyat;
+ *   - kimligi kisaltmak -> tum agacin kimlikleri degisir.
+ *
+ * Bunun yerine cakisan dugum KARARLI bir ek alir ("peugeot/206-2"). Kimlik
+ * yalnizca cakisan dal icin degisir; diger tum kimlikler aynen korunur.
+ *
+ * Yol segmentleri birebir ayni ise bu gercekten AYNI dugumdur; null doner
+ * ve cagiran atlar.
+ */
+function uniqueNodeId(
+  pathSegments: string[],
   nodes: Map<string, HierarchyNode>,
-  observed: Set<string>,
-): string[] {
-  const parentString = longestObservedPrefix(value, observed);
-  if (!parentString) return [value];
-  const parentSegments = segmentsOf(parentString, nodes, observed);
-  return [...parentSegments, value.slice(parentString.length).trim()];
+): string | null {
+  const base = nodeIdFromPath(pathSegments);
+  const existing = nodes.get(base);
+  if (!existing) return base;
+  if (samePath(existing.pathSegments, pathSegments)) return null;
+
+  for (let suffix = 2; suffix < 1000; suffix += 1) {
+    const candidate = `${base}-${suffix}`;
+    const taken = nodes.get(candidate);
+    if (!taken) return candidate;
+    if (samePath(taken.pathSegments, pathSegments)) return null;
+  }
+  return null;
+}
+
+function samePath(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((segment, index) => segment === b[index]);
 }
 
 /** Kokten yaprağa tum yollari sayar (denetim ve test icin). */
@@ -289,7 +333,20 @@ export function enumerateLeafPaths(tree: HierarchyTree): string[][] {
   return out;
 }
 
-/** Tam yola gore dugum bulur — son isme gore DEGIL. */
+/**
+ * Tam yola gore dugum bulur — son isme gore DEGIL.
+ *
+ * Slug'dan gelen kimlik bir BASLANGIC tahminidir, kanit degildir: cakisma
+ * yuzunden ayri kimlik almis dugumler ("peugeot/206-2") ayni slug'i uretir.
+ * Bu yuzden bulunan dugumun segmentleri BIREBIR dogrulanir; tutmazsa tam
+ * segment esitligiyle aranir. Dogrulamasiz donmek, "206 +" isteyen cagiriya
+ * "206" dugumunu vermek olurdu.
+ */
 export function findByPath(tree: HierarchyTree, segments: string[]): HierarchyNode | null {
-  return tree.nodes.get(nodeIdFromPath(segments)) ?? null;
+  const direct = tree.nodes.get(nodeIdFromPath(segments));
+  if (direct && samePath(direct.pathSegments, segments)) return direct;
+  for (const node of tree.nodes.values()) {
+    if (samePath(node.pathSegments, segments)) return node;
+  }
+  return null;
 }
