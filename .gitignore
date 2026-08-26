@@ -76,3 +76,6 @@ backend/.local/
 backend/data/market-refresh/autopilot/
 **/bridge-token.txt
 chrome-extension/**/*.local.json
+
+# Vehicle hierarchy: mevcut veriden TURETILEN artefakt (uretilen, kaynak degil).
+backend/data/vehicle-hierarchy/

@@ -7,6 +7,7 @@ import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
 import { VehicleModule } from './vehicle/vehicle.module';
+import { VehicleHierarchyModule } from './vehicle-hierarchy/vehicle-hierarchy.module';
 import { EvaluationModule } from './evaluation/evaluation.module';
 import { ConsignmentModule } from './consignment/consignment.module';
 import { AdminModule } from './admin/admin.module';
@@ -24,6 +25,7 @@ import { TelegramModule } from './telegram/telegram.module';
     ScheduleModule.forRoot(),
     AuthModule,
     VehicleModule,
+    VehicleHierarchyModule,
     EvaluationModule,
     ConsignmentModule,
     AdminModule,
