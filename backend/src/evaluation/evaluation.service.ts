@@ -536,6 +536,27 @@ export class EvaluationService {
       ? this.vehicleHierarchy!.resolveLeafTarget(dto.hierarchyLeafId)
       : null;
 
+    /**
+     * GOSTERIM YOLU — TEK KAYNAK.
+     *
+     * `brand/model/variant/package` dortlusu SABIT ROL atar ve derinlik
+     * degistiginde ORTA SEGMENTI DUSURUR: "Chevrolet / Cruze / 1.6 / LS /
+     * Plus" ozette "Cruze / LS / Plus" gorunuyordu. Fiyatlama bundan
+     * etkilenmiyor (havuz yine kesin yaprak), ama kullaniciya sectiginden
+     * FARKLI bir arac adi gostermek kabul edilemez.
+     *
+     * Bu yuzden secimin TAM YOLU ayrica tasinir; arayuz ozeti ve breadcrumb
+     * bunu kullanir, rol tahminini degil. Ayni yol `hierarchyLeafId` ile
+     * backend cozumlemesiyle de birebir aynidir.
+     */
+    const displayPath = leafTarget
+      ? {
+          hierarchyLeafId: dto.hierarchyLeafId,
+          hierarchyPath: leafTarget.identity.segments,
+          hierarchyFullPath: leafTarget.identity.fullPath,
+        }
+      : {};
+
     const target = {
       make: leafTarget?.identity.make || observed.make || spec?.manufacturer?.name || '',
       model: leafTarget?.identity.model || observed.model || spec?.model?.name || '',
@@ -593,6 +614,7 @@ export class EvaluationService {
           bodyType: target.bodyType || '',
           fuelType: target.fuelType || '',
           transmission: target.transmission || '',
+          ...displayPath,
         },
         results: null,
         aiAnalysis: ['UYARI: Girdiğiniz araç için veritabanımızda yeterli emsal ilan verisi bulunamamıştır.'],
@@ -730,6 +752,7 @@ export class EvaluationService {
           bodyType: target.bodyType || '',
           fuelType: target.fuelType || '',
           transmission: target.transmission || '',
+          ...displayPath,
         },
         results: null,
         aiAnalysis: ['HATA: Veri bütünlüğü doğrulanamadı.'],
@@ -814,6 +837,7 @@ export class EvaluationService {
         bodyType: target.bodyType || '',
         fuelType: target.fuelType || '',
         transmission: target.transmission || '',
+        ...displayPath,
         // Teknik zenginlestirme: katalog kaydi varsa doldurulur, yoksa UNKNOWN.
         engineSize: spec?.variant?.engineSize || null,
         horsepower: spec?.variant?.horsepower || null,

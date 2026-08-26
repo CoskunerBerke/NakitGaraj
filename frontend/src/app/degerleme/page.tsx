@@ -1044,10 +1044,21 @@ function SearchableCombobox({
       return;
     }
 
-    // Stale or missing vehicle selection check
-    if (!selectedBrand || !selectedYear || !selectedModel) {
-      alert('Seçtiğiniz araç bilgileri güncellendi. Lütfen Motor/Versiyon ve Paket seçimini yeniden yapın.');
-      resetSubordinateOptions();
+    /**
+     * Bayat/eksik arac secimi kontrolu.
+     *
+     * Bu bekci eski katalog alanlarina (selectedBrand/selectedModel) bakiyordu.
+     * Sihirbaz akisinda o alanlar TANIMI GEREGI bostur; kontrol oldugu gibi
+     * birakilsaydi kullanici tum formu doldurup "Degerle"ye bastiginda 1. adima
+     * geri atilirdi. Her akis KENDI tamamlanmislik kanitina bakar.
+     */
+    const vehicleSelectionMissing = USE_HIERARCHY_WIZARD
+      ? !selectedYear || !hierarchyLeaf || hierarchyLeaf.isLeaf !== true
+      : !selectedBrand || !selectedYear || !selectedModel;
+
+    if (vehicleSelectionMissing) {
+      alert('Araç seçiminiz eksik ya da güncellendi. Lütfen aracınızı yeniden seçin.');
+      if (!USE_HIERARCHY_WIZARD) resetSubordinateOptions();
       setStep(1);
       return;
     }
@@ -1783,8 +1794,40 @@ function SearchableCombobox({
               </>
             )}
 
+            {/*
+              SECIM OZETI (sihirbaz akisi) — TEK KAYNAK: `hierarchyPath`.
+              Breadcrumb, bu ozet ve istege giden `hierarchyLeafId` ayni
+              secilen yoldan turer; ayri algoritmalar kullanilmaz.
+            */}
+            {USE_HIERARCHY_WIZARD && hierarchyPath.length > 0 && (
+              <div
+                data-testid="wizard-selection-summary"
+                className="mt-4 p-4 rounded-2xl bg-brand-orange/10 border border-brand-orange/20 flex items-center justify-between flex-wrap gap-2"
+              >
+                <div className="flex items-center gap-2">
+                  <Car className="w-4 h-4 text-brand-orange" />
+                  <span
+                    data-testid="wizard-selection-path"
+                    className="text-xs font-bold text-zinc-800 dark:text-zinc-200"
+                  >
+                    Seçilen Araç: {selectedYear ? `${selectedYear} ` : ''}
+                    {hierarchyPath.map((n) => n.name).join(' › ')}
+                  </span>
+                </div>
+                {hierarchyLeaf ? (
+                  <span className="text-[10px] font-black uppercase bg-emerald-500 text-white px-2.5 py-1 rounded-full flex items-center gap-1">
+                    <Check className="w-3 h-3" /> SEÇİM TAMAMLANDI
+                  </span>
+                ) : (
+                  <span className="text-[10px] font-black uppercase bg-amber-500 text-white px-2.5 py-1 rounded-full">
+                    ALT SEÇENEK BEKLENİYOR
+                  </span>
+                )}
+              </div>
+            )}
+
             {/* Live Vehicle Selection Summary Badge */}
-            {(selectedBrand || selectedModel) && (
+            {!USE_HIERARCHY_WIZARD && (selectedBrand || selectedModel) && (
               <motion.div
                 initial={{ opacity: 0, y: 10 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -2811,12 +2854,29 @@ function SearchableCombobox({
                   {t('wiz.step3.title')}
                 </span>
                 <h2 data-testid="result-vehicle-name" className="text-2xl md:text-3xl font-black text-zinc-900 dark:text-white mt-2">
-                  {activeVehicle.year} {activeVehicle.brand} {activeVehicle.model}
+                  {Array.isArray((activeVehicle as any).hierarchyPath) &&
+                  (activeVehicle as any).hierarchyPath.length > 0
+                    ? `${activeVehicle.year} ${(activeVehicle as any).hierarchyPath.join(' ')}`
+                    : `${activeVehicle.year} ${activeVehicle.brand} ${activeVehicle.model}`}
                 </h2>
-                <p data-testid="result-vehicle-details" className="text-xs text-zinc-500">
-                  {activeVehicle.variant} {activeVehicle.package ? `- ${activeVehicle.package}` : ''}{' '}
-                  {activeVehicle.transmission ? `- ${activeVehicle.transmission}` : ''} {activeVehicle.fuelType ? `- ${activeVehicle.fuelType}` : ''}
-                </p>
+                {/*
+                  TAM YOL GOSTERIMI. brand/model/variant/package dortlusu sabit
+                  rol atadigi icin derinlik degistiginde ORTA SEGMENTI dusuruyor
+                  ("Chevrolet / Cruze / 1.6 / LS / Plus" -> "Cruze / LS / Plus").
+                  Kaynak agacindan gelen tam yol varsa kullanicinin GERCEKTEN
+                  sectigi zincir aynen gosterilir.
+                */}
+                {Array.isArray((activeVehicle as any).hierarchyPath) &&
+                (activeVehicle as any).hierarchyPath.length > 0 ? (
+                  <p data-testid="result-vehicle-details" className="text-xs text-zinc-500">
+                    {(activeVehicle as any).hierarchyPath.join(' › ')}
+                  </p>
+                ) : (
+                  <p data-testid="result-vehicle-details" className="text-xs text-zinc-500">
+                    {activeVehicle.variant} {activeVehicle.package ? `- ${activeVehicle.package}` : ''}{' '}
+                    {activeVehicle.transmission ? `- ${activeVehicle.transmission}` : ''} {activeVehicle.fuelType ? `- ${activeVehicle.fuelType}` : ''}
+                  </p>
+                )}
               </div>
 
               {/* Valuation Stats Dashboard */}
