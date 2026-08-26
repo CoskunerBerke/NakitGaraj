@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import { CreateEvaluationDto } from './dto/create-evaluation.dto';
 import { TelegramService } from '../telegram/telegram.service';
@@ -6,6 +6,7 @@ import { EmsalMatcherService } from './emsal-matcher.service';
 import { RobustPricingCalculator } from './robust-pricing-calculator';
 import { splitVariantString } from './listing-attributes';
 import { assessCondition } from './condition-assessment';
+import { VehicleHierarchyService } from '../vehicle-hierarchy/vehicle-hierarchy.service';
 
 @Injectable()
 export class EvaluationService {
@@ -19,6 +20,13 @@ export class EvaluationService {
     private prisma: PrismaService,
     private telegramService: TelegramService,
     private emsalMatcherService: EmsalMatcherService,
+    /**
+     * OPSIYONEL: mevcut birim testleri bu servisi uc bagimlilikla kuruyor ve
+     * hiyerarsi kullanmiyor. Zorunlu yapmak, bu gorevin acikca korumasini
+     * istedigi geriye donuk uyumu kirardi. `hierarchyLeafId` gonderen istek
+     * ise servisi ZORUNLU kilar (asagida acikca kontrol edilir).
+     */
+    @Optional() private vehicleHierarchy?: VehicleHierarchyService,
   ) {}
 
   /**
@@ -511,11 +519,33 @@ export class EvaluationService {
      * Marka/model DISARIDA kalir: musteri onlari acikca secti ve arama
      * zincirinin her basamagi manufacturerId + modelId ile filtrelenir.
      */
+    /**
+     * KESIN YAPRAK HEDEFI.
+     *
+     * `hierarchyLeafId` geldiginde arac kimligi kaynagin kendi kategori
+     * agacindan gelir ve emsal havuzu TAM O yaprağin kaynak sayfalariyla
+     * sinirlanir. Isim benzerligiyle katalog eslesmesi ARANMAZ: yanlis araci
+     * sessizce fiyatlamaktansa istek reddedilir (bkz. resolveLeafTarget).
+     */
+    if (dto.hierarchyLeafId && !this.vehicleHierarchy) {
+      throw new BadRequestException(
+        'Araç hiyerarşi servisi kullanılamıyor; hierarchyLeafId ile değerleme yapılamaz.',
+      );
+    }
+    const leafTarget = dto.hierarchyLeafId
+      ? this.vehicleHierarchy!.resolveLeafTarget(dto.hierarchyLeafId)
+      : null;
+
     const target = {
-      make: observed.make || spec?.manufacturer?.name || '',
-      model: observed.model || spec?.model?.name || '',
-      variant: observed.engine || (dto.variantId ? spec?.variant?.name : '') || '',
-      trim: observed.trim || (dto.packageId ? spec?.package?.name : '') || '',
+      make: leafTarget?.identity.make || observed.make || spec?.manufacturer?.name || '',
+      model: leafTarget?.identity.model || observed.model || spec?.model?.name || '',
+      variant:
+        leafTarget?.identity.engine ||
+        observed.engine ||
+        (dto.variantId ? spec?.variant?.name : '') ||
+        '',
+      trim:
+        leafTarget?.identity.trim || observed.trim || (dto.packageId ? spec?.package?.name : '') || '',
       bodyType:
         dto.observedBodyType === 'UNKNOWN'
           ? undefined
@@ -542,6 +572,11 @@ export class EvaluationService {
       bodyType: target.bodyType,
       fuelType: target.fuelType,
       transmission: target.transmission,
+      /**
+       * Verildiginde aday havuzu YALNIZCA bu sayfalardan gelir. Ust seviyeye
+       * (tum A3, tum A3 Sportback, tum 35 TFSI) SESSIZ genisleme YOKTUR.
+       */
+      sourceFiles: leafTarget?.sourceFiles,
     });
 
     if (emsalResult.level === 4 || emsalResult.matchedCount === 0 || !emsalResult.cleanListings || emsalResult.cleanListings.length === 0) {

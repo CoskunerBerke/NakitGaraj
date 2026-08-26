@@ -498,13 +498,36 @@ export class EmsalMatcherService {
     return out;
   }
 
-  private async fetchCandidates(make: string, model: string, yearMin: number, yearMax: number) {
+  /**
+   * @param sourceFiles KESIN YAPRAK kapsami. Verildiginde aday havuzu marka/
+   *   model ADIYLA degil, hiyerarsi yaprağinin KAYNAK SAYFALARIYLA secilir.
+   *
+   *   Isim eslesmesi kimlik DEGILDIR: "Advanced", "Comfort", "S Line" gibi
+   *   paket adlari onlarca farkli araca tekrar eder ve "A3" adi hem
+   *   "A3 Hatchback" hem "A3 Sportback" satirlarini yakalar. Yaprak kimligi
+   *   ise tam yoldan turetilmistir; kaynak dosyalari yalnizca O yaprağa aittir.
+   */
+  private async fetchCandidates(
+    make: string,
+    model: string,
+    yearMin: number,
+    yearMax: number,
+    sourceFiles?: string[],
+  ) {
     const cleanMake = make.trim();
     const cleanModel = model.trim();
+    const exactLeaf = Array.isArray(sourceFiles) && sourceFiles.length > 0;
 
     const rows = (await this.prisma.rawVehicleListing.findMany({
       where: {
-        OR: [{ rawMake: { equals: cleanMake } }, { canonicalMake: { equals: cleanMake } }],
+        ...(exactLeaf
+          ? { sourceFile: { in: sourceFiles } }
+          : {
+              OR: [
+                { rawMake: { equals: cleanMake } },
+                { canonicalMake: { equals: cleanMake } },
+              ],
+            }),
         year: { gte: yearMin, lte: yearMax },
         parseStatus: 'VALID',
         price: { gt: 0 },
@@ -540,9 +563,15 @@ export class EmsalMatcherService {
       // adlarda (<3 karakter) yalniz birebir esliyordu: "A4" hedefi
       // "A4 A4 Sedan" satirlarini goremiyor, sihirbazin sundugu secenek
       // degerlemede bos donuyordu.
-      const modelHit =
-        modelNameMatches(r.canonicalModel, cleanModel) || modelNameMatches(r.rawModel, cleanModel);
-      if (!modelHit) continue;
+      if (!exactLeaf) {
+        const modelHit =
+          modelNameMatches(r.canonicalModel, cleanModel) ||
+          modelNameMatches(r.rawModel, cleanModel);
+        if (!modelHit) continue;
+      }
+      // exactLeaf: havuz zaten TAM O yaprağin sayfalarindan geldi; isim
+      // filtresi uygulamak, kaynagin kendi gruplamasini ikinci kez tahmin
+      // etmek olurdu.
 
       if (seen.has(r.sourceListingId)) {
         duplicateCount++;
@@ -560,6 +589,50 @@ export class EmsalMatcherService {
     }
 
     return { candidates: out, duplicateCount, damagedCount };
+  }
+
+  /**
+   * Kesin yaprak havuzunun BASKIN depolanmis motor/paket degeri.
+   *
+   * Havuzdaki satirlarin tamami ayni kategori sayfasindan geldigi icin bu
+   * degerler o yaprağin ilan sozlugundeki karsiligidir. Uydurma yoktur:
+   * deger, ilanlarin kendisinden sayilarak secilir.
+   */
+  private async dominantPoolIdentity(
+    sourceFiles: string[],
+    year: number,
+  ): Promise<{ variant: string; trim: string }> {
+    const rows = (await this.prisma.rawVehicleListing.findMany({
+      where: {
+        sourceFile: { in: sourceFiles },
+        year: { gte: year, lte: year + 2 },
+        parseStatus: 'VALID',
+      },
+      select: { canonicalVariant: true, rawVariant: true, canonicalTrim: true },
+    })) as Array<{ canonicalVariant: string | null; rawVariant: string | null; canonicalTrim: string | null }>;
+
+    const top = (values: Array<string | null | undefined>): string => {
+      const counts = new Map<string, number>();
+      for (const value of values) {
+        const key = String(value || '').trim();
+        if (!key) continue;
+        counts.set(key, (counts.get(key) || 0) + 1);
+      }
+      let best = '';
+      let bestCount = 0;
+      for (const [key, count] of counts) {
+        if (count > bestCount) {
+          best = key;
+          bestCount = count;
+        }
+      }
+      return best;
+    };
+
+    return {
+      variant: top(rows.map((r) => r.canonicalVariant || r.rawVariant)),
+      trim: top(rows.map((r) => r.canonicalTrim)),
+    };
   }
 
   /* ---------------------------------------------------------------- */
@@ -586,9 +659,34 @@ export class EmsalMatcherService {
     bodyType?: string;
     fuelType?: string;
     transmission?: string;
+    /** Kesin hiyerarsi yaprağinin kaynak sayfalari (varsa aday havuzu budur). */
+    sourceFiles?: string[];
   }): Promise<EmsalMatchResult> {
-    const { make, model, variant, trim, year } = params;
+    const { make, model, year } = params;
     const targetKm = params.mileageKm > 0 ? params.mileageKm : 0;
+
+    /**
+     * KESIN YAPRAKTA ESLESME ANAHTARI HAVUZUN KENDISINDEN GELIR.
+     *
+     * Olculen: ilan satirlarindaki alanlar eski normalizasyonun bosluktan
+     * bolmesiyle hala bozuk duruyor —
+     *     canonicalModel = "A3 A3 Sportback 35", canonicalVariant = "TFSI"
+     * Hiyerarsiden gelen DOGRU motor adi "35 TFSI" hicbir satira uymuyor ve
+     * 168 ilanlik dogru havuz seviye 4'e (veri yok) dusuyordu.
+     *
+     * Havuz zaten TAM O yaprağin sayfalarindan geldigi icin her satir ayni
+     * motor ve pakete aittir; kimlik ISPATLANMISTIR. Bu yuzden metin
+     * karsilastirmasi hedefin adiyla degil, havuzun KENDI depolanmis
+     * degeriyle yapilir. Fiyat matematigi degismez; yalnizca dogru satirlarin
+     * yanlis bir metin yuzunden atilmasi onlenir.
+     */
+    let variant = params.variant;
+    let trim = params.trim;
+    if (Array.isArray(params.sourceFiles) && params.sourceFiles.length > 0) {
+      const poolKey = await this.dominantPoolIdentity(params.sourceFiles, year);
+      if (poolKey.variant) variant = poolKey.variant;
+      if (poolKey.trim) trim = poolKey.trim;
+    }
 
     // Katalog variant adi motor + paket birlestirilmis gelebilir; emsal
     // tablosuyla ayni semantige indirgenir.
@@ -679,6 +777,7 @@ export class EmsalMatcherService {
       model,
       year,
       year + 2,
+      params.sourceFiles,
     );
 
     // KATALOG SOZLUGU != ILAN SOZLUGU.

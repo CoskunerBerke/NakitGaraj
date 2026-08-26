@@ -144,6 +144,7 @@ const step2Schema = z.object({
 });
 
 import { API_BASE } from '@/lib/api';
+import VehicleHierarchyWizard, { HierarchyNode } from '@/components/VehicleHierarchyWizard';
 
 const VEHICLE_FEATURES = {
   security: [
@@ -198,6 +199,18 @@ export default function ValuationWizard() {
 
   // Selected values
   const [selectedYear, setSelectedYear] = useState<number | ''>('');
+  /**
+   * URETIM ARAC SECIMI: kaynagin GERCEK kategori agaci.
+   *
+   * Eski sabit dortlu (marka/model/motor/paket) katalog secimi SILINMEDI;
+   * asagida `!USE_HIERARCHY_WIZARD` altinda duruyor ve eski akislar bozulmuyor.
+   * Uretimde kullanici agaci adim adim yuruyor ve KESIN yaprak kimligi
+   * degerlemeye gonderiliyor.
+   */
+  const USE_HIERARCHY_WIZARD = true;
+  const [hierarchyLeaf, setHierarchyLeaf] = useState<HierarchyNode | null>(null);
+  const [hierarchyPath, setHierarchyPath] = useState<HierarchyNode[]>([]);
+
   const [selectedBrand, setSelectedBrand] = useState<string>('');
   const [selectedModel, setSelectedModel] = useState<string>('');
   const [selectedVariant, setSelectedVariant] = useState<string>('');
@@ -883,13 +896,22 @@ function SearchableCombobox({
   );
 }
 
-  // Is Step 1 completed? (Year, Brand, Model, Variant, and Package if available are required!)
-  const isStep1Complete =
-    selectedYear !== '' &&
-    selectedBrand !== '' &&
-    selectedModel !== '' &&
-    selectedVariant !== '' &&
-    (availablePackages.length === 0 || selectedPackage !== '');
+  /**
+   * Adim 1 tamam mi.
+   *
+   * Sihirbaz akisinda KESIN YAPRAK sarttir. Kullanici "Audi > A3"te durduysa
+   * ve A3'un cocuklari varsa bu tamamlanmis bir arac DEGILDIR; devam
+   * ettirmek ona A3 ortalamasini gostermek olurdu. LOADING/UNKNOWN/ERROR
+   * durumlarinda `hierarchyLeaf` null kalir ve buton kapali kalir
+   * (fail-closed).
+   */
+  const isStep1Complete = USE_HIERARCHY_WIZARD
+    ? selectedYear !== '' && hierarchyLeaf !== null && hierarchyLeaf.isLeaf === true
+    : selectedYear !== '' &&
+      selectedBrand !== '' &&
+      selectedModel !== '' &&
+      selectedVariant !== '' &&
+      (availablePackages.length === 0 || selectedPackage !== '');
 
   const handleStep1Next = () => {
     if (isStep1Complete) {
@@ -953,6 +975,21 @@ function SearchableCombobox({
 
   /** Katalogda karsiligi olmayan secim varsa gozlenen hedefi gonder. */
   const buildObservedTarget = () => {
+    /**
+     * Sihirbaz akisinda kimlik AGACTAN gelir. Segment sinirlari zaten
+     * kaynagin kendi gezinme yapisindan turetildi; burada metin YENIDEN
+     * bosluktan BOLUNMEZ. Fiyat kimligi yine de `hierarchyLeafId`dir;
+     * bunlar gosterim/kimlik alanlaridir.
+     */
+    if (USE_HIERARCHY_WIZARD && hierarchyLeaf) {
+      const seg = hierarchyLeaf.pathSegments;
+      return {
+        observedMake: seg[0] || undefined,
+        observedModel: (seg.length > 1 ? seg[1] : seg[0]) || undefined,
+        observedEngine: (seg.length >= 4 ? seg[seg.length - 2] : '') || undefined,
+        observedTrim: (seg.length >= 3 ? seg[seg.length - 1] : '') || undefined,
+      };
+    }
     if (!isObservedSelection()) return {};
     return {
       observedMake: canonicalOf(selectedBrand, brands) || undefined,
@@ -1028,11 +1065,32 @@ function SearchableCombobox({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           year: Number(selectedYear),
-          manufacturerId: selectedBrand,
-          modelId: selectedModel,
-          variantId: selectedVariant && selectedVariant !== 'UNKNOWN' ? selectedVariant : undefined,
-          packageId: selectedPackage || undefined,
-          bodyTypeId: selectedBodyType || undefined,
+          ...(USE_HIERARCHY_WIZARD && hierarchyLeaf
+            ? {
+                /**
+                 * KESIN YAPRAK KIMLIGI. Backend emsal havuzunu TAM bu
+                 * yaprağin kaynak sayfalariyla sinirlar; ust seviyeye
+                 * (tum A3, tum A3 Sportback) sessiz genisleme YOK.
+                 */
+                hierarchyLeafId: hierarchyLeaf.id,
+                /**
+                 * Katalog UUID'si ISIM BENZERLIGIYLE TAHMIN EDILMEZ.
+                 * Sozlesmede zorunlu olan bu alanlar, projenin kendi "OBS:"
+                 * gozlenen-deger bicimiyle doldurulur.
+                 */
+                manufacturerId: OBS_PREFIX + (hierarchyLeaf.pathSegments[0] || ''),
+                modelId:
+                  OBS_PREFIX +
+                  (hierarchyLeaf.pathSegments[1] || hierarchyLeaf.pathSegments[0] || ''),
+              }
+            : {
+                manufacturerId: selectedBrand,
+                modelId: selectedModel,
+                variantId:
+                  selectedVariant && selectedVariant !== 'UNKNOWN' ? selectedVariant : undefined,
+                packageId: selectedPackage || undefined,
+              }),
+          bodyTypeId: USE_HIERARCHY_WIZARD ? undefined : selectedBodyType || undefined,
           fuelTypeId: selectedFuelType || undefined,
           transmissionTypeId: selectedTransmission || undefined,
           licensePlate: formData.licensePlate.toUpperCase(),
@@ -1206,6 +1264,10 @@ function SearchableCombobox({
                 )}
               </div>
 
+              {/* Sabit 6 adimli gosterge yalnizca ESKI katalog akisi icindir;
+                  agac derinligi araca gore degistigi icin sihirbazda anlamsizdir. */}
+              {!USE_HIERARCHY_WIZARD && (
+                <>
               {/* 6-Step Visual Horizontal Progress Indicator */}
               <div className="grid grid-cols-6 gap-2 mt-4 pt-4 border-t border-zinc-100 dark:border-zinc-800/60">
                 {[
@@ -1259,8 +1321,64 @@ function SearchableCombobox({
                   {selectedPackage && 'Tüm araç bilgileri tamamlandı! Aşağıdaki “Devam Et” butonuyla ilerleyebilirsiniz.'}
                 </span>
               </div>
+                </>
+              )}
             </div>
 
+            {/* ARAC SECIMI — KAYNAGIN GERCEK KATEGORI AGACI */}
+            {USE_HIERARCHY_WIZARD && (
+              <div className="flex flex-col gap-3 p-5 rounded-2xl bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-200 dark:border-zinc-800">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-sm font-bold text-zinc-800 dark:text-zinc-100">Aracınız</h3>
+                    <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-0.5">
+                      Her adımda yalnızca seçtiğiniz kategorinin alt seçenekleri gösterilir.
+                    </p>
+                  </div>
+                  {hierarchyLeaf && (
+                    <span className="text-xs font-bold text-emerald-500 flex items-center gap-1 bg-emerald-500/10 px-2.5 py-1 rounded-full border border-emerald-500/20">
+                      <CheckCircle className="w-3.5 h-3.5" /> Seçildi
+                    </span>
+                  )}
+                </div>
+                {/*
+                  MODEL YILI. Eski akista bu alan katalog bloklarinin icindeydi;
+                  sihirbaza gecince onlarla birlikte gizlenmisti ve degerleme
+                  motorunun ZORUNLU girdisi kayboluyordu. Sihirbaz akisinin
+                  kendi yil alani burada.
+                */}
+                <label className="text-xs font-semibold text-zinc-500 dark:text-zinc-400 mt-1">
+                  Model yılı
+                </label>
+                <select
+                  value={selectedYear}
+                  onChange={(e) => setSelectedYear(e.target.value === '' ? '' : Number(e.target.value))}
+                  data-testid="hierarchy-year"
+                  className="glass-input rounded-xl p-3.5 text-sm w-full font-semibold"
+                >
+                  <option value="">Model yılı seçin</option>
+                  {years.map((y) => (
+                    <option key={y} value={y}>
+                      {y}
+                    </option>
+                  ))}
+                </select>
+
+                <VehicleHierarchyWizard
+                  onChange={(path) => {
+                    // Ust seviye degisince ALT seciMler temizlenir; eski yaprak
+                    // hicbir sekilde istekte kalmaz.
+                    setHierarchyPath(path);
+                    setHierarchyLeaf(null);
+                  }}
+                  onComplete={(leaf) => setHierarchyLeaf(leaf)}
+                />
+              </div>
+            )}
+
+            {/* ESKI SABIT KATALOG SECIMI — silinmedi, uretimde kapali */}
+            {!USE_HIERARCHY_WIZARD && (
+              <>
             {/* ADIM 1: MARKA SEÇİMİ */}
             <div className="flex flex-col gap-3 p-5 rounded-2xl bg-zinc-50 dark:bg-zinc-900/50 border border-zinc-200 dark:border-zinc-800">
               <div className="flex items-center justify-between">
@@ -1661,6 +1779,8 @@ function SearchableCombobox({
                   )}
                 </div>
               </div>
+            )}
+              </>
             )}
 
             {/* Live Vehicle Selection Summary Badge */}

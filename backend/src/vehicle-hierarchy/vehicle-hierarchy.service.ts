@@ -8,10 +8,17 @@
  * yaprak ayni sey degildir; karistirmak, kullaniciya yanlis (ust seviye)
  * piyasa sonucu gostermek demektir. Bu durumda acikca hata firlatilir.
  */
-import { Injectable, Logger, ServiceUnavailableException, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { HierarchyNode, HierarchyTree } from './hierarchy-tree';
 import { artifactToTree, loadArtifact, resolveArtifactPath } from './hierarchy-source';
 import { nodeIdFromPath } from './category-path';
+import { identityFromPath, LeafTargetIdentity } from './leaf-target';
 
 /** Frontend'in ihtiyaci olan asgari dugum sozlesmesi. */
 export interface HierarchyNodeDto {
@@ -151,6 +158,44 @@ export class VehicleHierarchyService {
     };
     walk(id);
     return [...new Set(files)];
+  }
+
+  /**
+   * DEGERLEME ICIN KESIN YAPRAK HEDEFI.
+   *
+   * FAIL-CLOSED: bilinmeyen kimlik ya da yaprak OLMAYAN dugum sessizce
+   * ebeveyne dusmez; istek reddedilir. Kullanici "Audi > A3"te durduysa bu
+   * tamamlanmis bir arac degildir ve A3'un ortalamasini ona vermek yanlis
+   * fiyat gostermek olurdu.
+   */
+  resolveLeafTarget(leafId: string): { identity: LeafTargetIdentity; sourceFiles: string[] } {
+    const tree = this.require();
+    const node = tree.nodes.get(String(leafId || '').trim());
+    if (!node) {
+      // Bilinmeyen kimlik: ebeveyne DUSULMEZ, istek reddedilir.
+      throw new NotFoundException({
+        reason: 'UNKNOWN_HIERARCHY_NODE',
+        message: `Bilinmeyen araç hiyerarşi kimliği: "${leafId}"`,
+      });
+    }
+    if (!node.isLeaf) {
+      /**
+       * Yaprak OLMAYAN dugumle degerleme yapilamaz. Kullanici "Audi > A3"te
+       * durduysa bu tamamlanmis bir arac degildir; A3'un ortalamasini vermek
+       * yanlis fiyat gostermek olurdu. Eksik olan adim yanitla birlikte doner.
+       */
+      throw new BadRequestException({
+        reason: 'NOT_A_LEAF',
+        message: `"${node.fullPath}" tamamlanmış bir araç seçimi değil; alt seçenekleri var.`,
+        children: node.childIds
+          .map((id) => tree.nodes.get(id)?.name)
+          .filter((n): n is string => Boolean(n)),
+      });
+    }
+    return {
+      identity: identityFromPath(node.pathSegments, node.fullPath),
+      sourceFiles: [...node.sourceFiles],
+    };
   }
 
   stats(): { nodes: number; roots: number; leaves: number; maxDepth: number } {

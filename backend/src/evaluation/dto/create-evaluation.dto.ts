@@ -53,6 +53,25 @@ export class CreateEvaluationDto {
    * Verildiginde katalog kaydi ZORUNLU DEGILDIR; spec varsa yalnizca teknik
    * zenginlestirme (hp/tork/motor hacmi) icin kullanilir.
    */
+  /**
+   * KAYNAK KATEGORI AGACINDAKI KESIN YAPRAK KIMLIGI.
+   *
+   *   "audi/a3/a3-sportback/35-tfsi/advanced"
+   *
+   * Verildiginde emsal havuzu TAM O yaprağin kaynak sayfalarindan secilir;
+   * marka/model ADI uzerinden arama YAPILMAZ. Isim kimlik degildir: "Advanced"
+   * ya da "S Line" onlarca araca tekrar eder.
+   *
+   * Eski katalog alanlari (manufacturerId/modelId/...) KALDIRILMADI; eski
+   * istekler aynen calisir. Ikisi birden gelirse celiski SESSIZCE kabul
+   * edilmez (bkz. evaluation.service).
+   */
+  @Transform(({ value }) => (typeof value === 'string' && value.trim() === '' ? undefined : value))
+  @IsOptional()
+  @IsString()
+  @Length(1, 300)
+  hierarchyLeafId?: string;
+
   @Transform(({ value }) => (typeof value === 'string' && value.trim() === '' ? undefined : value))
   @IsOptional()
   @IsString()
