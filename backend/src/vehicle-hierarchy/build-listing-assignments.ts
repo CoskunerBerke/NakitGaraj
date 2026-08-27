@@ -62,6 +62,15 @@ function stronger(a: ListingAssignment, b: ListingAssignment): ListingAssignment
 export function buildAssignments(
   tree: HierarchyTree,
   read: (file: string) => string | null = safeRead,
+  /**
+   * Veritabaninda GERCEKTEN bulunan ilan kimlikleri. Verildiginde yalnizca
+   * bunlar tutulur.
+   *
+   * Korpusta ice aktarilmamis sayfalar da var; onlarin satirlarini saymak
+   * "elimizde X ilan var" derken fiyatlanamayan kayitlari da sayardi.
+   * Yapi kanitini alirken piyasa sayisini SISIRMEYIZ.
+   */
+  knownListingIds?: Set<string>,
 ): AssignmentArtifact {
   /** sourceFile -> sayfanin baglam dugumu (breadcrumb'dan kurulmus agactan). */
   const pageNode = new Map<string, HierarchyNode>();
@@ -78,6 +87,7 @@ export function buildAssignments(
     rowsWithModelText: 0,
     rowsWithoutModelText: 0,
     duplicatesAcrossPages: 0,
+    rowsNotInDatabase: 0,
   };
 
   for (const [file, node] of pageNode) {
@@ -101,6 +111,11 @@ export function buildAssignments(
         depth: resolved.depth,
         sourceFile: file,
       };
+      if (knownListingIds && !knownListingIds.has(row.listingId)) {
+        stats.rowsNotInDatabase += 1;
+        continue;
+      }
+
       const existing = assignments.get(row.listingId);
       if (!existing) {
         assignments.set(row.listingId, candidate);
@@ -150,13 +165,27 @@ export async function main(): Promise<void> {
   const tree = artifactToTree(artifact);
   console.log(`[listings] hierarchy: ${tree.nodes.size} nodes`);
 
+  const { PrismaClient } = await import('@prisma/client');
+  const prisma = new PrismaClient();
+  let known: Set<string> | undefined;
+  try {
+    const rows = (await (prisma as any).rawVehicleListing.findMany({
+      select: { sourceListingId: true },
+    })) as Array<{ sourceListingId: string }>;
+    known = new Set(rows.map((r) => String(r.sourceListingId)));
+    console.log(`[listings] database knows ${known.size} listing ids`);
+  } finally {
+    await (prisma as any).$disconnect();
+  }
+
   const started = Date.now();
-  const built = buildAssignments(tree);
+  const built = buildAssignments(tree, undefined, known);
   const seconds = ((Date.now() - started) / 1000).toFixed(1);
 
   const s = built.stats;
   console.log(`[listings] parsed ${s.filesSeen} files in ${seconds}s (unreadable: ${s.filesUnreadable})`);
   console.log(`[listings] rows seen: ${s.rowsSeen} (with model text: ${s.rowsWithModelText}, without: ${s.rowsWithoutModelText})`);
+  console.log(`[listings] rows skipped (not imported into DB): ${s.rowsNotInDatabase}`);
   console.log(`[listings] unique listings: ${s.uniqueListings} (duplicate row sightings across pages: ${s.duplicatesAcrossPages})`);
   console.log(`[listings] exact (priceable): ${s.exactListings}`);
   for (const key of Object.keys(s).filter((k) => k.startsWith('evidence_')).sort()) {

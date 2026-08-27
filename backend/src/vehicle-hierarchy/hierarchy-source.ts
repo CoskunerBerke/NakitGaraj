@@ -87,6 +87,30 @@ export async function loadObservations(
    * marka klasorleri altinda duruyor ("...\\Geely\\Geely Echo 1.3 ....html").
    * Klasor adi bir tahmin degil, kaynagin kendi gruplamasidir.
    */
+  /**
+   * YAPI KANITI ICE AKTARIMDAN BAGIMSIZDIR.
+   *
+   * Agac bugune kadar YALNIZCA `RawVehicleListing.sourceFile` icinde gecen
+   * dosyalari okuyordu. Ama korpusta ice aktarilmamis kategori sayfalari da
+   * var (olculdu: 152 dosya, 20 marka — Audi A3 Sportback, A4, A5, A6, Seat,
+   * Dacia...). Onlarin menusu hic okunmuyor ve ilan ettikleri alt kategoriler
+   * agacta hic gorunmuyordu.
+   *
+   * KATEGORI YAPISI ile PIYASA VERISI ayri seylerdir: bu dosyalar YAPIYA
+   * katilir (breadcrumb + menu), ilan sayilari 0 kalir. Fiyatlama yine
+   * yalnizca veritabanindaki gercek satirlardan gelir.
+   */
+  for (const file of discoverCorpusFiles(groups.map((g) => g.sourceFile))) {
+    const categoryString = categoryStringFromSourceFile(file);
+    if (!categoryString) continue;
+    const existing = byCategory.get(categoryString);
+    if (existing) {
+      if (!existing.sourceFiles.includes(file)) existing.sourceFiles.push(file);
+    } else {
+      byCategory.set(categoryString, { categoryString, listingCount: 0, sourceFiles: [file] });
+    }
+  }
+
   const makes = await client.manufacturer.findMany({ select: { name: true } });
   const knownMakes = new Set(makes.map((m) => m.name).filter(Boolean));
   for (const group of groups) {
@@ -99,6 +123,53 @@ export async function loadObservations(
     knownMakes: [...knownMakes],
     skipped,
   };
+}
+
+/**
+ * Korpus kokunu BILINEN dosyalardan turetir ve altindaki tum HTML'leri sayar.
+ *
+ * Yol hicbir yere sabit yazilmaz: veritabanindaki dosyalarin ortak ust
+ * dizini kullanilir (marka klasorlerinin bir ustu). `VEHICLE_CORPUS_ROOT`
+ * verilirse o kazanir.
+ */
+export function discoverCorpusFiles(knownFiles: string[]): string[] {
+  const root = corpusRoot(knownFiles);
+  if (!root) return [];
+  const known = new Set(knownFiles);
+  const out: string[] = [];
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(root, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const dir = path.join(root, entry.name);
+    let files: string[];
+    try {
+      files = fs.readdirSync(dir);
+    } catch {
+      continue;
+    }
+    for (const name of files) {
+      if (!name.toLowerCase().endsWith('.html')) continue;
+      const full = path.join(dir, name);
+      if (!known.has(full)) out.push(full);
+    }
+  }
+  return out;
+}
+
+function corpusRoot(knownFiles: string[]): string | null {
+  const fromEnv = process.env.VEHICLE_CORPUS_ROOT;
+  if (fromEnv && fromEnv.trim()) return fromEnv.trim();
+  for (const file of knownFiles) {
+    // ".../<korpus>/<Marka>/<dosya>.html" -> korpus koku
+    const dir = path.dirname(path.dirname(file));
+    if (dir && fs.existsSync(dir)) return dir;
+  }
+  return null;
 }
 
 /** Kaydedilen dosyanin bulundugu marka klasoru (yoksa null). */

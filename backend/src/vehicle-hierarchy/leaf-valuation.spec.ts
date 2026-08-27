@@ -150,6 +150,16 @@ runOrSkip('KESIN YAPRAK COZUMLEME (gercek dataset)', () => {
     const fileOwner = new Map<string, string>();
 
     for (const leaf of leaves) {
+      /**
+       * YAPI ILE PIYASA VERISI AYRIDIR. Kaynak bir kategoriyi ilan etmisse o
+       * dugum agacta durur; ona cozulen ilan olmayabilir. Boyle bir dugum
+       * FIYATLANMAZ ve bunu acikca reddeder — sessizce ust/kardes havuza
+       * DUSMEZ. Reddi burada dogrulayip devam ediyoruz.
+       */
+      if (service.marketListingIds(leaf.id).length === 0) {
+        expect(() => service.resolveLeafTarget(leaf.id)).toThrow();
+        continue;
+      }
       const target = service.resolveLeafTarget(leaf.id);
       if (target.identity.fullPath !== leaf.fullPath) {
         failures.push(`path mismatch: ${leaf.id}`);
