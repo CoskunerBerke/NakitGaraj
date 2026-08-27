@@ -36,7 +36,8 @@
     "market:refresh:dry-run": "ts-node src/market-refresh/cli.ts dry-run",
     "market:autopilot:bridge": "ts-node src/market-refresh/autopilot/autopilot-cli.ts",
     "hierarchy:build": "ts-node src/vehicle-hierarchy/build-hierarchy.ts",
-    "listings:build": "ts-node --max-old-space-size=4096 src/vehicle-hierarchy/build-listing-assignments.ts"
+    "listings:build": "ts-node --max-old-space-size=4096 src/vehicle-hierarchy/build-listing-assignments.ts",
+    "coverage:manifest": "ts-node --max-old-space-size=4096 src/vehicle-hierarchy/build-coverage-manifest.ts"
   },
   "dependencies": {
     "@napi-rs/canvas": "^1.0.3",
