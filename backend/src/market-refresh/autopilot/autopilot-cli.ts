@@ -32,6 +32,8 @@ import {
 } from './autopilot-session';
 import { SnapshotFingerprintLookup } from './snapshot-fingerprint-lookup';
 import { AutopilotScope, normalizeScopeRoot } from './scope-guard';
+import { buildCoverageQueue, loadManifest, pathKey } from './coverage-queue';
+import { artifactToTree, loadArtifact } from '../../vehicle-hierarchy/hierarchy-source';
 import { resolveSnapshotPath } from '../snapshot-reference';
 
 const DEFAULT_SOURCE = 'sahibinden';
@@ -48,6 +50,10 @@ interface CliArgs {
   reference: 'auto' | 'off';
   makes: string[];
   scope: AutopilotScope | null;
+  /** Kapsama manifestosu yolu — verilirse hedefler BURADAN gelir. */
+  coverageManifest: string | null;
+  coveragePriorities: Array<'A' | 'B' | 'C' | 'D'>;
+  coverageLimit: number | null;
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -101,7 +107,55 @@ function parseArgs(argv: string[]): CliArgs {
     windowSpec: get('window'),
     reference: get('reference') === 'off' ? 'off' : 'auto',
     makes,
+    coverageManifest: get('coverage-manifest'),
+    coveragePriorities: ((get('coverage-priority') || 'A')
+      .split(',')
+      .map((p) => p.trim().toUpperCase())
+      .filter((p) => ['A', 'B', 'C', 'D'].includes(p)) as Array<'A' | 'B' | 'C' | 'D'>),
+    coverageLimit: get('coverage-limit') ? Number(get('coverage-limit')) : null,
   };
+}
+
+/**
+ * KAPSAMA HEDEFLERI — UZANTIDAN DEGIL MANIFESTODAN.
+ *
+ * Uzantinin gonderdigi kok listesi YOK SAYILIR. Hedefler manifestodan gelir
+ * ve o an diskte olmayanlarla sinirlanir; boylece "yalnizca eksikler"
+ * garantisi guvenilmez bir istemciye BAGLI OLMAZ.
+ */
+function coverageRoots(args: CliArgs): Array<{ path: string; label: string }> | null {
+  if (!args.coverageManifest) return null;
+
+  /** Su anda diskte olan kategoriler — agac artefaktindan (breadcrumb turevli). */
+  const present = new Set<string>();
+  const artifact = loadArtifact();
+  if (artifact) {
+    const tree = artifactToTree(artifact);
+    for (const node of tree.nodes.values()) {
+      if (node.sourceFiles.length > 0) present.add(pathKey(node.pathSegments));
+    }
+  }
+
+  const queue = buildCoverageQueue(loadManifest(args.coverageManifest), {
+    priorities: args.coveragePriorities,
+    limit: args.coverageLimit ?? undefined,
+    alreadyPresent: present,
+  });
+
+  console.log(
+    `[autopilot] coverage queue: ${queue.targets.length} target(s) ` +
+      `(priority ${args.coveragePriorities.join(',')}), ` +
+      `skipped: ${queue.skippedAlreadyPresent} already present, ` +
+      `${queue.skippedOtherPriority} other priority; ` +
+      `${queue.needsReview.length} need URL review (no source href)`,
+  );
+  for (const t of queue.targets.slice(0, 10)) {
+    console.log(`[autopilot]   -> ${t.categoryUrl}  (${t.fullPath.join(' / ')})`);
+  }
+  if (queue.targets.length === 0) {
+    throw new Error('Coverage queue is empty: nothing left to collect for the chosen priorities.');
+  }
+  return queue.roots;
 }
 
 /**
@@ -170,12 +224,16 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   const deadlineFromWindow = () =>
     args.windowSpec ? resolveWindowDeadline(args.windowSpec) : null;
 
+  const manifestRoots = coverageRoots(args);
+
   const provider: BridgeSessionProvider = {
     current: () => session,
     start: ({ roots, deadlineMs }) => {
       const deadlineAtMs =
         deadlineMs !== null ? Date.now() + deadlineMs : deadlineFromWindow();
-      session = AutopilotSession.start({ ...baseOptions, deadlineAtMs }, roots);
+      // Manifest modunda uzantinin kok listesi YOK SAYILIR.
+      const effective = manifestRoots ?? roots;
+      session = AutopilotSession.start({ ...baseOptions, deadlineAtMs }, effective);
       return session;
     },
     resume: () => {
