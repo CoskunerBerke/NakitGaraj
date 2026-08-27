@@ -1,0 +1,15 @@
+const fs=require('fs'), path=require('path'), Database=require('better-sqlite3');
+const {extractNavChildren,extractBreadcrumb}=require('./dist/src/vehicle-hierarchy/nav-children');
+const db=new Database(path.join(__dirname,'prisma/dev.db'),{readonly:true});
+const files=db.prepare("SELECT DISTINCT sourceFile FROM RawVehicleListing WHERE sourceFile LIKE '%Volkswagen%'").all();
+console.log('VW source files:', files.length);
+for (const f of files.slice(0,3)) console.log('  ', f.sourceFile.split(String.fromCharCode(92)).pop());
+const html=fs.readFileSync(files[0].sourceFile,'utf8');
+console.log('size:', html.length);
+console.log('breadcrumb:', JSON.stringify(extractBreadcrumb(html)));
+const nav=extractNavChildren(html);
+console.log('nav entries:', nav===null?'NULL':nav.length);
+if(nav) for(const c of nav.slice(0,15)) console.log('   ', c.slug, '|', c.label);
+console.log('--- does page mention volkswagen- slugs at all? ---');
+const m=[...new Set([...html.matchAll(/href="\/(volkswagen[a-z0-9._-]*)/g)].map(x=>x[1]))];
+console.log(m.slice(0,20).join('\n'));

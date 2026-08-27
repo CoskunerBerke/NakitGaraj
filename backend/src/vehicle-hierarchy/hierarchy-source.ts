@@ -156,7 +156,17 @@ export function attachNavEvidence(
     }
 
     const children = extractNavChildren(html);
-    if (children === null) {
+    /**
+     * BOS MENU TEK BASINA TERMINAL KANITI DEGILDIR.
+     *
+     * Korpusta breadcrumb'i olmayan, hicbir kategori linki tasimayan (yani
+     * gercek bir kategori sayfasi olmayan) kayitlar var. Boyle bir sayfanin
+     * bos menusunu "alt kategori yok" saymak, tam da duzeltmeye calistigimiz
+     * hatayi geri getirirdi: Volkswagen kok dugumu 991 karisik ilanla yaprak
+     * gorunuyordu. Kanit ancak sayfa kendini bir kategori olarak
+     * tanimliyorsa (breadcrumb varsa) gecerlidir.
+     */
+    if (children === null || !chain || chain.length === 0) {
       observation.navChildLabels = null;
       unreadable += 1;
       continue;
