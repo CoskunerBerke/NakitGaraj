@@ -513,21 +513,33 @@ export class EmsalMatcherService {
     yearMin: number,
     yearMax: number,
     sourceFiles?: string[],
+    listingIds?: string[],
   ) {
     const cleanMake = make.trim();
     const cleanModel = model.trim();
-    const exactLeaf = Array.isArray(sourceFiles) && sourceFiles.length > 0;
+    /**
+     * HAVUZ ARTIK ILAN KIMLIGIYLE SECILIR, DOSYA ADIYLA DEGIL.
+     *
+     * Bir kategori sayfasi kendi alt dallarina ait satirlar tasir: "Audi A3"
+     * sayfasinda "A3 Sedan 35 TFSI" de "A3 Sportback 35 TFSI" de bulunur.
+     * Dosyayla secmek bunlari tek havuza yigiyordu. Satir-seviyesi cozumleme
+     * her ilani KENDI dugumune bagladi; havuz o kimliklerden kurulur.
+     */
+    const byListing = Array.isArray(listingIds) && listingIds.length > 0;
+    const exactLeaf = byListing || (Array.isArray(sourceFiles) && sourceFiles.length > 0);
 
     const rows = (await this.prisma.rawVehicleListing.findMany({
       where: {
-        ...(exactLeaf
-          ? { sourceFile: { in: sourceFiles } }
-          : {
-              OR: [
-                { rawMake: { equals: cleanMake } },
-                { canonicalMake: { equals: cleanMake } },
-              ],
-            }),
+        ...(byListing
+          ? { sourceListingId: { in: listingIds } }
+          : exactLeaf
+            ? { sourceFile: { in: sourceFiles } }
+            : {
+                OR: [
+                  { rawMake: { equals: cleanMake } },
+                  { canonicalMake: { equals: cleanMake } },
+                ],
+              }),
         year: { gte: yearMin, lte: yearMax },
         parseStatus: 'VALID',
         price: { gt: 0 },
@@ -601,10 +613,12 @@ export class EmsalMatcherService {
   private async dominantPoolIdentity(
     sourceFiles: string[],
     year: number,
+    listingIds?: string[],
   ): Promise<{ variant: string; trim: string }> {
+    const byListing = Array.isArray(listingIds) && listingIds.length > 0;
     const rows = (await this.prisma.rawVehicleListing.findMany({
       where: {
-        sourceFile: { in: sourceFiles },
+        ...(byListing ? { sourceListingId: { in: listingIds } } : { sourceFile: { in: sourceFiles } }),
         year: { gte: year, lte: year + 2 },
         parseStatus: 'VALID',
       },
@@ -659,8 +673,10 @@ export class EmsalMatcherService {
     bodyType?: string;
     fuelType?: string;
     transmission?: string;
-    /** Kesin hiyerarsi yaprağinin kaynak sayfalari (varsa aday havuzu budur). */
+    /** Kesin hiyerarsi yaprağinin kaynak sayfalari (geriye donuk uyum). */
     sourceFiles?: string[];
+    /** Satir-seviyesi cozumlemeden gelen KESIN ilan kimlikleri. Havuz BUDUR. */
+    listingIds?: string[];
   }): Promise<EmsalMatchResult> {
     const { make, model, year } = params;
     const targetKm = params.mileageKm > 0 ? params.mileageKm : 0;
@@ -682,8 +698,15 @@ export class EmsalMatcherService {
      */
     let variant = params.variant;
     let trim = params.trim;
-    if (Array.isArray(params.sourceFiles) && params.sourceFiles.length > 0) {
-      const poolKey = await this.dominantPoolIdentity(params.sourceFiles, year);
+    if (
+      (Array.isArray(params.listingIds) && params.listingIds.length > 0) ||
+      (Array.isArray(params.sourceFiles) && params.sourceFiles.length > 0)
+    ) {
+      const poolKey = await this.dominantPoolIdentity(
+        params.sourceFiles ?? [],
+        year,
+        params.listingIds,
+      );
       if (poolKey.variant) variant = poolKey.variant;
       if (poolKey.trim) trim = poolKey.trim;
     }
@@ -778,6 +801,7 @@ export class EmsalMatcherService {
       year,
       year + 2,
       params.sourceFiles,
+      params.listingIds,
     );
 
     // KATALOG SOZLUGU != ILAN SOZLUGU.

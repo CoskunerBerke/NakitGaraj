@@ -38,9 +38,17 @@ export interface HierarchyNode {
   hasChildren: boolean;
   /** YAPRAK = cocugu yok VE terminal oldugu kaynaktan dogrulandi. */
   isLeaf: boolean;
-  /** Sayfasi okundu ve alt kategori ilan etmedi. false + cocuksuz => BILINMEYEN. */
+  /** Sayfasi okundu ve alt kategori ilan etmedi. */
   terminalConfirmed: boolean;
   derived: boolean;
+  /**
+   * Bu dugume KESIN cozulmus, tekillestirilmis ilan sayisi.
+   *
+   * Kendi sayfasi kaydedilmemis bir dugum icin de > 0 olabilir: ust kategori
+   * sayfalarindaki satirlar kendi model kimliklerini tasir. Fiyatlanabilirlik
+   * kararini VEREN sayi budur — sayfanin varligi degil.
+   */
+  marketListingCount: number;
 }
 
 /**
@@ -144,8 +152,13 @@ export function useVehicleHierarchy(): UseVehicleHierarchy {
        * kanit temelli `isLeaf` bayragi bilir.
        */
       if (children.length > 0) setState('HAS_CHILDREN');
-      else if (node && node.isLeaf) setState('LEAF');
       else if (!node) setState('HAS_CHILDREN'); // kokler: her zaman secim var
+      /**
+       * TERMINAL + KANIT. Dugumun kendi sayfasi kaydedilmemis olabilir ama
+       * ust sayfalardan KESIN cozulmus ilanlari olabilir; o zaman burasi
+       * gercek bir secim sonudur ve fiyatlanabilir.
+       */
+      else if (node.marketListingCount > 0) setState('LEAF');
       else setState('UNKNOWN');
     } catch (err) {
       if (ticket !== requestRef.current) return;
@@ -196,7 +209,8 @@ export function useVehicleHierarchy(): UseVehicleHierarchy {
     state,
     error,
     // Yaprak YALNIZCA dogrulanmis terminalde dolar; UNKNOWN'da null kalir.
-    leaf: state === 'LEAF' && current && current.isLeaf ? current : null,
+    // Yaprak = cocugu yok VE kanitlanmis ilan verisi var.
+    leaf: state === 'LEAF' && current && !current.hasChildren && current.marketListingCount > 0 ? current : null,
     current,
     select,
     selectAt,

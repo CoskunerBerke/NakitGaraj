@@ -18,6 +18,8 @@ import {
 import { findByPath, HierarchyNode, HierarchyTree } from './hierarchy-tree';
 import { artifactToTree, loadArtifact, resolveArtifactPath } from './hierarchy-source';
 import { identityFromPath, LeafTargetIdentity } from './leaf-target';
+import { AssignmentArtifact, loadAssignments } from './build-listing-assignments';
+import { isExactEvidence } from './listing-resolver';
 
 /** Frontend'in ihtiyaci olan asgari dugum sozlesmesi. */
 export interface HierarchyNodeDto {
@@ -43,9 +45,18 @@ export interface HierarchyNodeDto {
   terminalConfirmed: boolean;
   /** Kaynakta ayri sayfa olarak gorulmedi. */
   derived: boolean;
+  /**
+   * Bu dugume KESIN olarak cozulmus, TEKILLESTIRILMIS ilan sayisi.
+   *
+   * Ust kategori sayfalarindaki satirlar kendi model kimliklerini tasir; bu
+   * sayi o satirlardan kazanilanlari da icerir. Bir dugumun sayfasi hic
+   * kaydedilmemis olsa bile burasi > 0 olabilir — "veri toplanmadi" demeden
+   * once bakilmasi gereken yer budur.
+   */
+  marketListingCount: number;
 }
 
-function toDto(node: HierarchyNode): HierarchyNodeDto {
+function toDto(node: HierarchyNode, marketListingCount = 0): HierarchyNodeDto {
   return {
     id: node.id,
     name: node.name,
@@ -59,6 +70,7 @@ function toDto(node: HierarchyNode): HierarchyNodeDto {
     isLeaf: node.isLeaf,
     terminalConfirmed: node.terminalConfirmed,
     derived: node.derived,
+    marketListingCount,
   };
 }
 
@@ -66,6 +78,9 @@ function toDto(node: HierarchyNode): HierarchyNodeDto {
 export class VehicleHierarchyService {
   private readonly logger = new Logger(VehicleHierarchyService.name);
   private tree: HierarchyTree | null = null;
+  /** nodeId -> KESIN cozulmus ilan kimlikleri (tekillestirilmis). */
+  private poolByNode: Map<string, string[]> | null = null;
+  private assignmentsMissing = false;
 
   /** Artefakti tembel yukler. Yoksa UNKNOWN'dir — yaprak DEGIL. */
   private require(): HierarchyTree {
@@ -89,8 +104,48 @@ export class VehicleHierarchyService {
     this.tree = tree;
   }
 
+  /**
+   * Satir-seviyesi atamalari — ilan havuzunun TEK kaynagi.
+   *
+   * Artefakt yoksa havuzlar BOS kabul edilir ve degerleme fail-closed
+   * davranir; sessizce dosya-adi eslesmesine DONULMEZ, cunku o davranis
+   * ust kategori satirlarini yanlis dugume yaziyordu.
+   */
+  private pools(): Map<string, string[]> {
+    if (this.poolByNode) return this.poolByNode;
+    const artifact: AssignmentArtifact | null = loadAssignments();
+    const map = new Map<string, string[]>();
+    if (!artifact) {
+      if (!this.assignmentsMissing) {
+        this.assignmentsMissing = true;
+        this.logger.warn(
+          'listing-assignments artifact not found. Run "npm run listings:build". ' +
+            'Market pools are EMPTY until then (fail-closed).',
+        );
+      }
+      this.poolByNode = map;
+      return map;
+    }
+    for (const [listingId, assignment] of Object.entries(artifact.assignments)) {
+      if (!isExactEvidence(assignment.evidence)) continue;
+      const list = map.get(assignment.nodeId);
+      if (list) list.push(listingId);
+      else map.set(assignment.nodeId, [listingId]);
+    }
+    this.poolByNode = map;
+    this.logger.log(`Listing assignments loaded: ${artifact.stats?.exactListings ?? 0} exact listings`);
+    return map;
+  }
+
+  /** Bu dugume KESIN cozulmus ilan kimlikleri. */
+  marketListingIds(nodeId: string): string[] {
+    return this.pools().get(nodeId) ?? [];
+  }
+
   reload(): void {
     this.tree = null;
+    this.poolByNode = null;
+    this.assignmentsMissing = false;
   }
 
   /** Kokler = markalar. */
@@ -100,7 +155,7 @@ export class VehicleHierarchyService {
       .map((id) => tree.nodes.get(id)!)
       .filter(Boolean)
       .sort((a, b) => a.name.localeCompare(b.name, 'tr'))
-      .map(toDto);
+      .map((n) => toDto(n, this.marketListingIds(n.id).length));
   }
 
   /**
@@ -115,14 +170,14 @@ export class VehicleHierarchyService {
       .map((id) => tree.nodes.get(id)!)
       .filter(Boolean)
       .sort((a, b) => a.name.localeCompare(b.name, 'tr'))
-      .map(toDto);
+      .map((n) => toDto(n, this.marketListingIds(n.id).length));
   }
 
   getNode(id: string): HierarchyNodeDto {
     const tree = this.require();
     const node = tree.nodes.get(id);
     if (!node) throw new NotFoundException(`Unknown hierarchy node "${id}"`);
-    return toDto(node);
+    return toDto(node, this.marketListingIds(node.id).length);
   }
 
   /** Kokten dugume kadar tum atalar — breadcrumb icin. */
@@ -139,7 +194,7 @@ export class VehicleHierarchyService {
       chain.unshift(cursor);
       cursor = cursor.parentId ? tree.nodes.get(cursor.parentId) : undefined;
     }
-    return chain.map(toDto);
+    return chain.map((n) => toDto(n, this.marketListingIds(n.id).length));
   }
 
   /**
@@ -153,7 +208,7 @@ export class VehicleHierarchyService {
     const tree = this.require();
     const node = findByPath(tree, segments);
     if (!node) throw new NotFoundException(`Unknown hierarchy path "${segments.join(' / ')}"`);
-    return toDto(node);
+    return toDto(node, this.marketListingIds(node.id).length);
   }
 
   /** Ilan eslesmesi icin bu dugumun (ve istege bagli alt agacinin) dosyalari. */
@@ -182,7 +237,12 @@ export class VehicleHierarchyService {
    * tamamlanmis bir arac degildir ve A3'un ortalamasini ona vermek yanlis
    * fiyat gostermek olurdu.
    */
-  resolveLeafTarget(leafId: string): { identity: LeafTargetIdentity; sourceFiles: string[] } {
+  resolveLeafTarget(leafId: string): {
+    identity: LeafTargetIdentity;
+    sourceFiles: string[];
+    /** KESIN cozulmus ilan kimlikleri — emsal havuzu BUDUR. */
+    listingIds: string[];
+  } {
     const tree = this.require();
     const node = tree.nodes.get(String(leafId || '').trim());
     if (!node) {
@@ -206,21 +266,28 @@ export class VehicleHierarchyService {
           .filter((n): n is string => Boolean(n)),
       });
     }
-    if (!node.isLeaf) {
-      /**
-       * BILINMEYEN: kaynak bu kategoriyi ilan etti ama sayfasi hic
-       * toplanmadi. Ustteki (karisik) havuzla fiyatlamak yanlis fiyat
-       * gostermek olurdu; istek acikca reddedilir.
-       */
+    /**
+     * TERMINAL + KANIT.
+     *
+     * Kendi sayfasi kaydedilmemis bir dugum de fiyatlanabilir: ust kategori
+     * sayfalarindaki satirlar kendi model kimliklerini tasir ve bu dugume
+     * KESIN olarak cozulmus olabilir. "Sayfasi yok" ile "veri yok" ayni sey
+     * degildir; korpus tuketilmeden NO_DATA denmez.
+     *
+     * Cocugu olan dugum yine terminal DEGILDIR (yukarida reddedildi).
+     */
+    const listingIds = this.marketListingIds(node.id);
+    if (listingIds.length === 0) {
       throw new BadRequestException({
         reason: 'NO_COLLECTED_DATA',
         message:
-          `"${node.fullPath}" için henüz veri toplanmadı; bu kategori için değerleme yapılamıyor.`,
+          `"${node.fullPath}" için elimizde ilan bulunmuyor; bu kategori için değerleme yapılamıyor.`,
       });
     }
     return {
       identity: identityFromPath(node.pathSegments, node.fullPath),
       sourceFiles: [...node.sourceFiles],
+      listingIds,
     };
   }
 

@@ -16,6 +16,8 @@ import {
   saveArtifact,
 } from './hierarchy-source';
 import { findByPath } from './hierarchy-tree';
+import { discoverChildrenFromListings } from './listing-children';
+import * as fs from 'fs';
 
 /** Sunum oncesi zorunlu regresyon: gercek Sahibinden zinciri. */
 const REQUIRED_CHAIN = ['Audi', 'A3', 'A3 Sportback', '35 TFSI', 'Advanced'];
@@ -44,8 +46,30 @@ export async function main(): Promise<void> {
         `${evidence.withPath} with exact breadcrumb path, ${evidence.unreadable} without evidence`,
     );
 
-    const artifact = buildArtifact(observations, knownMakes);
-    const tree = artifactToTree(artifact);
+    let artifact = buildArtifact(observations, knownMakes);
+    let tree = artifactToTree(artifact);
+
+    /**
+     * SON KANIT: ust sayfalarin satirlari, kendi sayfasi hic kaydedilmemis
+     * dallari ele veriyor. Bu adim olmadan o ilanlar "veri toplanmadi" diye
+     * gorunuyordu — oysa elimizdeydiler.
+     */
+    const discovery = discoverChildrenFromListings(tree, (file) => {
+      try {
+        return fs.readFileSync(file, 'utf-8');
+      } catch {
+        return null;
+      }
+    });
+    console.log(
+      `[hierarchy] listing discovery: scanned ${discovery.filesScanned} files, ` +
+        `${discovery.labelsDiscovered} child categories under ${discovery.nodesExtended} nodes ` +
+        'whose own page was never saved',
+    );
+    if (discovery.observations.length > 0) {
+      artifact = buildArtifact([...observations, ...discovery.observations], knownMakes);
+      tree = artifactToTree(artifact);
+    }
     const report = auditHierarchy(tree);
 
     console.log('[hierarchy] ' + summarizeAudit(report).split('\n').join('\n[hierarchy] '));

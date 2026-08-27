@@ -598,6 +598,11 @@ export class EvaluationService {
        * (tum A3, tum A3 Sportback, tum 35 TFSI) SESSIZ genisleme YOKTUR.
        */
       sourceFiles: leafTarget?.sourceFiles,
+      /**
+       * Satir-seviyesi cozumlemeden gelen KESIN ilan kimlikleri. Ust kategori
+       * sayfalarindan kazanilan ilanlar da buraya dahildir.
+       */
+      listingIds: leafTarget?.listingIds,
     });
 
     if (emsalResult.level === 4 || emsalResult.matchedCount === 0 || !emsalResult.cleanListings || emsalResult.cleanListings.length === 0) {

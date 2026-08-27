@@ -239,9 +239,10 @@ export default function VehicleSelectionSteps({ hierarchy }: VehicleSelectionSte
           <span className="text-xs font-bold text-emerald-700 dark:text-emerald-300 flex items-center gap-1.5">
             <CheckCircle className="w-4 h-4" /> Araç seçiminiz tamamlandı
           </span>
-          {leaf.resultCount !== null && (
+          {leaf.marketListingCount > 0 && (
             <span className="text-[11px] text-emerald-700/80 dark:text-emerald-300/80 tabular-nums">
-              Bu seçim için {leaf.resultCount.toLocaleString('tr-TR')} ilan gözlendi
+              {/* Tekillestirilmis, KESIN cozulmus ilan sayisi. */}
+              Bu seçim için {leaf.marketListingCount.toLocaleString('tr-TR')} ilan gözlendi
             </span>
           )}
         </div>
@@ -261,7 +262,7 @@ export default function VehicleSelectionSteps({ hierarchy }: VehicleSelectionSte
             Bu kategori için henüz veri toplanmadı
           </p>
           <p className="text-[11px] text-amber-700/80 dark:text-amber-400/80 mt-1">
-            {current?.name} için elimizde ilan bulunmadığından değerleme yapamıyoruz. Farklı bir
+            {current?.name} için topladığımız ilanlar arasında eşleşen kayıt bulunamadı. Farklı bir
             donanım seçebilir ya da bir üst adımdan başka bir seçeneğe geçebilirsiniz.
           </p>
         </div>

@@ -455,8 +455,19 @@ function buildFromExplicitPaths(
       // Kaydedilmis sayfasi var: artik "turetilmis" degil, GOZLENMIS dugum.
       node.derived = false;
     }
-    const terminal = terminalByString.get(observation.categoryString);
-    if (terminal === true) node.terminalConfirmed = true;
+    /**
+     * TERMINAL KANITI YALNIZCA KENDI SAYFASINDAN GELIR.
+     *
+     * Anahtar kategori dizesidir ve iki farkli gozlem ayni dizeyi
+     * uretebilir: kaydedilen bir dosyanin adi "Renault Symbol 1.0 TCe Joy"
+     * iken breadcrumb'i "Renault > Symbol > 1.0 TCe"dir; satirlardan
+     * kesfedilen "…/1.0 TCe/Joy" dugumu ayni dizeye denk gelip o sayfanin
+     * terminal kanitini HAKSIZ YERE devraliyordu. Sayfasi olmayan dugum
+     * terminal ILAN EDILEMEZ.
+     */
+    if (observation.sourceFiles.length > 0 && terminalByString.get(observation.categoryString) === true) {
+      node.terminalConfirmed = true;
+    }
   }
 
   for (const node of nodes.values()) {
