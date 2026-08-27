@@ -14,7 +14,7 @@
  *   while currentNode.hasChildren:
  *       currentNode'un DOGRUDAN cocuklarini sor
  *       currentNode = secilen cocuk
- *   currentNode.isLeaf -> secim tamam
+ *   cocugu yok VE ilan kaniti var -> secim tamam
  *
  * Derinlik veriden gelir: gercek datasette 1 ile 7 seviye arasinda degisir.
  *
@@ -23,6 +23,7 @@
  * (yanlis) piyasa sonucunu gostermek olurdu.
  */
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { isTerminalAndPriceable } from '@/lib/vehicle-selection';
 import { API_BASE } from '@/lib/api';
 
 export interface HierarchyNode {
@@ -148,8 +149,9 @@ export function useVehicleHierarchy(): UseVehicleHierarchy {
        *
        * "children.length === 0 => LEAF" kurali, cocuklarini hic toplamadigimiz
        * ebeveynleri de yaprak yapiyordu (olculdu: 588 dugum, 71 marka).
-       * Bos liste iki farkli seyi gosterebilir ve ayrimi yalnizca backend'in
-       * kanit temelli `isLeaf` bayragi bilir.
+       * Bos liste iki farkli seyi gosterebilir; ayrimi ILAN KANITI yapar:
+       * cocugu olmayan bir dugume KESIN cozulmus ilan varsa burasi gercek bir
+       * secim sonudur, yoksa "toplanmadi" demektir (UNKNOWN).
        */
       if (children.length > 0) setState('HAS_CHILDREN');
       else if (!node) setState('HAS_CHILDREN'); // kokler: her zaman secim var
@@ -208,9 +210,12 @@ export function useVehicleHierarchy(): UseVehicleHierarchy {
     levels,
     state,
     error,
-    // Yaprak YALNIZCA dogrulanmis terminalde dolar; UNKNOWN'da null kalir.
-    // Yaprak = cocugu yok VE kanitlanmis ilan verisi var.
-    leaf: state === 'LEAF' && current && !current.hasChildren && current.marketListingCount > 0 ? current : null,
+    /**
+     * Yaprak YALNIZCA dogrulanmis terminalde dolar; UNKNOWN'da null kalir.
+     * Kural `isTerminalAndPriceable` icinde TEK yerde durur — rozet, yil
+     * kilidi, ozet, buton ve gonderim muhafizi hepsi bunun uzerinden gider.
+     */
+    leaf: state === 'LEAF' && isTerminalAndPriceable(current) ? current : null,
     current,
     select,
     selectAt,

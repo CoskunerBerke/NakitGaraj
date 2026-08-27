@@ -146,6 +146,7 @@ const step2Schema = z.object({
 import { API_BASE } from '@/lib/api';
 import VehicleSelectionSteps from '@/components/VehicleSelectionSteps';
 import { useVehicleHierarchy, type HierarchyNode } from '@/hooks/useVehicleHierarchy';
+import { canContinueFromVehicleStep, isTerminalAndPriceable } from '@/lib/vehicle-selection';
 
 const VEHICLE_FEATURES = {
   security: [
@@ -903,21 +904,37 @@ function SearchableCombobox({
 }
 
   /**
-   * Adim 1 tamam mi.
+   * ARAC SECIMI TAMAM MI — TEK YETKILI CEVAP.
    *
-   * Sihirbaz akisinda KESIN YAPRAK sarttir. Kullanici "Audi > A3"te durduysa
-   * ve A3'un cocuklari varsa bu tamamlanmis bir arac DEGILDIR; devam
+   * Kaynak `useVehicleHierarchy.leaf`'tir ve zaten iki sarti birlikte tasir:
+   * dugumun YAPISAL COCUGU YOK ve KESIN cozulmus ilan kaniti var. Kullanici
+   * "Audi > A3"te durduysa A3'un cocuklari vardir, `leaf` null kalir ve devam
    * ettirmek ona A3 ortalamasini gostermek olurdu. LOADING/UNKNOWN/ERROR
-   * durumlarinda `hierarchyLeaf` null kalir ve buton kapali kalir
-   * (fail-closed).
+   * durumlarinda da null kalir (fail-closed).
+   *
+   * KOK NEDEN (olculdu): buraya ayrica `leaf.isLeaf === true` sarti
+   * ekleniyordu. `isLeaf` agacin KANIT bayragidir: yalnizca dugumun KENDI
+   * kategori sayfasi kaydedilmisse true olur. "Audi / A3 / A3 Sedan / 35 TFSI"
+   * sayfasi hic kaydedilmemis (derived=true, terminalConfirmed=false), ama
+   * ust sayfalarin satirlarindan 578 ilan KESIN olarak bu dugume cozulmus ve
+   * hicbir alt kategorisi yok. Yani secim gercekten bitmis ve fiyatlanabilir.
+   * Sonuc: banner "SECIM TAMAMLANDI" diyor, yil aciliyor, ozet dolu
+   * gorunuyorken "Devam Et" kapali kaliyordu — ayni soruya iki farkli cevap.
+   *
+   * Bu yuzden tamamlanma TEK yerde hesaplanir ve rozet, yil kilidi, ozet,
+   * buton ve gonderim muhafizi AYNI degeri kullanir.
    */
-  const isStep1Complete = USE_HIERARCHY_WIZARD
-    ? selectedYear !== '' && hierarchyLeaf !== null && hierarchyLeaf.isLeaf === true
-    : selectedYear !== '' &&
-      selectedBrand !== '' &&
+  const isVehicleSelectionComplete = USE_HIERARCHY_WIZARD
+    ? isTerminalAndPriceable(hierarchyLeaf)
+    : selectedBrand !== '' &&
       selectedModel !== '' &&
       selectedVariant !== '' &&
       (availablePackages.length === 0 || selectedPackage !== '');
+
+  /** Adim 1 = arac secimi tamam + model yili secili. */
+  const isStep1Complete = USE_HIERARCHY_WIZARD
+    ? canContinueFromVehicleStep(hierarchyLeaf, selectedYear)
+    : isVehicleSelectionComplete && selectedYear !== '';
 
   const handleStep1Next = () => {
     if (isStep1Complete) {
@@ -1057,10 +1074,11 @@ function SearchableCombobox({
      * Sihirbaz akisinda o alanlar TANIMI GEREGI bostur; kontrol oldugu gibi
      * birakilsaydi kullanici tum formu doldurup "Degerle"ye bastiginda 1. adima
      * geri atilirdi. Her akis KENDI tamamlanmislik kanitina bakar.
+     *
+     * BUTONLA AYNI KOSUL. Muhafiz ile gorunur kapi ayri hesaplanirsa biri
+     * gecirip digeri geri atar; ikisi de `isStep1Complete` uzerinden gider.
      */
-    const vehicleSelectionMissing = USE_HIERARCHY_WIZARD
-      ? !selectedYear || !hierarchyLeaf || hierarchyLeaf.isLeaf !== true
-      : !selectedBrand || !selectedYear || !selectedModel;
+    const vehicleSelectionMissing = !isStep1Complete;
 
     if (vehicleSelectionMissing) {
       alert('Araç seçiminiz eksik ya da güncellendi. Lütfen aracınızı yeniden seçin.');
@@ -1364,7 +1382,7 @@ function SearchableCombobox({
                 */}
                 <div
                   className={`flex flex-col gap-3 p-5 rounded-2xl border transition-all ${
-                    hierarchyLeaf
+                    isVehicleSelectionComplete
                       ? 'bg-zinc-50 dark:bg-zinc-900/50 border-zinc-200 dark:border-zinc-800'
                       : 'bg-zinc-100/40 dark:bg-zinc-900/20 border-zinc-200/50 dark:border-zinc-800/40 opacity-60 pointer-events-none select-none'
                   }`}
@@ -1375,7 +1393,7 @@ function SearchableCombobox({
                       <h3 className="text-sm font-bold text-zinc-900 dark:text-white flex items-center gap-2">
                         <span
                           className={`w-6 h-6 rounded-full text-xs font-extrabold flex items-center justify-center ${
-                            hierarchyLeaf
+                            isVehicleSelectionComplete
                               ? 'bg-brand-orange text-white'
                               : 'bg-zinc-300 dark:bg-zinc-700 text-zinc-500'
                           }`}
@@ -1388,7 +1406,7 @@ function SearchableCombobox({
                         Aracınızın ruhsatında yazan imalat/model yılını seçin.
                       </p>
                     </div>
-                    {!hierarchyLeaf ? (
+                    {!isVehicleSelectionComplete ? (
                       <span className="text-[10px] font-semibold text-amber-500 bg-amber-500/10 px-2 py-0.5 rounded-md">
                         🔒 Önce Aracınızı Seçiniz
                       </span>
@@ -1400,7 +1418,7 @@ function SearchableCombobox({
                   </div>
                   <select
                     value={selectedYear}
-                    disabled={!hierarchyLeaf}
+                    disabled={!isVehicleSelectionComplete}
                     onChange={(e) =>
                       setSelectedYear(e.target.value === '' ? '' : Number(e.target.value))
                     }
@@ -1410,7 +1428,7 @@ function SearchableCombobox({
                     className="glass-input rounded-xl p-3.5 text-sm w-full font-semibold disabled:cursor-not-allowed"
                   >
                     <option value="">
-                      {hierarchyLeaf ? '-- Model Yılını Seçiniz --' : 'Önce Aracınızı Seçiniz'}
+                      {isVehicleSelectionComplete ? '-- Model Yılını Seçiniz --' : 'Önce Aracınızı Seçiniz'}
                     </option>
                     {years.map((y) => (
                       <option key={y} value={y}>
@@ -1849,7 +1867,7 @@ function SearchableCombobox({
                     {hierarchyPath.map((n) => n.name).join(' › ')}
                   </span>
                 </div>
-                {hierarchyLeaf ? (
+                {isVehicleSelectionComplete ? (
                   <span className="text-[10px] font-black uppercase bg-emerald-500 text-white px-2.5 py-1 rounded-full flex items-center gap-1">
                     <Check className="w-3 h-3" /> SEÇİM TAMAMLANDI
                   </span>
