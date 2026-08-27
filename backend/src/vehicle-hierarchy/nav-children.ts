@@ -71,7 +71,8 @@ export function extractBreadcrumb(html: string): string[] | null {
    * Arac zinciri "Otomobil" kategorisinden SONRA baslar; oncesi site
    * gezintisidir (Anasayfa / Vasıta / Otomobil) ve arac kimligi tasimaz.
    */
-  const start = items.findIndex((i) => i.href === '/kategori/otomobil');
+  // Baglanti mutlak da olabilir; karsilastirma once TEK BICIME indirgenir.
+  const start = items.findIndex((i) => normalizeHref(i.href) === '/kategori/otomobil');
   if (start < 0) return null;
   const chain = items.slice(start + 1).map((i) => i.label).filter(Boolean);
   return chain.length > 0 ? chain : null;
@@ -98,7 +99,30 @@ function sliceContainer(html: string): string | null {
   return html.slice(start, end < 0 ? Math.min(html.length, start + 200_000) : end);
 }
 
-const LINK = /<a\b[^>]*href="\/([a-z0-9][a-z0-9._-]*)(?:\?[^"]*)?"[^>]*title="([^"]*)"/gi;
+/**
+ * KORPUSTA IKI KAYIT BICIMI VAR.
+ *
+ * Sayfalarin cogu ham sunucu HTML'i olarak kaydedilmis ve baglantilari
+ * GORELIDIR (`href="/audi-a3"`). Bir bolumu ise Chrome'un "Web sayfasi,
+ * tamami" secenegiyle CANLI DOM'dan kaydedilmis; orada baglantilar MUTLAK
+ * olur (`href="https://www.sahibinden.com/audi-a3"`).
+ *
+ * Yalnizca goreli bicimi kabul eden kalip, ikinci gruptaki sayfalari sessizce
+ * bos dondurur — yani kullanicinin ELINDEKI veri hic kullanilmaz. Olculdu:
+ * korpusta 21 dosya bu durumda ve tamami gercek kategori sayfasi.
+ */
+const ORIGIN = /^https?:\/\/[^/]+/i;
+
+/** Mutlak ya da goreli baglantiyi tek bicime indirger: "/yol". */
+export function normalizeHref(href: string): string {
+  const value = String(href || '').trim();
+  if (!value) return '';
+  const withoutOrigin = value.replace(ORIGIN, '');
+  return withoutOrigin.startsWith('/') ? withoutOrigin : `/${withoutOrigin}`;
+}
+
+const LINK =
+  /<a\b[^>]*href="(?:https?:\/\/[^/"]+)?\/([a-z0-9][a-z0-9._-]*)(?:\?[^"]*)?"[^>]*title="([^"]*)"/gi;
 
 /**
  * Sayfanin ilan ettigi DOGRUDAN alt kategoriler.
