@@ -43,7 +43,8 @@ export async function main(): Promise<void> {
     console.log(
       `[hierarchy] nav evidence: ${evidence.withEvidence} page(s) read, ` +
         `${evidence.terminal} terminal, ${evidence.declaredChildren} declared child categories, ` +
-        `${evidence.withPath} with exact breadcrumb path, ${evidence.unreadable} without evidence`,
+        `${evidence.withPath} with exact breadcrumb path, ${evidence.unreadable} without evidence, ` +
+        `${evidence.recoveredFromLaterFile} recovered from a later file of the same category`,
     );
 
     let artifact = buildArtifact(observations, knownMakes);

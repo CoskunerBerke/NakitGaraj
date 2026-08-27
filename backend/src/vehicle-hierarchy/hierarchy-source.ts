@@ -14,12 +14,8 @@ import * as path from 'path';
 import { categoryStringFromSourceFile } from './category-path';
 import { auditHierarchy, AuditReport } from './hierarchy-audit';
 import { buildHierarchy, HierarchyNode, HierarchyTree, ObservedCategory } from './hierarchy-tree';
-import {
-  extractBreadcrumb,
-  extractNavChildren,
-  isStrictDescendantSlug,
-  sahibindenSlug,
-} from './nav-children';
+import { NavChild, isStrictDescendantSlug, sahibindenSlug } from './nav-children';
+import { PageClassification, classifyPage } from './page-classification';
 
 // v2: dugumler artik `terminalConfirmed` tasiyor; v1 artefakti YUKLENMEZ
 // (eski artefakt yaprak kararini kanitsiz veriyordu).
@@ -126,38 +122,81 @@ export async function loadObservations(
 }
 
 /**
- * Korpus kokunu BILINEN dosyalardan turetir ve altindaki tum HTML'leri sayar.
+ * Chrome'un "Web sayfasi, tamami" kaydinin yan kaynak klasoru.
+ *
+ * Icinde sayfanin resimleri, betikleri ve REKLAM CERCEVELERI durur; bunlarin
+ * bir bolumu `.html` uzantilidir (`aframe.html`, `saved_resource.html`).
+ * Korpusta 25 tane var ve HICBIRI kaydedilmis bir sayfa degildir. Dosya adi
+ * kategori dizesi uretmeye calisilirsa "aframe" gibi uydurma dugumler dogar.
+ *
+ * Bu bir TAHMIN degil, Chrome'un kayit sozlesmesidir. Yine de KANITLANIR:
+ * korpus dogrulayicisi bu dosyalari da okur ve hepsinin SAVED_ASSET oldugunu
+ * gosterir (bkz. `validate-corpus.ts`).
+ */
+const ASSET_DIR_SUFFIX = '_files';
+
+/**
+ * Korpus kokunu BILINEN dosyalardan turetir ve altindaki TUM HTML'leri bulur.
  *
  * Yol hicbir yere sabit yazilmaz: veritabanindaki dosyalarin ortak ust
  * dizini kullanilir (marka klasorlerinin bir ustu). `VEHICLE_CORPUS_ROOT`
  * verilirse o kazanir.
+ *
+ * TARAMA OZYINELIDIR. Onceki hali yalnizca `<kok>/<Marka>/*.html` bakiyordu;
+ * bir seviye daha derine kaydedilmis gercek bir sayfa SESSIZCE gorulmezdi.
+ * Derinlik bir varsayim olmaktan cikarildi.
  */
-export function discoverCorpusFiles(knownFiles: string[]): string[] {
-  const root = corpusRoot(knownFiles);
+export function discoverCorpusFiles(knownFiles: string[], rootOverride?: string): string[] {
+  const root = rootOverride || corpusRoot(knownFiles);
   if (!root) return [];
   const known = new Set(knownFiles);
   const out: string[] = [];
+  walkHtml(root, out, true);
+  return out.filter((file) => !known.has(file));
+}
+
+/**
+ * Ozyineli HTML taramasi. Yan kaynak klasorlerini atlamak TEK bir bayrakla
+ * belirlenir; iki ayri yuruyucu yazmak, birinin digerinden sessizce
+ * ayrilmasina davetiye olurdu.
+ */
+function walkHtml(dir: string, out: string[], skipAssetDirs: boolean): void {
   let entries: fs.Dirent[];
   try {
-    entries = fs.readdirSync(root, { withFileTypes: true });
+    entries = fs.readdirSync(dir, { withFileTypes: true });
   } catch {
-    return [];
+    return;
   }
   for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    const dir = path.join(root, entry.name);
-    let files: string[];
-    try {
-      files = fs.readdirSync(dir);
-    } catch {
-      continue;
-    }
-    for (const name of files) {
-      if (!name.toLowerCase().endsWith('.html')) continue;
-      const full = path.join(dir, name);
-      if (!known.has(full)) out.push(full);
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (skipAssetDirs && entry.name.toLowerCase().endsWith(ASSET_DIR_SUFFIX)) continue;
+      walkHtml(full, out, skipAssetDirs);
+    } else if (entry.name.toLowerCase().endsWith('.html')) {
+      out.push(full);
     }
   }
+}
+
+/**
+ * Korpus kokunu disariya acar: dogrulayici da AYNI koku kullanmalidir, yoksa
+ * "agacin okudugu" ile "denetimin okudugu" farkli kumeler olur ve denetim
+ * kendi kendini onaylar.
+ */
+export function resolveCorpusRoot(knownFiles: string[]): string | null {
+  return corpusRoot(knownFiles);
+}
+
+/**
+ * Bir kok altindaki TUM `.html` dosyalari — yan kaynak klasorleri DAHIL.
+ *
+ * `discoverCorpusFiles` yan kaynaklari kasitli olarak eler; dogrulayici ise
+ * ONLARI DA okur ve gercekten yan kaynak olduklarini KANITLAR. Bir iddiayi
+ * ancak disladigi seyi de inceleyerek dogrulayabiliriz.
+ */
+export function listAllHtmlFiles(root: string): string[] {
+  const out: string[] = [];
+  walkHtml(root, out, false);
   return out;
 }
 
@@ -199,58 +238,84 @@ export function attachNavEvidence(
   declaredChildren: number;
   unreadable: number;
   withPath: number;
+  /** Ilk dosyasi kullanilamaz olup SONRAKI dosyasindan kanit alinan kategoriler. */
+  recoveredFromLaterFile: number;
 } {
   let withEvidence = 0;
   let terminal = 0;
   let declaredChildren = 0;
   let unreadable = 0;
-
   let withPath = 0;
+  let recoveredFromLaterFile = 0;
 
   for (const observation of observations) {
-    const file = observation.sourceFiles[0];
-    const html = file ? read(file) : null;
-    if (html === null) {
+    /**
+     * AYNI KATEGORININ TUM DOSYALARI DENENIR — ILKI DEGIL.
+     *
+     * KOK NEDEN (olculdu): korpusta 16 kategori hem gercek sayfa hem de
+     * giris duvari / 2 asamali dogrulama / erisim engeli sayfasi iceriyor
+     * (orn. "Hyundai Accent Era 1.5 CRDi": 2 gercek sayfa, 6 duvar sayfasi).
+     * Onceki hal YALNIZCA `sourceFiles[0]`'i okuyordu; o dosya duvar sayfasi
+     * ise kategorinin breadcrumb'i ve menusu TAMAMEN kayboluyor, sonuc
+     * "kanit yok" olarak sessizce sayiliyordu. Hangi dosyanin once geldigi
+     * veritabani siralamasina bagliydi — yani veri kaybi RASTLANTIYA
+     * birakilmisti.
+     *
+     * Artik kategori sayfasi BULUNANA KADAR ilerlenir. Ayni kategorinin
+     * sayfalari ayni menuyu tasir, bu yuzden ilk KULLANILABILIR olan yeterlidir
+     * ve 3.34 GB bosuna taranmaz.
+     */
+    let classified: PageClassification | null = null;
+    let attempts = 0;
+    for (const file of observation.sourceFiles) {
+      const html = read(file);
+      if (html === null) continue;
+      attempts += 1;
+      const page = classifyPage(html, file);
+      if (page.status === 'CATEGORY_PAGE') {
+        classified = page;
+        break;
+      }
+      if (!classified) classified = page;
+    }
+
+    if (!classified || classified.status !== 'CATEGORY_PAGE') {
       observation.navChildLabels = null;
       unreadable += 1;
       continue;
     }
+    if (attempts > 1) recoveredFromLaterFile += 1;
 
     /**
      * KESIN YOL: sayfanin kendi breadcrumb'i. Dosya adini bosluktan bolmek
      * yerine kaynagin verdigi zincir kullanilir.
-     */
-    const chain = extractBreadcrumb(html);
-    if (chain && chain.length > 0) {
-      observation.pathSegments = chain;
-      withPath += 1;
-    }
-
-    const children = extractNavChildren(html);
-    /**
-     * BOS MENU TEK BASINA TERMINAL KANITI DEGILDIR.
      *
-     * Korpusta breadcrumb'i olmayan, hicbir kategori linki tasimayan (yani
-     * gercek bir kategori sayfasi olmayan) kayitlar var. Boyle bir sayfanin
-     * bos menusunu "alt kategori yok" saymak, tam da duzeltmeye calistigimiz
-     * hatayi geri getirirdi: Volkswagen kok dugumu 991 karisik ilanla yaprak
-     * gorunuyordu. Kanit ancak sayfa kendini bir kategori olarak
-     * tanimliyorsa (breadcrumb varsa) gecerlidir.
+     * CATEGORY_PAGE olmasi zaten breadcrumb zincirinin VE menu blogunun
+     * varligini garanti eder (bkz. `page-classification`); "bos menu terminal
+     * kaniti degildir" kurali oraya tasindi ve tek bir yerde durur.
      */
-    if (children === null || !chain || chain.length === 0) {
-      observation.navChildLabels = null;
-      unreadable += 1;
-      continue;
-    }
+    const chain = classified.breadcrumb as string[];
+    observation.pathSegments = chain;
+    withPath += 1;
+
     // Menude ustler ve kardesler de var; yalnizca BU dugumu uzatanlar cocuktur.
-    const own = sahibindenSlug(observation.pathSegments ?? observation.categoryString.split(' ').filter(Boolean));
-    const direct = children.filter((c) => isStrictDescendantSlug(own, c.slug));
+    const own = sahibindenSlug(chain);
+    const direct = (classified.navChildren as NavChild[]).filter((c) =>
+      isStrictDescendantSlug(own, c.slug),
+    );
     observation.navChildLabels = direct.map((c) => c.label);
     withEvidence += 1;
     if (direct.length === 0) terminal += 1;
     declaredChildren += direct.length;
   }
-  return { withEvidence, terminal, declaredChildren, unreadable, withPath };
+  return {
+    withEvidence,
+    terminal,
+    declaredChildren,
+    unreadable,
+    withPath,
+    recoveredFromLaterFile,
+  };
 }
 
 function safeRead(file: string): string | null {

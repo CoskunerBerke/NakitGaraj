@@ -57,25 +57,50 @@ export interface NavChild {
  */
 export function extractBreadcrumb(html: string): string[] | null {
   const at = html.indexOf(BREADCRUMB);
-  if (at < 0) return null;
-  const end = html.indexOf('</ul>', at);
-  if (end < 0) return null;
-  const block = html.slice(at, end);
-
-  const items: Array<{ href: string; label: string }> = [];
-  for (const m of block.matchAll(/<li class="bc-item">([\s\S]*?)<\/li>/g)) {
-    const a = /<a[^>]*href="([^"]*)"[^>]*>\s*<span>([^<]*)<\/span>/.exec(m[1]);
-    if (a) items.push({ href: a[1], label: decodeEntities(a[2]).trim() });
-  }
+  const items = extractBreadcrumbItems(html);
+  if (items === null) return null;
   /**
    * Arac zinciri "Otomobil" kategorisinden SONRA baslar; oncesi site
    * gezintisidir (Anasayfa / Vasıta / Otomobil) ve arac kimligi tasimaz.
    */
   // Baglanti mutlak da olabilir; karsilastirma once TEK BICIME indirgenir.
-  const start = items.findIndex((i) => normalizeHref(i.href) === '/kategori/otomobil');
+  const start = items.findIndex((i) => normalizeHref(i.href) === OTOMOBIL);
   if (start < 0) return null;
   const chain = items.slice(start + 1).map((i) => i.label).filter(Boolean);
   return chain.length > 0 ? chain : null;
+}
+
+/** Arac zincirinin basladigi kok kategori. */
+export const OTOMOBIL = '/kategori/otomobil';
+
+/** Breadcrumb ogesi: kaynagin yazdigi baglanti ve etiket. */
+export interface BreadcrumbItem {
+  href: string;
+  label: string;
+}
+
+/**
+ * Breadcrumb satirini HAM haliyle verir (kirpma yok).
+ *
+ * `extractBreadcrumb` bundan turer. Ayri durmasinin nedeni SINIFLANDIRMA:
+ * "breadcrumb yok" ile "breadcrumb var ama Otomobil'de bitiyor" AYNI SEY
+ * DEGILDIR. Ikincisi sitenin kok vitrin sayfasidir (kendisi bir arac
+ * kategorisi degildir); onu "ayristirilamadi" saymak, gercek bir ayristirma
+ * hatasini gizleyen sahte bir kayit uretirdi.
+ */
+export function extractBreadcrumbItems(html: string): BreadcrumbItem[] | null {
+  const at = html.indexOf(BREADCRUMB);
+  if (at < 0) return null;
+  const end = html.indexOf('</ul>', at);
+  if (end < 0) return null;
+  const block = html.slice(at, end);
+
+  const items: BreadcrumbItem[] = [];
+  for (const m of block.matchAll(/<li class="bc-item">([\s\S]*?)<\/li>/g)) {
+    const a = /<a[^>]*href="([^"]*)"[^>]*>\s*<span>([^<]*)<\/span>/.exec(m[1]);
+    if (a) items.push({ href: a[1], label: decodeEntities(a[2]).trim() });
+  }
+  return items;
 }
 
 const BREADCRUMB = 'search-result-bc';
@@ -91,12 +116,34 @@ const CONTAINER = 'searchCategoryContainer';
 function sliceContainer(html: string): string | null {
   const at = html.indexOf(CONTAINER);
   if (at < 0) return null;
-  // Kapsayici uzun degil; sonraki </div> yerine guvenli bir pencere alinir ve
-  // ayristirma zaten yalnizca <a href=... title=...> ciftlerine bakar.
   const start = html.indexOf('<ul', at);
   if (start < 0) return null;
-  const end = html.indexOf('</ul>', start);
-  return html.slice(start, end < 0 ? Math.min(html.length, start + 200_000) : end);
+
+  /**
+   * LISTE DENGELI KAPANISLA BITER — ILK `</ul>` ILE DEGIL.
+   *
+   * Kaynak, secili dalin altini IC ICE `<ul>` olarak yazar; korpusta menu
+   * blogunun ilk `</ul>`'ine kadarki parcasi 4441 dosyada birden fazla `<ul>`
+   * aciyor. Ilk kapanista kesmek, o ic listeden SONRA gelen kardesleri
+   * disarida birakir. Bugunku korpusta bu kayip olculdu ve SIFIR cikti
+   * (kesilen kisim yalnizca ust/kardes baglantilari tasiyor, dogrudan cocuk
+   * degil); yine de kural yerine RASTLANTI olurdu. Denge sayaci bunu kaynagin
+   * kendi ic ice yapisina baglar.
+   */
+  const re = /<ul\b|<\/ul>/gi;
+  re.lastIndex = start;
+  let depth = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html)) !== null) {
+    if (m[0][1] === '/') {
+      depth -= 1;
+      if (depth <= 0) return html.slice(start, m.index);
+    } else {
+      depth += 1;
+    }
+  }
+  // Kapanis hic gelmiyorsa (bozuk/kirpik kayit) guvenli bir pencere ile yetin.
+  return html.slice(start, Math.min(html.length, start + 200_000));
 }
 
 /**
