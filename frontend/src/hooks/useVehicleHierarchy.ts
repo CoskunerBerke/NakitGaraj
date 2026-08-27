@@ -36,12 +36,22 @@ export interface HierarchyNode {
   resultCount: number | null;
   totalCount: number;
   hasChildren: boolean;
+  /** YAPRAK = cocugu yok VE terminal oldugu kaynaktan dogrulandi. */
   isLeaf: boolean;
+  /** Sayfasi okundu ve alt kategori ilan etmedi. false + cocuksuz => BILINMEYEN. */
+  terminalConfirmed: boolean;
   derived: boolean;
 }
 
-/** Adim durumu — UNKNOWN/ERROR asla LEAF ile birlestirilmez. */
-export type HierarchyStepState = 'LOADING' | 'HAS_CHILDREN' | 'LEAF' | 'ERROR';
+/**
+ * Adim durumu — UNKNOWN/ERROR asla LEAF ile birlestirilmez.
+ *
+ * UNKNOWN: kaynak bu kategoriyi ilan etti ama sayfasi hic toplanmadi.
+ * Secilebilir ama FIYATLANAMAZ. "Cocuk listesi bos geldi" ile "burasi
+ * gercekten terminal" ayni sey degildir; karistirmak, ust kategorinin karisik
+ * havuzunu tek bir aracin fiyati gibi gostermek demekti.
+ */
+export type HierarchyStepState = 'LOADING' | 'HAS_CHILDREN' | 'LEAF' | 'UNKNOWN' | 'ERROR';
 
 async function fetchJson<T>(url: string): Promise<T> {
   const response = await fetch(url);
@@ -125,8 +135,18 @@ export function useVehicleHierarchy(): UseVehicleHierarchy {
         next[level] = children;
         return next;
       });
-      // Cocuk listesi BOS gelirse yaprak; ama HATA durumunda ASLA yaprak degil.
-      setState(children.length > 0 ? 'HAS_CHILDREN' : 'LEAF');
+      /**
+       * DURUM DUGUMUN KENDI BAYRAKLARINDAN OKUNUR, liste uzunlugundan DEGIL.
+       *
+       * "children.length === 0 => LEAF" kurali, cocuklarini hic toplamadigimiz
+       * ebeveynleri de yaprak yapiyordu (olculdu: 588 dugum, 71 marka).
+       * Bos liste iki farkli seyi gosterebilir ve ayrimi yalnizca backend'in
+       * kanit temelli `isLeaf` bayragi bilir.
+       */
+      if (children.length > 0) setState('HAS_CHILDREN');
+      else if (node && node.isLeaf) setState('LEAF');
+      else if (!node) setState('HAS_CHILDREN'); // kokler: her zaman secim var
+      else setState('UNKNOWN');
     } catch (err) {
       if (ticket !== requestRef.current) return;
       setOptions([]);
@@ -175,7 +195,8 @@ export function useVehicleHierarchy(): UseVehicleHierarchy {
     levels,
     state,
     error,
-    leaf: state === 'LEAF' && current ? current : null,
+    // Yaprak YALNIZCA dogrulanmis terminalde dolar; UNKNOWN'da null kalir.
+    leaf: state === 'LEAF' && current && current.isLeaf ? current : null,
     current,
     select,
     selectAt,

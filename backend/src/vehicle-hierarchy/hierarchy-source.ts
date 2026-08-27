@@ -14,8 +14,16 @@ import * as path from 'path';
 import { categoryStringFromSourceFile } from './category-path';
 import { auditHierarchy, AuditReport } from './hierarchy-audit';
 import { buildHierarchy, HierarchyNode, HierarchyTree, ObservedCategory } from './hierarchy-tree';
+import {
+  extractBreadcrumb,
+  extractNavChildren,
+  isStrictDescendantSlug,
+  sahibindenSlug,
+} from './nav-children';
 
-export const HIERARCHY_ARTIFACT_VERSION = 'vehicle-hierarchy-v1';
+// v2: dugumler artik `terminalConfirmed` tasiyor; v1 artefakti YUKLENMEZ
+// (eski artefakt yaprak kararini kanitsiz veriyordu).
+export const HIERARCHY_ARTIFACT_VERSION = 'vehicle-hierarchy-v2';
 
 export interface HierarchyArtifact {
   version: string;
@@ -99,6 +107,77 @@ export function makeFolderOf(sourceFile: string | null | undefined): string | nu
   if (parts.length < 2) return null;
   const folder = parts[parts.length - 2].trim();
   return folder || null;
+}
+
+/**
+ * KAYDEDILEN SAYFALARDAN YAPRAK KANITI TOPLA — SALT OKUNUR.
+ *
+ * Her kategori icin TEK bir sayfa okunur: ayni kategorinin "- 2", "- 3" gibi
+ * dosyalari ayni menuyu tasiyan sayfalamalardir, hepsini okumak 3.3 GB'i
+ * bosuna taramak olurdu.
+ *
+ * Dosya okunamazsa `navChildLabels` NULL birakilir: "kanit yok" ile "cocuk
+ * yok" ayni sey degildir ve karistirmak bizi bu hataya dusurmustu.
+ */
+export function attachNavEvidence(
+  observations: ObservedCategory[],
+  read: (file: string) => string | null = safeRead,
+): {
+  withEvidence: number;
+  terminal: number;
+  declaredChildren: number;
+  unreadable: number;
+  withPath: number;
+} {
+  let withEvidence = 0;
+  let terminal = 0;
+  let declaredChildren = 0;
+  let unreadable = 0;
+
+  let withPath = 0;
+
+  for (const observation of observations) {
+    const file = observation.sourceFiles[0];
+    const html = file ? read(file) : null;
+    if (html === null) {
+      observation.navChildLabels = null;
+      unreadable += 1;
+      continue;
+    }
+
+    /**
+     * KESIN YOL: sayfanin kendi breadcrumb'i. Dosya adini bosluktan bolmek
+     * yerine kaynagin verdigi zincir kullanilir.
+     */
+    const chain = extractBreadcrumb(html);
+    if (chain && chain.length > 0) {
+      observation.pathSegments = chain;
+      withPath += 1;
+    }
+
+    const children = extractNavChildren(html);
+    if (children === null) {
+      observation.navChildLabels = null;
+      unreadable += 1;
+      continue;
+    }
+    // Menude ustler ve kardesler de var; yalnizca BU dugumu uzatanlar cocuktur.
+    const own = sahibindenSlug(observation.pathSegments ?? observation.categoryString.split(' ').filter(Boolean));
+    const direct = children.filter((c) => isStrictDescendantSlug(own, c.slug));
+    observation.navChildLabels = direct.map((c) => c.label);
+    withEvidence += 1;
+    if (direct.length === 0) terminal += 1;
+    declaredChildren += direct.length;
+  }
+  return { withEvidence, terminal, declaredChildren, unreadable, withPath };
+}
+
+function safeRead(file: string): string | null {
+  try {
+    return fs.readFileSync(file, 'utf-8');
+  } catch {
+    return null;
+  }
 }
 
 export function buildArtifact(

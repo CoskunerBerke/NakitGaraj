@@ -8,7 +8,13 @@
  * hicbir kayit silmez, kaynaga hicbir istek gondermez.
  */
 import { auditHierarchy, summarizeAudit } from './hierarchy-audit';
-import { artifactToTree, buildArtifact, loadObservations, saveArtifact } from './hierarchy-source';
+import {
+  artifactToTree,
+  attachNavEvidence,
+  buildArtifact,
+  loadObservations,
+  saveArtifact,
+} from './hierarchy-source';
 import { findByPath } from './hierarchy-tree';
 
 /** Sunum oncesi zorunlu regresyon: gercek Sahibinden zinciri. */
@@ -23,6 +29,19 @@ export async function main(): Promise<void> {
     console.log(
       `[hierarchy] observed categories: ${observations.length} ` +
         `(skipped non-category pages: ${skipped}), known makes: ${knownMakes.length}`,
+    );
+
+    /**
+     * YAPRAK KANITI: kaydedilen sayfanin KENDI kategori menusu.
+     *
+     * Bu adim olmadan "cocugunu toplamadik" ile "cocugu yok" ayirt edilemez
+     * ve ust kategoriler yaprak sanilip karisik havuzlariyla fiyatlanir.
+     */
+    const evidence = attachNavEvidence(observations);
+    console.log(
+      `[hierarchy] nav evidence: ${evidence.withEvidence} page(s) read, ` +
+        `${evidence.terminal} terminal, ${evidence.declaredChildren} declared child categories, ` +
+        `${evidence.withPath} with exact breadcrumb path, ${evidence.unreadable} without evidence`,
     );
 
     const artifact = buildArtifact(observations, knownMakes);

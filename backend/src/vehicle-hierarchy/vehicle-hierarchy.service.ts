@@ -32,8 +32,16 @@ export interface HierarchyNodeDto {
   /** Bu dugum + alt agac. */
   totalCount: number;
   hasChildren: boolean;
+  /** YAPRAK = cocugu yok VE terminal oldugu kaynaktan dogrulandi. */
   isLeaf: boolean;
-  /** Kaynakta ayri sayfa olarak gorulmedi, kardeslerinden turetildi. */
+  /**
+   * Bu dugumun kendi sayfasi okundu ve alt kategori ILAN ETMEDI.
+   *
+   * `!hasChildren && !terminalConfirmed` => BILINMEYEN: kaynak bu kategoriyi
+   * ilan etti ama sayfasini hic toplamadik. Secilebilir, FIYATLANAMAZ.
+   */
+  terminalConfirmed: boolean;
+  /** Kaynakta ayri sayfa olarak gorulmedi. */
   derived: boolean;
 }
 
@@ -49,6 +57,7 @@ function toDto(node: HierarchyNode): HierarchyNodeDto {
     totalCount: node.totalListingCount,
     hasChildren: node.hasChildren,
     isLeaf: node.isLeaf,
+    terminalConfirmed: node.terminalConfirmed,
     derived: node.derived,
   };
 }
@@ -183,7 +192,7 @@ export class VehicleHierarchyService {
         message: `Bilinmeyen araç hiyerarşi kimliği: "${leafId}"`,
       });
     }
-    if (!node.isLeaf) {
+    if (node.hasChildren) {
       /**
        * Yaprak OLMAYAN dugumle degerleme yapilamaz. Kullanici "Audi > A3"te
        * durduysa bu tamamlanmis bir arac degildir; A3'un ortalamasini vermek
@@ -195,6 +204,18 @@ export class VehicleHierarchyService {
         children: node.childIds
           .map((id) => tree.nodes.get(id)?.name)
           .filter((n): n is string => Boolean(n)),
+      });
+    }
+    if (!node.isLeaf) {
+      /**
+       * BILINMEYEN: kaynak bu kategoriyi ilan etti ama sayfasi hic
+       * toplanmadi. Ustteki (karisik) havuzla fiyatlamak yanlis fiyat
+       * gostermek olurdu; istek acikca reddedilir.
+       */
+      throw new BadRequestException({
+        reason: 'NO_COLLECTED_DATA',
+        message:
+          `"${node.fullPath}" için henüz veri toplanmadı; bu kategori için değerleme yapılamıyor.`,
       });
     }
     return {

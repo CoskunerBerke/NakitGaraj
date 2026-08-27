@@ -70,8 +70,14 @@ export default function VehicleSelectionSteps({ hierarchy }: VehicleSelectionSte
    *
    * Bu sayi VERIDEN gelir; sabit degildir.
    */
-  const pendingStep = state === 'LEAF' ? -1 : path.length;
-  const stepCount = state === 'LEAF' ? path.length : path.length + 1;
+  /**
+   * Agac bittiginde (LEAF) ya da bu dal icin veri toplanmadiginda (UNKNOWN)
+   * YENI SORU EKLENMEZ. Ikisi ayni goruntuyu verir ama ayni sey degildir:
+   * yalnizca LEAF degerlemeyi acar.
+   */
+  const finished = state === 'LEAF' || state === 'UNKNOWN';
+  const pendingStep = finished ? -1 : path.length;
+  const stepCount = finished ? path.length : path.length + 1;
 
   return (
     <div className="flex flex-col gap-6" data-testid="vehicle-selection-steps">
@@ -238,6 +244,26 @@ export default function VehicleSelectionSteps({ hierarchy }: VehicleSelectionSte
               Bu seçim için {leaf.resultCount.toLocaleString('tr-TR')} ilan gözlendi
             </span>
           )}
+        </div>
+      )}
+
+      {/*
+        BILINMEYEN: kaynak bu kategoriyi ilan ediyor ama sayfasi hic
+        toplanmadi. Sessizce kilitlemek kullaniciyi cikmaza sokardi; sebep
+        acikca yazilir. Yaprak SAYILMAZ, degerleme acilmaz.
+      */}
+      {state === 'UNKNOWN' && (
+        <div
+          data-testid="vehicle-selection-no-data"
+          className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/30"
+        >
+          <p className="text-xs font-bold text-amber-700 dark:text-amber-400">
+            Bu kategori için henüz veri toplanmadı
+          </p>
+          <p className="text-[11px] text-amber-700/80 dark:text-amber-400/80 mt-1">
+            {current?.name} için elimizde ilan bulunmadığından değerleme yapamıyoruz. Farklı bir
+            donanım seçebilir ya da bir üst adımdan başka bir seçeneğe geçebilirsiniz.
+          </p>
         </div>
       )}
 

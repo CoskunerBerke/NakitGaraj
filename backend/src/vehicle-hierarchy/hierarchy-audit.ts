@@ -26,6 +26,8 @@ export interface AuditReport {
   totalNodes: number;
   rootCount: number;
   leafCount: number;
+  /** Kaynagin ilan ettigi ama sayfasi toplanmamis dugumler (secilir, fiyatlanmaz). */
+  unknownCount: number;
   derivedCount: number;
   maxDepth: number;
   depthHistogram: Record<number, number>;
@@ -42,6 +44,7 @@ export function auditHierarchy(tree: HierarchyTree): AuditReport {
   const bySourceFile = new Map<string, string[]>();
   const depthHistogram: Record<number, number> = {};
   let leafCount = 0;
+  let unknownCount = 0;
   let derivedCount = 0;
   let maxDepth = 0;
 
@@ -59,8 +62,18 @@ export function auditHierarchy(tree: HierarchyTree): AuditReport {
     if (node.isLeaf && node.childIds.length > 0) {
       findings.push({ kind: 'LEAF_WITH_CHILDREN', detail: node.fullPath });
     }
-    if (!node.isLeaf && node.childIds.length === 0) {
+    /**
+     * Cocugu olmayan ve terminal oldugu DOGRULANMAMIS dugum bir hata degil,
+     * mesru BILINMEYEN durumudur: kaynak onu bir kategori olarak ilan etti
+     * ama biz o sayfayi hic toplamadik. Bulgu sayilirsa denetim kalici olarak
+     * kirmizi kalir; asil tehlike bunun tersiydi — bu dugumleri YAPRAK sayip
+     * karisik havuzlariyla fiyatlamak.
+     */
+    if (!node.isLeaf && node.childIds.length === 0 && node.terminalConfirmed) {
       findings.push({ kind: 'NON_LEAF_WITHOUT_CHILDREN', detail: node.fullPath });
+    }
+    if (!node.isLeaf && node.childIds.length === 0 && !node.terminalConfirmed) {
+      unknownCount += 1;
     }
 
     if (node.isLeaf) leafCount += 1;
@@ -123,6 +136,7 @@ export function auditHierarchy(tree: HierarchyTree): AuditReport {
     totalNodes: nodes.length,
     rootCount: tree.rootIds.length,
     leafCount,
+    unknownCount,
     derivedCount,
     maxDepth,
     depthHistogram,
@@ -138,6 +152,7 @@ export function summarizeAudit(report: AuditReport): string {
   for (const f of report.findings) byKind.set(f.kind, (byKind.get(f.kind) || 0) + 1);
   const lines = [
     `nodes=${report.totalNodes} roots=${report.rootCount} leaves=${report.leafCount} ` +
+    `unknown=${report.unknownCount} ` +
       `derived=${report.derivedCount} maxDepth=${report.maxDepth}`,
     `depth histogram: ${JSON.stringify(report.depthHistogram)}`,
     `findings: ${report.findings.length ? [...byKind].map(([k, n]) => `${k}=${n}`).join(' ') : 'none'}`,

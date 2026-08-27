@@ -49,4 +49,6 @@ export function identityFromPath(segments: string[], fullPath: string): LeafTarg
 export type LeafTargetFailure =
   | 'UNKNOWN_HIERARCHY_NODE'
   | 'NOT_A_LEAF'
+  /** Kaynak bu kategoriyi ilan etti ama sayfasi hic toplanmadi. */
+  | 'NO_COLLECTED_DATA'
   | 'NO_EXACT_MARKET_DATA';

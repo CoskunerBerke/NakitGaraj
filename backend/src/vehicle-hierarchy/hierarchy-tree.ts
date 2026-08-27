@@ -1,29 +1,29 @@
 /**
- * KATEGORI AGACI — GOZLENEN ONEK ILISKILERINDEN TURETILIR.
+ * KATEGORI AGACI — SINIRLAR KAYNAKTAN OKUNUR, TAHMIN EDILMEZ.
  *
- * SORUN: kaynak, kategori yolunu tek bir dizede bosluklarla birlestirir:
+ * Kaynak, kategori yolunu dosya adinda tek bir dizede birlestirir:
  *
  *   "Audi A3 A3 Sportback 35 TFSI Advanced"
  *
- * Bu dizeyi tek basina gorup nereden bolecegini bilmek IMKANSIZDIR:
- * "A3 Sportback 35" mi, "A3" + "Sportback 35 TFSI" mi? Iste sabit alanli
- * normalizasyonun ara seviyeleri yok etmesinin sebebi tam olarak budur.
+ * Bu dizeye bakip nereden bolecegini bilmek IMKANSIZDIR. Uzun sure onek
+ * cikarimiyla tahmin edildi ve iki kronik hata uretti:
+ *   - kardesi cocuk yapmak: "1.6" gozlendigi icin "1.6 FSI" onun ALTINA
+ *     takiliyordu; oysa ikisi de ayni ebeveynin cocugudur;
+ *   - tek etiketi ikiye bolmek: "LS Plus" -> "LS" + "Plus".
  *
- * COZUM: tek dizeye degil, GOZLENEN DIZELERIN KUMESINE bak. Kaynakta bir
- * yaprak sayfasina ancak ustundeki dugumlerden gecerek varilir; bu yuzden
- * ust seviyeler de ayri sayfalar olarak gozlenmistir:
+ * DOGRU KAYNAK: kaydedilen sayfanin KENDI breadcrumb'i tam zinciri verir
+ *   ("Audi > A3 > A3 Sportback > 1.6 TDI > Attraction"),
+ * ve sayfanin kategori menusu DOGRUDAN cocuklarini ilan eder. Ikisi de
+ * `nav-children` icinde okunur; burada yalnizca KULLANILIR.
  *
- *   "Audi A3"                                  (gozlendi)
- *   "Audi A3 A3 Sportback"                     (gozlendi)
- *   "Audi A3 A3 Sportback 35 TFSI"             (gozlendi)
- *   "Audi A3 A3 Sportback 35 TFSI Advanced"    (gozlendi)
+ * YAPRAK TANIMI (en kritik nokta): bir dugum, cocugu olmadigi icin yaprak
+ * SAYILMAZ. Cocugunu hic toplamamis olabiliriz. Yaprak olmak icin terminal
+ * oldugu sayfanin kendi menusunden DOGRULANMALIDIR. Bu ayrim yokken korpusta
+ * 1875 yaprağin 588'i aslinda ebeveyndi (71 marka, 43'u dogrudan marka koku)
+ * ve karisik havuzlariyla fiyatlaniyordu.
  *
- * Bir dizenin EBEVEYNI, kumedeki EN UZUN gercek onegidir; kendi ETIKETI de
- * geri kalan parcadir. Boylece sinirlar TAHMIN EDILMEZ, kaynagin kendi
- * gezinme yapisindan OKUNUR.
- *
- * DERINLIK SABIT DEGILDIR. Gercek veride 1'den 7'ye kadar degisir; bu modul
- * hicbir yerde seviye sayisi varsaymaz.
+ * Onek cikarimi asagida KORUNUR: yalnizca breadcrumb bulunmayan (sentetik
+ * test) girdiler icin calisir.
  */
 import { fullPathLabel, nodeIdFromPath, splitMakeAndRest } from './category-path';
 
@@ -34,6 +34,21 @@ export interface ObservedCategory {
   listingCount: number;
   /** Bu kategoriye ait kaynak dosyalari — ilan eslesmesi bunlarla yapilir. */
   sourceFiles: string[];
+  /**
+   * Sayfanin KENDI menusunde ilan ettigi dogrudan alt kategori etiketleri.
+   *
+   *   null -> sayfa okunmadi/menu bulunamadi. KANIT YOK; terminal SAYILMAZ.
+   *   []   -> menu var, alt kategori yok. TERMINAL kaniti.
+   *   [..] -> bu etiketler dogrudan cocuklardir (kaydedilmemis olsalar bile).
+   */
+  navChildLabels?: string[] | null;
+  /**
+   * Kaynagin KENDI breadcrumb'indan gelen KESIN segmentler.
+   *
+   * Verildiginde sinirlar TAHMIN EDILMEZ. Onek cikarimi yalnizca bu bilgi
+   * yokken (sentetik testler, breadcrumb'siz eski sayfa) devreye girer.
+   */
+  pathSegments?: string[];
 }
 
 export interface HierarchyNode {
@@ -51,10 +66,22 @@ export interface HierarchyNode {
   /** Bu dugumun kaynaktaki birlesik kategori dizesi (varsa). */
   categoryString: string | null;
   /**
-   * Kategori COCUGU var mi. YAPRAK TANIMI BUDUR — ilan sayisi DEGIL.
+   * Kategori COCUGU var mi. Ilan sayisi DEGIL.
    * 800 ilanli bir dugumun altinda paketler olabilir; o dugum yaprak degildir.
    */
   hasChildren: boolean;
+  /**
+   * Sayfasi okundu ve menusunde ALT KATEGORI YOK: gercekten terminal.
+   *
+   * Cocugu olmamak TEK BASINA yeterli DEGILDIR — cocuklarini hic toplamamis
+   * olabiliriz. Bu ayrimin yoklugu, 588 ebeveyni yaprak gosterip yanlis
+   * fiyatlamaya yol aciyordu.
+   */
+  terminalConfirmed: boolean;
+  /**
+   * YAPRAK = cocugu yok VE terminal oldugu KAYNAKTAN dogrulandi.
+   * Ikisi birden saglanmiyorsa dugum BILINMEYENDIR; degerleme acilmaz.
+   */
   isLeaf: boolean;
   childIds: string[];
   /** Yalnizca bu dugumde (alt agac haric) gozlenen ilan sayisi. */
@@ -145,12 +172,88 @@ export function buildHierarchy(
 ): HierarchyTree {
   const deriveIntermediates = options.deriveIntermediates !== false;
 
+  /**
+   * 0) MENUDE ILAN EDILEN COCUKLARI GOZLEM OLARAK EKLE.
+   *
+   * Kaynak sayfasi kaydedilmemis bir alt kategori de GERCEKTEN VARDIR; kanit
+   * ebeveynin kendi menusudur. Bunlari eklemek uydurmak degildir — tersine,
+   * eklememek ebeveyni yaprak gosterip onun karisik havuzunu tek bir aracin
+   * fiyati gibi sunmak olurdu.
+   *
+   * Ilan sayilari 0'dir ve kaynak dosyalari yoktur: yani secilebilirler ama
+   * FIYATLANAMAZLAR (veri toplanmamis). Fail-closed davranis budur.
+   */
+  const expanded: ObservedCategory[] = [...observations];
+  const already = new Set(observations.map((o) => o.categoryString));
+  const terminalByString = new Map<string, boolean>();
+  /**
+   * Kanit sistemi DEVREDE MI.
+   *
+   *   undefined -> kanit hic toplanmadi (sentetik testler): yapisal kural
+   *                gecerlidir, cocugu olmayan dugum yapraktir.
+   *   null      -> kanit TOPLANMAYA CALISILDI ama yok: terminal SAYILMAZ.
+   *
+   * Uretimde her gozlem ya dizi ya null tasir, yani yapisal kurala DUSULMEZ.
+   */
+  const evidenceInUse = observations.some((o) => o.navChildLabels !== undefined);
+  for (const observation of observations) {
+    const labels = observation.navChildLabels;
+    if (labels === undefined || labels === null) continue;
+    terminalByString.set(observation.categoryString, labels.length === 0);
+    for (const label of labels) {
+      const clean = String(label).trim();
+      if (!clean) continue;
+      const child = `${observation.categoryString} ${clean}`.replace(/\s+/g, ' ').trim();
+      if (already.has(child)) continue;
+      already.add(child);
+      expanded.push({
+        categoryString: child,
+        listingCount: 0,
+        sourceFiles: [],
+        // Cocugun yolu da KESINDIR: ebeveynin kesin yolu + menudeki etiket.
+        pathSegments: observation.pathSegments
+          ? [...observation.pathSegments, clean]
+          : undefined,
+      });
+    }
+  }
+
+  /**
+   * A) KESIN YOLLU GOZLEMLER (breadcrumb). Sinir tahmini YOK.
+   *
+   * Her ata da acikca kaydedilir: breadcrumb zinciri zaten tum ust seviyeleri
+   * ismiyle verir, dolayisiyla ara seviye "turetmeye" gerek kalmaz.
+   */
+  const explicit = expanded.filter((o) => Array.isArray(o.pathSegments) && o.pathSegments.length > 0);
+  if (explicit.length > 0) {
+    /**
+     * Breadcrumb'siz kalan gozlem SESSIZCE DUSURULMEZ — bu, duzeltmeye
+     * calistigimiz hatanin ta kendisi olurdu. Marka siniri bilinen marka
+     * listesinden okunur; markadan SONRASI tek parca birakilir, cunku ic
+     * sinirlarini bilmiyoruz ve TAHMIN ETMEYIZ.
+     */
+    const rescued: ObservedCategory[] = [];
+    const unresolvedHere: string[] = [];
+    for (const o of expanded) {
+      if (Array.isArray(o.pathSegments) && o.pathSegments.length > 0) continue;
+      const split = splitMakeAndRest(o.categoryString, options.knownMakes);
+      if (!split) {
+        unresolvedHere.push(o.categoryString);
+        continue;
+      }
+      rescued.push({ ...o, pathSegments: split.rest ? [split.make, split.rest] : [split.make] });
+    }
+    const tree = buildFromExplicitPaths([...explicit, ...rescued], terminalByString, evidenceInUse);
+    tree.unresolved.push(...unresolvedHere);
+    return tree;
+  }
+
   // 1) Marka koku + geri kalan yol. Marka cozulemezse dize agaca ALINMAZ.
   const unresolved: string[] = [];
   const byString = new Map<string, ObservedCategory>();
   const makesSeen = new Set<string>();
 
-  for (const observation of observations) {
+  for (const observation of expanded) {
     const split = splitMakeAndRest(observation.categoryString, options.knownMakes);
     if (!split) {
       unresolved.push(observation.categoryString);
@@ -243,7 +346,12 @@ export function buildHierarchy(
       fullPath: fullPathLabel(pathSegments),
       categoryString: source ? value : null,
       hasChildren: false,
-      isLeaf: true,
+      /**
+       * Terminal kaniti YALNIZCA sayfanin kendi menusunden gelir. Sayfasi
+       * olmayan (turetilmis ya da menuden gelen) dugum icin kanit yoktur.
+       */
+      terminalConfirmed: terminalByString.get(value) === true,
+      isLeaf: false,
       childIds: [],
       ownListingCount: source ? source.listingCount : 0,
       totalListingCount: 0,
@@ -254,10 +362,20 @@ export function buildHierarchy(
     if (parentNode) {
       parentNode.childIds.push(id);
       parentNode.hasChildren = true;
-      parentNode.isLeaf = false;
     } else {
       rootIds.push(id);
     }
+  }
+
+  /**
+   * YAPRAK KARARI — IKI KOSUL BIRDEN.
+   *
+   * Cocugu olmamak yetmez; terminal oldugu kaynagin kendi menusunden
+   * dogrulanmis olmali. Aksi halde dugum BILINMEYENDIR ve degerleme acilmaz.
+   */
+  for (const node of nodes.values()) {
+    if (!evidenceInUse) node.terminalConfirmed = !node.hasChildren;
+    node.isLeaf = !node.hasChildren && node.terminalConfirmed;
   }
 
   // 5) Alt agac toplamlari (yapraktan koke).
@@ -272,6 +390,88 @@ export function buildHierarchy(
   rootIds.sort();
 
   return { nodes, rootIds, unresolved };
+}
+
+/**
+ * KESIN YOLLARDAN AGAC — TAHMIN YOK.
+ *
+ * Her gozlem kendi segmentlerini kaynagin breadcrumb'indan getirir; ebeveyn
+ * iliskisi yolun ONEKIDIR, metin benzerligi degil. Bu, onek cikariminin iki
+ * kronik hatasini birden ortadan kaldirir: kardesi cocuk yapmak ("1.6" ->
+ * "1.6 FSI") ve tek etiketi ikiye bolmek ("LS Plus" -> "LS" + "Plus").
+ */
+function buildFromExplicitPaths(
+  observations: ObservedCategory[],
+  terminalByString: Map<string, boolean>,
+  evidenceInUse: boolean,
+): HierarchyTree {
+  const nodes = new Map<string, HierarchyNode>();
+  const rootIds: string[] = [];
+  const idByPath = new Map<string, string>();
+  const keyOf = (segments: string[]) => segments.join(' ');
+
+  /** Yolu (ve tum atalarini) kaydeder, en alttaki dugumu dondurur. */
+  const ensure = (segments: string[]): HierarchyNode => {
+    const key = keyOf(segments);
+    const known = idByPath.get(key);
+    if (known) return nodes.get(known)!;
+
+    const parent = segments.length > 1 ? ensure(segments.slice(0, -1)) : null;
+    const id = uniqueNodeId(segments, nodes) ?? nodeIdFromPath(segments);
+    const node: HierarchyNode = {
+      id,
+      name: segments[segments.length - 1],
+      parentId: parent ? parent.id : null,
+      depth: segments.length - 1,
+      pathSegments: [...segments],
+      fullPath: fullPathLabel(segments),
+      categoryString: null,
+      hasChildren: false,
+      terminalConfirmed: false,
+      isLeaf: false,
+      childIds: [],
+      ownListingCount: 0,
+      totalListingCount: 0,
+      sourceFiles: [],
+      derived: true,
+    };
+    nodes.set(id, node);
+    idByPath.set(key, id);
+    if (parent) {
+      parent.childIds.push(id);
+      parent.hasChildren = true;
+    } else {
+      rootIds.push(id);
+    }
+    return node;
+  };
+
+  for (const observation of observations) {
+    const node = ensure(observation.pathSegments!);
+    node.ownListingCount += observation.listingCount;
+    if (observation.sourceFiles.length > 0) {
+      node.sourceFiles = [...new Set([...node.sourceFiles, ...observation.sourceFiles])];
+      node.categoryString = observation.categoryString;
+      // Kaydedilmis sayfasi var: artik "turetilmis" degil, GOZLENMIS dugum.
+      node.derived = false;
+    }
+    const terminal = terminalByString.get(observation.categoryString);
+    if (terminal === true) node.terminalConfirmed = true;
+  }
+
+  for (const node of nodes.values()) {
+    if (!evidenceInUse) node.terminalConfirmed = !node.hasChildren;
+    node.isLeaf = !node.hasChildren && node.terminalConfirmed;
+    node.childIds.sort();
+  }
+  const byDepthDesc = [...nodes.values()].sort((a, b) => b.depth - a.depth);
+  for (const node of byDepthDesc) {
+    node.totalListingCount =
+      node.ownListingCount +
+      node.childIds.reduce((sum, id) => sum + (nodes.get(id)?.totalListingCount ?? 0), 0);
+  }
+  rootIds.sort();
+  return { nodes, rootIds, unresolved: [] };
 }
 
 /**

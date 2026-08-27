@@ -69,11 +69,37 @@ runOrSkip('GERCEK DATASET AGACI', () => {
     expect(failures.slice(0, 10)).toEqual([]);
   });
 
-  it('hicbir ara dugum cocuksuz, hicbir yaprak cocuklu degildir', () => {
+  /**
+   * ESKI VARSAYIM BILEREK KALDIRILDI: "cocugu yoksa yapraktir".
+   *
+   * Gercek korpusta bu 588 ebeveyni yaprak gosteriyordu (71 markada, 43'u
+   * dogrudan marka koku). Ornek: "Audi / A3 / A3 Hatchback" yaprak sanilip
+   * 370 ilanla fiyatlaniyordu; oysa o 370 satir tum motorlarin karisimi ve
+   * sayfanin kendi menusu 9 alt kategori ilan ediyor.
+   *
+   * DOGRU degismez: cocugu olmayan bir dugum ancak terminal oldugu KAYNAKTAN
+   * dogrulandiysa yapraktir. Dogrulanmadiysa BILINMEYENDIR.
+   */
+  it('yaprak yalnizca kaynaktan dogrulanmis terminal dugumdur', () => {
     for (const node of tree.nodes.values()) {
-      expect(node.isLeaf).toBe(node.childIds.length === 0);
       expect(node.hasChildren).toBe(node.childIds.length > 0);
+      if (node.isLeaf) {
+        expect(node.childIds.length).toBe(0);
+        expect(node.terminalConfirmed).toBe(true);
+      }
+      if (node.childIds.length > 0) expect(node.isLeaf).toBe(false);
     }
+  });
+
+  /**
+   * BILINMEYEN != YAPRAK. Kaynagin ilan ettigi ama sayfasini toplamadigimiz
+   * dugumler secilebilir olmali, FIYATLANABILIR olmamalidir.
+   */
+  it('cocuksuz ve dogrulanmamis dugumler yaprak SAYILMAZ', () => {
+    const unknown = [...tree.nodes.values()].filter(
+      (n) => n.childIds.length === 0 && !n.terminalConfirmed,
+    );
+    for (const node of unknown) expect(node.isLeaf).toBe(false);
   });
 
   it('her dugum kokune kadar kesintisiz zincirle baglidir', () => {
