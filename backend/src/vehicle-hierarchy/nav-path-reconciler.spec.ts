@@ -44,7 +44,11 @@ describe('direct-nav path reconciliation', () => {
     ];
 
     const reconciled = reconcileDirectNavPaths(observations);
-    const child = reconciled.find((o) => o.categoryString === 'Seat Ibiza 1.6 TDI');
+    const child = reconciled.find(
+      (o) =>
+        o.categoryString === 'Seat Ibiza 1.6 TDI' &&
+        o.pathSegments?.join('/') === 'Seat/Ibiza/1.6 TDI',
+    );
     expect(child?.pathSegments).toEqual(['Seat', 'Ibiza', '1.6 TDI']);
     expect(child?.listingCount).toBe(22);
     expect(child?.sourceFiles).toEqual(['seat-ibiza-1.6-tdi.html']);
@@ -84,19 +88,55 @@ describe('direct-nav path reconciliation', () => {
     expect(findByPath(tree, ['Saab', '9-5', '1.6 T Linear'])).toBeNull();
   });
 
-  it('fails closed when exact breadcrumb evidence conflicts with direct-nav evidence', () => {
+  it('keeps the same flat categoryString when it names two different exact paths', () => {
+    /**
+     * Gercek korpus regresyonu: dosya adi Joy ile bitse de sayfanin kendi
+     * breadcrumb'i motor seviyesinde bitebilir. Listing discovery ise ayni duz
+     * dizeyle gercek Joy cocugunu bulur. categoryString kimlik olmadigi icin iki
+     * exact kanit birlikte yasamalidir.
+     */
     const observations: ObservedCategory[] = [
       {
-        categoryString: 'Seat Ibiza',
+        categoryString: 'Renault Symbol 1.0 TCe Joy',
+        listingCount: 12,
+        sourceFiles: ['engine-page-saved-as-joy.html'],
+        pathSegments: ['Renault', 'Symbol', '1.0 TCe'],
+        navChildLabels: null,
+      },
+      {
+        categoryString: 'Renault Symbol 1.0 TCe Joy',
         listingCount: 0,
-        sourceFiles: ['seat-ibiza.html'],
-        pathSegments: ['Seat', 'Ibiza'],
-        navChildLabels: ['1.6 TDI'],
+        sourceFiles: [],
+        pathSegments: ['Renault', 'Symbol', '1.0 TCe', 'Joy'],
+      },
+    ];
+
+    const reconciled = reconcileDirectNavPaths(observations);
+    expect(
+      reconciled.filter((o) => o.categoryString === 'Renault Symbol 1.0 TCe Joy'),
+    ).toHaveLength(2);
+
+    const tree = buildHierarchy(reconciled, { knownMakes: ['Renault'] });
+    const engine = findByPath(tree, ['Renault', 'Symbol', '1.0 TCe']);
+    const joy = findByPath(tree, ['Renault', 'Symbol', '1.0 TCe', 'Joy']);
+    expect(engine).not.toBeNull();
+    expect(joy).not.toBeNull();
+    expect(joy?.parentId).toBe(engine?.id);
+  });
+
+  it('fails closed when the same source file claims two exact breadcrumb paths', () => {
+    const observations: ObservedCategory[] = [
+      {
+        categoryString: 'Seat Ibiza 1.6 TDI',
+        listingCount: 22,
+        sourceFiles: ['same-source.html'],
+        pathSegments: ['Seat', 'Ibiza', '1.6 TDI'],
+        navChildLabels: [],
       },
       {
         categoryString: 'Seat Ibiza 1.6 TDI',
         listingCount: 22,
-        sourceFiles: ['conflict.html'],
+        sourceFiles: ['same-source.html'],
         pathSegments: ['Seat', 'Leon', '1.6 TDI'],
         navChildLabels: [],
       },
