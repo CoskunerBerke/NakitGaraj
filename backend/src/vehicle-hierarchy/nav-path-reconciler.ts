@@ -119,10 +119,11 @@ export function reconcileDirectNavPaths(observations: ObservedCategory[]): Obser
  *   1) Bir yolun KENDI kaydedilmis kategori sayfasinin exact breadcrumb'i.
  *   2) Daha derin kaydedilmis bir sayfanin ayni yola ait breadcrumb prefix'i.
  *
- * Bu ayrim gercek Fiat/Uno vakasinda zorunludur: derin sayfalar `UNO`
- * yazabilirken parent'in kendi sayfasi `Uno` yaziyor. Eski kod ilk gorulen
- * prefix'i kazandiriyordu; dosya sirasi degisince `UNO` kanonik oluyor ve
- * validator `Fiat -> Uno` edge'ini kayip sayiyordu.
+ * Kritik ayrinti: casing YOL BAZINDA toplansa da SEGMENT BAZINDA uygulanir.
+ * Aksi halde `Fiat / UNO / 60 S` sayfasinin kendi exact yolu, daha guclu olan
+ * `Fiat / Uno` parent sayfasini once normalize edip sonra tekrar `UNO`ya
+ * cevirebilir. Her prefix sadece KENDI son segmentinin casing'ini belirler:
+ * parent own-page `Uno`yu, child own-page ise yalnizca `60 S`yi belirler.
  */
 function canonicalizeCaseOnlyPaths(observations: ObservedCategory[]): void {
   const ownExact = new Map<string, string[]>();
@@ -145,13 +146,15 @@ function canonicalizeCaseOnlyPaths(observations: ObservedCategory[]): void {
 
   for (const observation of observations) {
     if (!observation.pathSegments?.length) continue;
-    let normalized = [...observation.pathSegments];
+    const original = [...observation.pathSegments];
+    const normalized: string[] = [];
 
-    for (let length = 1; length <= normalized.length; length += 1) {
-      const key = foldedPathKey(normalized.slice(0, length));
+    for (let length = 1; length <= original.length; length += 1) {
+      const key = foldedPathKey(original.slice(0, length));
       const canonical = ownExact.get(key) ?? descendantPrefixes.get(key);
-      if (!canonical) continue;
-      normalized = [...canonical, ...normalized.slice(length)];
+      // Her prefix yalnizca o derinlikteki segmentin yazimini belirler.
+      // Boylece child exact breadcrumb ancestor casing'ini geri alamaz.
+      normalized.push(canonical ? canonical[length - 1] : original[length - 1]);
     }
 
     observation.pathSegments = normalized;
