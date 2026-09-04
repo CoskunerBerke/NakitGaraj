@@ -174,7 +174,19 @@ export class AutopilotBridge {
      *    kilarak web sayfasi isteklerini keser. Eksikse istek reddedilir.
      */
     if (!hasExtensionMarker(req)) {
-      this.log(`${req.method} ${req.url} -> 403 (missing extension marker)`);
+      /**
+       * TESHIS: hangi istemci isaretsiz konusuyor? Baslik ADLARI (degerleri
+       * degil), Origin ve Sec-Fetch-Mode yazilir. Ornek: eski, onbellekten
+       * kalmis bir servis calisani "x-autopilot-token" gonderir; bir web
+       * sayfasi Origin'siz/https kokenli gelir; bir sekme gezintisi
+       * sec-fetch-mode=navigate tasir.
+       */
+      this.log(
+        `${req.method} ${req.url} -> 403 (missing extension marker; ` +
+          `expected header "${AUTOPILOT_EXTENSION_HEADER}: ${AUTOPILOT_EXTENSION_MARKER}"; ` +
+          `origin=${origin ?? '-'}; sec-fetch-mode=${String(req.headers['sec-fetch-mode'] ?? '-')}; ` +
+          `headers=${describeHeaderNames(req)})`,
+      );
       return sendJson(res, 403, { error: 'MISSING_EXTENSION_MARKER' }, origin);
     }
 
@@ -345,6 +357,14 @@ function isExtensionOrigin(origin: string): boolean {
   return /^chrome-extension:\/\/[a-p]{32}$/.test(origin);
 }
 
+/** Yalnizca baslik ADLARI; deger yazilmaz (cookie/yetki sizmasin). */
+function describeHeaderNames(req: http.IncomingMessage): string {
+  const names = Object.keys(req.headers)
+    .filter((name) => !['host', 'connection', 'accept-encoding', 'accept-language'].includes(name))
+    .sort();
+  return names.length ? names.join(',') : '(none)';
+}
+
 function corsHeaders(origin: string | null): Record<string, string> {
   const headers: Record<string, string> = {
     Vary: 'Origin',
@@ -356,6 +376,13 @@ function corsHeaders(origin: string | null): Record<string, string> {
     headers['Access-Control-Allow-Headers'] =
       `content-type, ${AUTOPILOT_EXTENSION_HEADER}`;
     headers['Access-Control-Max-Age'] = '600';
+    /**
+     * Chrome'un yerel ag on-kontrolu (Private/Local Network Access): geri
+     * donguye giden istek icin tarayici bu izni sorar. YALNIZCA uzanti
+     * kokenine verilir; isaret ve Origin kurallari aynen gecerlidir.
+     */
+    headers['Access-Control-Allow-Private-Network'] = 'true';
+    headers['Access-Control-Allow-Local-Network'] = 'true';
   }
   return headers;
 }

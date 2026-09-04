@@ -50,6 +50,29 @@ Sahibinden'e giriş yapıldığını doğrulayın, uzantı panelinde köprü adr
 kaydedip **Koşuyu başlat**'a bir kez basın. Panel `Yapı toplayıcı` kartında
 tamamlanan/kuyruk/kaydedilen/yeni düğüm/son başarı/durma sebebini gösterir.
 
+### Köprü "BAĞLI DEĞİL" ve köprü günlüğünde `403 (missing extension marker)`
+
+Kaynak dosyalar doğru olsa bile Chrome, uzantının **servis çalışanını** kendi
+önbelleğinden eski haliyle koşturabilir (panel diskten taze gelir, servis
+çalışanı gelmez). Eski servis çalışanı `x-autopilot-token` gönderir, isareti
+göndermez → köprü 403 der. Kontrol ve çözüm:
+
+1. Panelde **Yüklü kod** satırı `uzantı v1.1.0 · istemci v2` demeli. Boş ya da
+   farklıysa servis çalışanı eski.
+2. `chrome://extensions` → uzantı kartında **Service worker** bağlantısına
+   tıklayın; konsolda `[autopilot] service worker loaded: extension v1.1.0,
+   bridge client v2 ...` satırı görünmeli.
+3. Görünmüyorsa: Chrome'u **tamamen** kapatın (sağ alttaki tepsi simgesinden de
+   "Çıkış"), yeniden açın, `chrome://extensions` → **Yeniden yükle**. Manifest
+   sürümü 1.1.0'a yükseltildiği için Chrome servis çalışanını yeniden kaydeder.
+4. Köprü günlüğü artık 403'te hangi başlıkların geldiğini yazar
+   (`headers=...`): `x-autopilot-token` görüyorsanız hâlâ eski kod koşuyor;
+   `x-nakitgaraj-extension` görüyorsanız sorun başka yerdedir.
+
+Derleme adımı **yoktur**: Chrome doğrudan bu klasördeki kaynak dosyaları yükler.
+Tüm köprü istekleri `bridge-client.js` üzerinden gider; `background.js`'de
+`fetch` çağrısı yoktur.
+
 Koşu dizini `backend/data/market-refresh/autopilot/<run-id>/`:
 `checkpoint.json` (atomik, checksum'lu), `report.json` (koşu raporu),
 `captures.jsonl` (her yakalama), `evidence/{security,mismatch,quarantine,site-root}/`,

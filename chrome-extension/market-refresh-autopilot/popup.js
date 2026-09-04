@@ -93,6 +93,19 @@ function render(state) {
   connection.textContent = connected ? 'BAĞLI' : 'BAĞLI DEĞİL';
   connection.dataset.connected = String(connected);
 
+  /**
+   * Yuklenen kodun kimligi: panel diskten taze gelir ama servis calisani
+   * Chrome'un onbelleginden ESKI kalabilir. Surum burada gorunur; kopru
+   * "missing extension marker" diyorsa ve bu satir eski/bos ise servis
+   * calisani yenilenmemistir (Chrome'u tamamen kapatip acin).
+   */
+  setText(
+    'loadedCode',
+    state.extensionVersion
+      ? `uzantı v${state.extensionVersion} · istemci v${state.clientVersion}`
+      : 'servis çalışanı yanıt vermiyor',
+  );
+
   const message = state.lastError || state.bridgeError || status.lastError || '';
   $('message').textContent = message;
 }

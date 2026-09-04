@@ -10,6 +10,9 @@
  * calisani oldurulse bile kayip yoktur: durum diskteki checkpoint'tedir, RESUME
  * kaldigi yerden devam eder.
  *
+ * KOPRU ISTEKLERI TEK YERDEN: `bridge-client.js` (importScripts). Baslik
+ * sozlesmesi orada durur; bu dosyada `fetch` cagrisi YOKTUR.
+ *
  * IKI YONERGE AILESI, AYNI DONGU:
  *   DISCOVER / COLLECT_PAGE  piyasa modu — icerik betigi DOM'dan kart/sayim okur
  *   CAPTURE_PAGE             yapi modu  — sayfanin HAM HTML'i oldugu gibi kopruye
@@ -22,15 +25,10 @@
  * cozme ve gizleme YOKTUR.
  */
 
+importScripts('bridge-client.js');
+
 const STORAGE_KEY = 'autopilot';
 const KEEPALIVE_ALARM = 'autopilot-keepalive';
-/**
- * Sabit, GIZLI OLMAYAN uzanti isareti. Kimlik dogrulama DEGILDIR: ozel bir
- * baslik oldugu icin tarayiciyi on-kontrole zorlar ve siradan bir web sayfasi
- * kopruye sessizce kontrol istegi gonderemez.
- */
-const EXTENSION_HEADER = 'x-nakitgaraj-extension';
-const EXTENSION_MARKER = '1';
 
 const DEFAULTS = {
   bridgeUrl: 'http://127.0.0.1:8791',
@@ -49,6 +47,17 @@ const DEFAULTS = {
 /** Durdurmayan koprulerdeki durumlar: dongu surer. */
 const CONTINUE_STATES = new Set(['RUNNING', 'REBUILDING']);
 
+const EXTENSION_VERSION = chrome.runtime.getManifest().version;
+
+/**
+ * Yuklenen kodun kimligi. chrome://extensions -> "Service worker" konsolunda
+ * gorunur: eski (onbellekten kalmis) bir servis calisani bu satiri basmaz.
+ */
+console.log(
+  `[autopilot] service worker loaded: extension v${EXTENSION_VERSION}, ` +
+    `bridge client v${NgBridgeClient.CLIENT_VERSION}, marker header ${NgBridgeClient.EXTENSION_HEADER}`,
+);
+
 let loopRunning = false;
 
 // ------------------------------------------------------------------ depolama
@@ -64,35 +73,11 @@ async function writeConfig(patch) {
   return next;
 }
 
-/** Kopru adresi YALNIZCA geri donguye isaret edebilir. */
-function assertLoopbackBridge(bridgeUrl) {
-  const url = new URL(bridgeUrl);
-  if (url.protocol !== 'http:' || (url.hostname !== '127.0.0.1' && url.hostname !== 'localhost')) {
-    throw new Error('Bridge URL must be http://127.0.0.1:<port>');
-  }
-  return url.origin;
-}
-
 // -------------------------------------------------------------------- kopru
 
-async function bridgeFetch(config, path, { method = 'GET', body } = {}) {
-  const origin = assertLoopbackBridge(config.bridgeUrl);
-
-  const response = await fetch(`${origin}${path}`, {
-    method,
-    headers: {
-      [EXTENSION_HEADER]: EXTENSION_MARKER,
-      ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
-    },
-    ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
-  });
-
-  const payload = await response.json().catch(() => null);
-  if (!response.ok) {
-    const detail = payload && payload.message ? payload.message : response.statusText;
-    throw new Error(`Bridge ${method} ${path} -> ${response.status}: ${detail}`);
-  }
-  return payload;
+/** TEK cikis noktasi: paylasilan istemci. Baslik sozlesmesi burada KURULMAZ. */
+function bridgeFetch(config, path, options) {
+  return NgBridgeClient.bridgeFetch(config.bridgeUrl, path, options);
 }
 
 // --------------------------------------------------------------------- sekme
@@ -346,6 +331,9 @@ async function handleCommand(message) {
           pacingMs: config.pacingMs,
           sourceOrigin: config.sourceOrigin,
         },
+        /** Panelde gorunur: yuklenen kodun surumu — eski servis calisani teshisi. */
+        extensionVersion: EXTENSION_VERSION,
+        clientVersion: NgBridgeClient.CLIENT_VERSION,
         /** Kopru ulasilabilir mi — panelde BAGLI / BAGLI DEGIL olarak gosterilir. */
         bridgeConnected: bridgeStatus !== null,
         shouldRun: config.shouldRun,
@@ -359,7 +347,7 @@ async function handleCommand(message) {
     case 'SAVE_CONFIG': {
       const patch = {};
       if (typeof message.bridgeUrl === 'string' && message.bridgeUrl.trim()) {
-        assertLoopbackBridge(message.bridgeUrl.trim());
+        NgBridgeClient.assertLoopbackBridge(message.bridgeUrl.trim());
         patch.bridgeUrl = message.bridgeUrl.trim();
       }
       if (Number.isFinite(message.pacingMs) && message.pacingMs >= 500) {

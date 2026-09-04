@@ -53,25 +53,33 @@ describe('EXTENSION IS TOKENLESS', () => {
   });
 
   it('never references a bridge token file anywhere in the extension', () => {
-    for (const file of ['popup.html', 'popup.js', 'background.js', 'content-script.js']) {
+    for (const file of ['popup.html', 'popup.js', 'background.js', 'content-script.js', 'bridge-client.js']) {
       expect(read(file)).not.toMatch(/bridge-token/i);
     }
   });
 });
 
 describe('EXTENSION SENDS THE MARKER', () => {
-  it('puts the fixed extension marker on every bridge request', () => {
+  /**
+   * Baslik sozlesmesi TEK dosyada yasar: bridge-client.js. Servis calisani
+   * onu importScripts ile yukler ve kendi fetch'i YOKTUR; boylece
+   * status/start/capture/resume/pause/stop birbirinden ayrisamaz.
+   */
+  it('puts the fixed extension marker on every bridge request (shared client)', () => {
+    const client = read('bridge-client.js');
+    expect(client).toContain(`'${AUTOPILOT_EXTENSION_HEADER}'`);
+    expect(client).toContain(`'${AUTOPILOT_EXTENSION_MARKER}'`);
+    expect(client).toMatch(/headers\[EXTENSION_HEADER\] = EXTENSION_MARKER/);
     const background = read('background.js');
-    expect(background).toContain(AUTOPILOT_EXTENSION_HEADER);
-    expect(background).toContain(`'${AUTOPILOT_EXTENSION_MARKER}'`);
-    // Tek cikis noktasi: bridgeFetch. Baslik orada set edilir.
-    expect(background).toMatch(/\[EXTENSION_HEADER\]:\s*EXTENSION_MARKER/);
+    expect(background).toMatch(/^importScripts\('bridge-client\.js'\);/m);
+    expect(background).not.toMatch(/\bfetch\(/);
   });
 
   it('refuses to talk to anything but a loopback bridge', () => {
-    const background = read('background.js');
-    expect(background).toMatch(/127\.0\.0\.1/);
-    expect(background).toMatch(/Bridge URL must be http:\/\/127\.0\.0\.1/);
+    const client = read('bridge-client.js');
+    expect(client).toMatch(/127\.0\.0\.1/);
+    expect(client).toMatch(/Bridge URL must be http:\/\/127\.0\.0\.1/);
+    expect(read('background.js')).toMatch(/127\.0\.0\.1:8791/);
   });
 });
 

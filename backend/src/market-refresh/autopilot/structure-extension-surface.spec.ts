@@ -107,6 +107,7 @@ describe('EXTENSION CAPTURES RAW HTML FOR STRUCTURE MODE', () => {
     expect(manifest.host_permissions).toEqual([
       'https://www.sahibinden.com/*',
       'http://127.0.0.1/*',
+      'http://localhost/*',
     ]);
   });
 });
