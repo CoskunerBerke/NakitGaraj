@@ -1,5 +1,6 @@
 import { categoryStringFromSourceFile } from './category-path';
 import { findByPath, buildHierarchy, ObservedCategory } from './hierarchy-tree';
+import { auditHierarchy } from './hierarchy-audit';
 import {
   HierarchyEvidenceConflict,
   reconcileDirectNavPaths,
@@ -122,6 +123,55 @@ describe('direct-nav path reconciliation', () => {
     expect(engine).not.toBeNull();
     expect(joy).not.toBeNull();
     expect(joy?.parentId).toBe(engine?.id);
+  });
+
+  it('collapses case-only sibling aliases under the source-backed breadcrumb casing', () => {
+    /**
+     * Gercek korpus regresyonu: listing discovery `Fiat / UNO` uretti,
+     * kaydedilmis kategori sayfasi ise `Fiat / Uno` breadcrumb'ini tasidi.
+     * Bunlar iki kardes degildir; audit de ayni isimli kardesleri sert hata
+     * sayar. Source-backed casing kazanir, source'suz child kaniti korunur.
+     */
+    const observations: ObservedCategory[] = [
+      {
+        categoryString: 'Fiat Uno',
+        listingCount: 0,
+        sourceFiles: ['fiat-uno.html'],
+        pathSegments: ['Fiat', 'Uno'],
+        navChildLabels: ['60 S'],
+      },
+      {
+        categoryString: 'Fiat UNO',
+        listingCount: 0,
+        sourceFiles: [],
+        pathSegments: ['Fiat', 'UNO'],
+      },
+      {
+        categoryString: 'Fiat UNO 45 S',
+        listingCount: 0,
+        sourceFiles: [],
+        pathSegments: ['Fiat', 'UNO', '45 S'],
+      },
+    ];
+
+    const reconciled = reconcileDirectNavPaths(observations);
+    expect(
+      reconciled.find((o) => o.categoryString === 'Fiat UNO')?.pathSegments,
+    ).toEqual(['Fiat', 'Uno']);
+    expect(
+      reconciled.find((o) => o.categoryString === 'Fiat UNO 45 S')?.pathSegments,
+    ).toEqual(['Fiat', 'Uno', '45 S']);
+
+    const tree = buildHierarchy(reconciled, { knownMakes: ['Fiat'] });
+    const fiat = findByPath(tree, ['Fiat'])!;
+    const unoChildren = fiat.childIds
+      .map((id) => tree.nodes.get(id)!)
+      .filter((node) => node.name.toLocaleLowerCase('tr') === 'uno');
+
+    expect(unoChildren).toHaveLength(1);
+    expect(unoChildren[0].name).toBe('Uno');
+    expect(findByPath(tree, ['Fiat', 'Uno', '45 S'])).not.toBeNull();
+    expect(auditHierarchy(tree).findings.filter((f) => f.kind === 'DUPLICATE_CHILD_NAME')).toEqual([]);
   });
 
   it('fails closed when the same source file claims two exact breadcrumb paths', () => {
