@@ -1,27 +1,27 @@
 /**
  * MENU KANITINI DUZ `categoryString` GOZLEMLERINE UYGULA — FAIL CLOSED.
  *
- * KOK NEDEN (gercek korpusta olculdu): bir ebeveyn sayfasi kendi menusunde
- * kesin olarak
+ * `categoryString` KIMLIK DEGILDIR. Gercek korpusta ayni duz dize iki farkli
+ * exact yolu temsil edebiliyor:
  *
- *   Seat / Ibiza -> 1.6 TDI
+ *   dosya adi:  "Renault Symbol 1.0 TCe Joy"
+ *   breadcrumb: Renault / Symbol / 1.0 TCe
  *
- * diyebiliyor; ayni cocugun kaydedilmis dosyasi ise giris/engel/eksik DOM
- * nedeniyle breadcrumb vermeyip yalnizca duz kategori dizesi tasiyabiliyor:
+ * ve satir kesfi ayni duz dizeyle gercek cocugu bulabiliyor:
  *
- *   "Seat Ibiza 1.6 TDI"
+ *   Renault / Symbol / 1.0 TCe / Joy
  *
- * `hierarchy-tree` daha once "bu categoryString zaten var" deyip menu tarafindan
- * kanitlanan TAM yolu eklemiyordu. Sonra breadcrumb'siz gozlem marka + geri kalan
- * olarak kurtariliyor ve `Seat / Ibiza 1.6 TDI` diye kisayol dugumu doguyordu.
- * Bu, kullanicinin en kritik degismezini ihlal eder: ARA SEVIYE ATLANAMAZ.
+ * Bu iki kaniti `categoryString` esit diye birlestirmek de, celiski saymak da
+ * yanlistir. Kimlik exact `pathSegments`tir. Duz dize yalnizca exact yolu
+ * olmayan eski/eksik gozlemi parent direct-nav kanitiyla PROMOTE etmek icin
+ * kullanilir.
  *
- * Bu katman kaynak onceligini acik hale getirir:
- *
+ * Kaynak onceligi:
  *   exact breadcrumb / parent direct-nav path > flat categoryString
  *
- * Duz gozlemde yol yoksa menu yolu ona PROMOTE edilir; mevcut kesin yol menu
- * yoluyla celisiyorsa tahmin/overwrite YOKTUR — build durur.
+ * Fail-closed celiski ancak AYNI kaynak dosyasi iki farkli exact breadcrumb
+ * yolu iddia ederse veya AYNI exact yolun kaydedilmis sayfalari farkli direct
+ * child setleri bildirirse uretilir.
  */
 import { ObservedCategory } from './hierarchy-tree';
 
@@ -33,24 +33,29 @@ export class HierarchyEvidenceConflict extends Error {
 }
 
 export function reconcileDirectNavPaths(observations: ObservedCategory[]): ObservedCategory[] {
-  const byString = new Map<string, ObservedCategory>();
+  const reconciled: ObservedCategory[] = [];
 
-  // Once ayni categoryString'i tek kayitta birlestir. Uretimde loadObservations
-  // zaten bunu yapar; ikinci hierarchy build'inde listing-discovery gozlemleri
-  // eklendigi icin burada tekrar savunma yapilir.
+  /**
+   * Ayni DUZ dizeyi degil, ayni KANIT KIMLIGINI birlestir:
+   *   - exact gozlem -> categoryString + exact path
+   *   - flat gozlem  -> categoryString
+   *
+   * Boylece ayni categoryString'in iki farkli exact yolu sessizce ezilmez.
+   */
   for (const raw of observations) {
     const current = cloneObservation(raw);
-    const existing = byString.get(current.categoryString);
-    if (!existing) {
-      byString.set(current.categoryString, current);
-      continue;
-    }
-    mergeSameCategory(existing, current);
+    assertNoSourcePathConflict(reconciled, current);
+
+    const existing = reconciled.find((candidate) => sameIdentity(candidate, current));
+    if (existing) mergeSameIdentity(existing, current);
+    else reconciled.push(current);
   }
 
-  // Yalnizca KESIN yolu bilinen ebeveynin KENDI direct-nav cocuklari yol
-  // kaniti uretebilir. Flat metinden segment uydurulmaz.
-  const parents = [...byString.values()];
+  /**
+   * Yalnizca KESIN yolu bilinen ebeveynin KENDI direct-nav cocuklari yol
+   * kaniti uretebilir. Flat metinden segment uydurulmaz.
+   */
+  const parents = [...reconciled];
   for (const parent of parents) {
     if (!parent.pathSegments || !Array.isArray(parent.navChildLabels)) continue;
 
@@ -60,34 +65,35 @@ export function reconcileDirectNavPaths(observations: ObservedCategory[]): Obser
 
       const categoryString = `${parent.categoryString} ${label}`.replace(/\s+/g, ' ').trim();
       const exactPath = [...parent.pathSegments, label];
-      const existing = byString.get(categoryString);
 
-      if (!existing) {
-        byString.set(categoryString, {
-          categoryString,
-          listingCount: 0,
-          sourceFiles: [],
-          pathSegments: exactPath,
-        });
+      // Exact path zaten varsa kanit tamamdir. Ayni duz dizeyle baska exact
+      // yollarin bulunmasi celiski degildir; categoryString lossy bir alias'tir.
+      const exact = reconciled.find(
+        (o) => o.categoryString === categoryString && o.pathSegments && samePath(o.pathSegments, exactPath),
+      );
+      if (exact) continue;
+
+      // Yolu olmayan gozlemi, parent direct-nav kanitiyla exact yola tasiriz.
+      const flat = reconciled.find(
+        (o) => o.categoryString === categoryString && (!o.pathSegments || o.pathSegments.length === 0),
+      );
+      if (flat) {
+        flat.pathSegments = exactPath;
         continue;
       }
 
-      if (!existing.pathSegments || existing.pathSegments.length === 0) {
-        existing.pathSegments = exactPath;
-        continue;
-      }
-
-      if (!samePath(existing.pathSegments, exactPath)) {
-        throw new HierarchyEvidenceConflict(
-          `PATH_CONFLICT for "${categoryString}": existing ` +
-            `"${existing.pathSegments.join(' / ')}" vs direct-nav ` +
-            `"${exactPath.join(' / ')}"`,
-        );
-      }
+      // Cocuk sayfasi hic yoksa bile parent menu onun varligini ve TAM yolunu
+      // kanitlar. Secilebilir olur ama listingCount=0 oldugu icin fiyatlanmaz.
+      reconciled.push({
+        categoryString,
+        listingCount: 0,
+        sourceFiles: [],
+        pathSegments: exactPath,
+      });
     }
   }
 
-  return [...byString.values()];
+  return reconciled;
 }
 
 function cloneObservation(o: ObservedCategory): ObservedCategory {
@@ -95,26 +101,26 @@ function cloneObservation(o: ObservedCategory): ObservedCategory {
     ...o,
     sourceFiles: [...(o.sourceFiles || [])],
     pathSegments: o.pathSegments ? [...o.pathSegments] : o.pathSegments,
-    navChildLabels: Array.isArray(o.navChildLabels)
-      ? [...o.navChildLabels]
-      : o.navChildLabels,
+    navChildLabels: Array.isArray(o.navChildLabels) ? [...o.navChildLabels] : o.navChildLabels,
   };
 }
 
-function mergeSameCategory(target: ObservedCategory, incoming: ObservedCategory): void {
-  if (target.pathSegments && incoming.pathSegments && !samePath(target.pathSegments, incoming.pathSegments)) {
-    throw new HierarchyEvidenceConflict(
-      `PATH_CONFLICT for "${target.categoryString}": ` +
-        `"${target.pathSegments.join(' / ')}" vs "${incoming.pathSegments.join(' / ')}"`,
-    );
-  }
-  if (!target.pathSegments && incoming.pathSegments) target.pathSegments = [...incoming.pathSegments];
+function sameIdentity(a: ObservedCategory, b: ObservedCategory): boolean {
+  if (a.categoryString !== b.categoryString) return false;
+  const aExact = Boolean(a.pathSegments && a.pathSegments.length > 0);
+  const bExact = Boolean(b.pathSegments && b.pathSegments.length > 0);
+  if (aExact !== bExact) return false;
+  if (!aExact && !bExact) return true;
+  return samePath(a.pathSegments!, b.pathSegments!);
+}
 
+function mergeSameIdentity(target: ObservedCategory, incoming: ObservedCategory): void {
   const targetNav = target.navChildLabels;
   const incomingNav = incoming.navChildLabels;
   if (Array.isArray(targetNav) && Array.isArray(incomingNav) && !sameLabelSet(targetNav, incomingNav)) {
     throw new HierarchyEvidenceConflict(
-      `NAV_CONFLICT for "${target.categoryString}": saved pages disagree on direct children`,
+      `NAV_CONFLICT for "${target.pathSegments?.join(' / ') || target.categoryString}": ` +
+        'saved pages disagree on direct children',
     );
   }
   if (!Array.isArray(targetNav) && Array.isArray(incomingNav)) {
@@ -123,10 +129,27 @@ function mergeSameCategory(target: ObservedCategory, incoming: ObservedCategory)
     target.navChildLabels = null;
   }
 
-  // Ayni kategori iki kez geldiyse sayimi sisirmeyiz. Uretimde esas DB gozlemi
-  // zaten aggregate'dir; listing-discovery gozlemleri 0 sayimla gelir.
+  // Uretimde loadObservations zaten aggregate'dir; listing-discovery 0 sayimla
+  // gelir. Max kullanmak ayni kaniti ikinci kez sayip havuzu sisirmeyi engeller.
   target.listingCount = Math.max(target.listingCount, incoming.listingCount);
   target.sourceFiles = [...new Set([...target.sourceFiles, ...incoming.sourceFiles])];
+}
+
+function assertNoSourcePathConflict(existing: ObservedCategory[], incoming: ObservedCategory): void {
+  if (!incoming.pathSegments || incoming.pathSegments.length === 0 || incoming.sourceFiles.length === 0) return;
+  const incomingFiles = new Set(incoming.sourceFiles);
+
+  for (const candidate of existing) {
+    if (!candidate.pathSegments || candidate.pathSegments.length === 0) continue;
+    if (samePath(candidate.pathSegments, incoming.pathSegments)) continue;
+    const shared = candidate.sourceFiles.find((file) => incomingFiles.has(file));
+    if (!shared) continue;
+
+    throw new HierarchyEvidenceConflict(
+      `PATH_CONFLICT for source "${shared}": ` +
+        `"${candidate.pathSegments.join(' / ')}" vs "${incoming.pathSegments.join(' / ')}"`,
+    );
+  }
 }
 
 function samePath(a: string[], b: string[]): boolean {
