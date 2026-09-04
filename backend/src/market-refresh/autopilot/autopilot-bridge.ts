@@ -49,8 +49,8 @@ import {
 export const AUTOPILOT_EXTENSION_HEADER = 'x-nakitgaraj-extension';
 export const AUTOPILOT_EXTENSION_MARKER = '1';
 
-/** 4 MB: 50 kartlik bir sayfa paketi icin fazlasiyla yeterli. */
-export const MAX_BODY_BYTES = 4 * 1024 * 1024;
+/** 16 MB: weekly batches may include the raw live DOM for hardened parsing. */
+export const MAX_BODY_BYTES = 16 * 1024 * 1024;
 /**
  * 16 MB: ham kategori sayfasi (canli DOM'un outerHTML'i). Korpustaki en buyuk
  * kayit ~0.6 MB; tavan, kaynak sayfaya reklam/betik sisse bile yeter ama
@@ -360,7 +360,12 @@ function isExtensionOrigin(origin: string): boolean {
 /** Yalnizca baslik ADLARI; deger yazilmaz (cookie/yetki sizmasin). */
 function describeHeaderNames(req: http.IncomingMessage): string {
   const names = Object.keys(req.headers)
-    .filter((name) => !['host', 'connection', 'accept-encoding', 'accept-language'].includes(name))
+    .filter(
+      (name) =>
+        !['host', 'connection', 'accept-encoding', 'accept-language'].includes(
+          name,
+        ),
+    )
     .sort();
   return names.length ? names.join(',') : '(none)';
 }
@@ -560,6 +565,10 @@ function parsePageBatch(body: unknown): PageBatch {
       Number.isFinite(input.parseFailures)
         ? Math.max(0, Math.floor(input.parseFailures))
         : 0,
+    ...(typeof input.rawHtml === 'string' ? { rawHtml: input.rawHtml } : {}),
+    ...(typeof input.pageTitle === 'string'
+      ? { pageTitle: input.pageTitle }
+      : {}),
     cards: cards.map((raw, i) => {
       const card = requireObject(raw);
       return {
@@ -575,6 +584,17 @@ function parsePageBatch(body: unknown): PageBatch {
         yearText: typeof card.yearText === 'string' ? card.yearText : null,
         locationText:
           typeof card.locationText === 'string' ? card.locationText : null,
+        ...(Array.isArray(card.modelCells)
+          ? {
+              modelCells: card.modelCells.filter(
+                (value): value is string => typeof value === 'string',
+              ),
+            }
+          : {}),
+        listingDateText:
+          typeof card.listingDateText === 'string'
+            ? card.listingDateText
+            : null,
       };
     }),
   };

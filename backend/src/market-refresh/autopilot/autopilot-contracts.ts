@@ -191,6 +191,11 @@ export interface CollectPageDirective {
   url: string;
   page: number;
   expectedPages: number;
+  /** Weekly mode: frozen exact hierarchy identity (extension does not interpret it). */
+  targetId?: string;
+  hierarchyVersion?: string;
+  /** Weekly mode asks for raw live DOM; legacy market mode leaves this unset. */
+  captureRawHtml?: boolean;
 }
 
 /** Durma: sebep durumda tasinir; uzanti kendiliginden yeniden denemez. */
@@ -217,6 +222,10 @@ export interface ObservedCard {
   mileageText: string | null;
   yearText: string | null;
   locationText: string | null;
+  /** Source's structured Model cells, in DOM order. Never whitespace-split. */
+  modelCells?: string[];
+  /** Raw source calendar date text. Weekly mode rejects missing/unknown dates. */
+  listingDateText?: string | null;
 }
 
 /** Uzantidan gelen tek sayfalik yakalama paketi. */
@@ -230,6 +239,9 @@ export interface PageBatch {
   cards: ObservedCard[];
   hasNextPage: boolean;
   parseFailures: number;
+  /** Weekly mode only: untouched documentElement.outerHTML for hardened parsing. */
+  rawHtml?: string;
+  pageTitle?: string;
 }
 
 /**

@@ -961,7 +961,7 @@ export class StructureSession {
     if (
       this.opts.rebuild &&
       this.rebuildEvery > 0 &&
-      this.sinceRebuild > 0 &&
+      (this.sinceRebuild > 0 || this.rebuilds.length === 0) &&
       !this.rebuildInFlight
     ) {
       this.startRebuild(true);

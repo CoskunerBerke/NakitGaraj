@@ -1,6 +1,6 @@
 # Market Refresh Autopilot (Chrome MV3)
 
-Aylık pazar tazelemesini **ve** yapısal kategori toplamayı **kendi giriş yapmış
+Aylık/haftalık pazar tazelemesini **ve** yapısal kategori toplamayı **kendi giriş yapmış
 Chrome'unuzda** yürütür. Uzantı yalnızca gezinir ve okur; tüm dayanıklı durum
 (checkpoint, staging, tekilleştirme, bölümleme, kategori kimliği, tamamlanma
 sözleşmesi) `127.0.0.1` üzerindeki yerel köprüde yaşar.
@@ -57,14 +57,14 @@ Kaynak dosyalar doğru olsa bile Chrome, uzantının **servis çalışanını** 
 çalışanı gelmez). Eski servis çalışanı `x-autopilot-token` gönderir, isareti
 göndermez → köprü 403 der. Kontrol ve çözüm:
 
-1. Panelde **Yüklü kod** satırı `uzantı v1.1.0 · istemci v2` demeli. Boş ya da
+1. Panelde **Yüklü kod** satırı `uzantı v1.2.0 · istemci v2` demeli. Boş ya da
    farklıysa servis çalışanı eski.
 2. `chrome://extensions` → uzantı kartında **Service worker** bağlantısına
-   tıklayın; konsolda `[autopilot] service worker loaded: extension v1.1.0,
+   tıklayın; konsolda `[autopilot] service worker loaded: extension v1.2.0,
    bridge client v2 ...` satırı görünmeli.
 3. Görünmüyorsa: Chrome'u **tamamen** kapatın (sağ alttaki tepsi simgesinden de
    "Çıkış"), yeniden açın, `chrome://extensions` → **Yeniden yükle**. Manifest
-   sürümü 1.1.0'a yükseltildiği için Chrome servis çalışanını yeniden kaydeder.
+   sürümü 1.2.0'a yükseltildiği için Chrome servis çalışanını yeniden kaydeder.
 4. Köprü günlüğü artık 403'te hangi başlıkların geldiğini yazar
    (`headers=...`): `x-autopilot-token` görüyorsanız hâlâ eski kod koşuyor;
    `x-nakitgaraj-extension` görüyorsanız sorun başka yerdedir.
@@ -81,6 +81,34 @@ Koşu dizini `backend/data/market-refresh/autopilot/<run-id>/`:
 Yapı modu bayrakları: `--mode structure --run-id --roots --max-pages
 --rebuild-every --no-rebuild --pace-ms --jitter --dry-run --port --window`.
 `--scope-*` ve `--coverage-*` yalnızca piyasa modunda geçerlidir.
+
+## 0b) Haftalık kesin-hedef modu (`--mode weekly`)
+
+Bu mod bilinçli olarak yalnızca **bir** `--target-id` kabul eder; tam pazar
+çalıştırma seçeneği henüz açılmamıştır. Başlamadan önce yapı modu, korpus
+yeniden kurma zincirini staging'de çalıştırır ve PASS sürümünü atomik olarak
+yayınlar. Haftalık mod aynı sürümün doğrulama makbuzu yoksa açılmaz.
+
+```powershell
+cd C:\dev\NakitGaraj-market-refresh\backend
+npm run market:weekly:bridge -- --run-id weekly-a3-advanced-1 --target-id audi/a3/a3-sportback/35-tfsi/advanced --max-pages 20
+```
+
+Her sayfa ham canlı HTML olarak saklanır. Breadcrumb ve Model hücreleri
+uzantıda yorumlanmaz; mevcut hardened corpus parser'ı ve canonical listing
+resolver kullanılır. Sayfalar `sorting=date_desc` ile yeninden eskiye okunur.
+Önceki başarılı günün bir gün öncesine kadar overlap yapılır; gün + kararlı
+ilan ID kümesi birlikte sınır kanıtıdır.
+
+| Durum | Watermark |
+| --- | --- |
+| Güvenli sınır + exact assignment doğrulaması + atomik yayın PASS | İlerler |
+| Sayfa 2/3 hatası, CAPTCHA/login, yönlendirme, bilinmeyen tarih/HTML | İlerlemez; hedef `INCOMPLETE` |
+| Hiyerarşi sürümü/hedef kimliği değişti | Resume reddedilir; yeni çocuklar fresh başlar |
+| Aday yayın doğrulaması başarısız | Son bilinen iyi `current.json` canlı kalır |
+
+Koşu kanıtları `backend/data/market-refresh/weekly/` altındadır: hedef durumları,
+checksum'lu checkpoint, ham sayfalar, ham satır gözlemleri ve sürümlü yayınlar.
 
 ## Ne YAPMAZ
 

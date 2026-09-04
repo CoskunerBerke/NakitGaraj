@@ -603,7 +603,34 @@ export class EvaluationService {
        * sayfalarindan kazanilan ilanlar da buraya dahildir.
        */
       listingIds: leafTarget?.listingIds,
+      externalExactListings: leafTarget?.weeklyListings.map((listing) => ({
+        sourceListingId: listing.sourceListingId,
+        make: target.make,
+        model: target.model,
+        variant: target.variant || undefined,
+        trim: target.trim || undefined,
+        title: listing.title,
+        year: listing.year,
+        mileageKm: listing.mileage,
+        price: listing.price,
+        city: listing.location,
+        listingDate: listing.listingDate,
+      })),
     });
+
+    const valuationTrace = (finalFMV: number | null) => leafTarget
+      ? {
+          ...leafTarget.poolTrace,
+          yearFilters: { min: dto.year, max: dto.year + 2 },
+          kmFilters: {
+            targetMileageKm: dto.mileage,
+            referenceMedianMileage: emsalResult.referenceMedianMileage ?? null,
+          },
+          comparableTier: emsalResult.level,
+          finalComparableListingIds: emsalResult.uniqueListingIds ?? [],
+          finalFMV,
+        }
+      : null;
 
     if (emsalResult.level === 4 || emsalResult.matchedCount === 0 || !emsalResult.cleanListings || emsalResult.cleanListings.length === 0) {
       return {
@@ -624,6 +651,7 @@ export class EvaluationService {
         results: null,
         aiAnalysis: ['UYARI: Girdiğiniz araç için veritabanımızda yeterli emsal ilan verisi bulunamamıştır.'],
         comparableListings: [],
+        pricingTrace: valuationTrace(null),
       };
     }
 
@@ -762,6 +790,7 @@ export class EvaluationService {
         results: null,
         aiAnalysis: ['HATA: Veri bütünlüğü doğrulanamadı.'],
         comparableListings: [],
+        pricingTrace: valuationTrace(null),
       };
     }
 
@@ -908,6 +937,7 @@ export class EvaluationService {
       },
       aiAnalysis,
       comparableListings,
+      pricingTrace: valuationTrace(calc.fairMarketValue),
     };
   }
 

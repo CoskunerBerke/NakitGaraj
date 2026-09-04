@@ -45,6 +45,7 @@ import {
   ObservedCategory,
 } from '../../vehicle-hierarchy/hierarchy-tree';
 import { categoryStringFromSourceFile } from '../../vehicle-hierarchy/category-path';
+import { classifyPage } from '../../vehicle-hierarchy/page-classification';
 
 const BASE_URL = 'https://www.sahibinden.com/';
 const RUN_ID = 'structure-test';
@@ -941,6 +942,24 @@ describe('REBUILD BETWEEN STRUCTURAL WAVES', () => {
     expect(session.currentState).toBe('COMPLETE');
     expect((session.nextDirective() as any).state).toBe('COMPLETE');
   });
+
+  it('validates and publishes even when every requested page was already in the corpus', async () => {
+    const runner = new FakeRunner();
+    const corpus = emptyCorpus();
+    jest.spyOn(corpus, 'present').mockReturnValue({
+      file: 'already.html',
+      page: classifyPage(sahinPage(), 'already.html'),
+    } as any);
+    const session = StructureSession.start(
+      options({ rebuildEvery: 50, rebuild: runner }, corpus),
+      ['/zorlu-sahin'],
+    );
+    expect(session.nextDirective().type).toBe('WAIT');
+    expect(runner.calls).toBe(1);
+    runner.finish('PASS');
+    await tick();
+    expect(session.currentState).toBe('COMPLETE');
+  });
 });
 
 // ------------------------------------------------------- site koku korpusta
@@ -951,17 +970,30 @@ describe('SITE ROOT FROM THE CORPUS', () => {
     const dir = path.join(corpusDir, 'Zorlu');
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(
-      path.join(dir, "2.El Arabalar ve Satılık Sıfır Km Otomobil Fiyatları sahibinden.com'da.html"),
+      path.join(
+        dir,
+        "2.El Arabalar ve Satılık Sıfır Km Otomobil Fiyatları sahibinden.com'da.html",
+      ),
       siteRootPage(),
       'utf-8',
     );
-    const corpus = new CorpusIndex({ loadTree: () => null, rootOverride: corpusDir });
+    const corpus = new CorpusIndex({
+      loadTree: () => null,
+      rootOverride: corpusDir,
+    });
     const session = StructureSession.start(options({}, corpus), [SITE_ROOT]);
     const scan = session.scanCorpus();
     expect(scan).toEqual({ present: 1, missing: 2 });
-    expect(session.targetsView()[0]).toMatchObject({ key: SITE_ROOT, status: 'COMPLETE', outcome: 'ALREADY_PRESENT', depth: 0 });
+    expect(session.targetsView()[0]).toMatchObject({
+      key: SITE_ROOT,
+      status: 'COMPLETE',
+      outcome: 'ALREADY_PRESENT',
+      depth: 0,
+    });
     expect(pending(session)).toEqual(['/zorlu', '/diger-marka']);
-    expect(session.targetsView().find((t) => t.key === '/zorlu')).toMatchObject({ expectedPath: ['Zorlu'], make: 'Zorlu', depth: 1 });
+    expect(session.targetsView().find((t) => t.key === '/zorlu')).toMatchObject(
+      { expectedPath: ['Zorlu'], make: 'Zorlu', depth: 1 },
+    );
     expect(session.status().attempted).toBe(0);
   });
 

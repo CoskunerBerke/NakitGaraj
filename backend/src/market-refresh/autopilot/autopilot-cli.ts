@@ -1,7 +1,7 @@
 /**
  * AUTOPILOT KOPRU BASLATICI.
  *
- * IKI MOD, TEK KOPRU, TEK UZANTI:
+ * UC MOD, TEK KOPRU, TEK UZANTI:
  *
  *   --mode market     (varsayilan) aylik pazar tazelemesi: kart gozlemi -> staging JSONL
  *   --mode structure  YAPI TOPLAYICISI: kategori sayfalarini HAM HTML olarak korpusa
@@ -9,6 +9,8 @@
  *                     menuden cikan dogrudan cocuklari kuyruga alir, her sayfadan
  *                     sonra checkpoint yazar, N sayfada bir agaci yeniden kurup
  *                     dogrulama kapisini kosar.
+ *   --mode weekly     tek bir dondurulmus KESIN hedef: ham HTML -> mevcut
+ *                     parser/resolver -> sinir+ID overlap -> atomik yayin.
  *
  * YAPI MODU:
  *   # kuru kosu — kaynaga istek YOK, kuyruk korpusa karsi acilir ve yazdirilir
@@ -27,6 +29,10 @@
  *   npm run market:autopilot:bridge -- --port 8791
  *     --scope-root /audi-a3 --scope-make Audi --scope-series A3
  *     --max-result-pages 3 --require-child-structure --stop-on-unknown --makes Audi
+ *
+ * HAFTALIK MOD (tam pazar kasitli olarak acik DEGIL):
+ *   npm run market:weekly:bridge -- --run-id weekly-a3-advanced-1 \
+ *     --target-id audi/a3/a3-sportback/35-tfsi/advanced --max-pages 20
  *
  * KAPSAM VE KOKLER UZANTIDAN DEGIL BURADAN VERILIR. Uzanti guvenilmez bir
  * istemcidir; kapsami genisletebilseydi koruma koruma olmazdi.
@@ -52,7 +58,11 @@ import { buildCoverageQueue, loadManifest, pathKey } from './coverage-queue';
 import {
   artifactToTree,
   loadArtifact,
+  resolveArtifactPath,
 } from '../../vehicle-hierarchy/hierarchy-source';
+import { loadAssignments } from '../../vehicle-hierarchy/build-listing-assignments';
+import { NodeCoverage } from '../../vehicle-hierarchy/build-coverage-manifest';
+import { loadActiveHierarchyReceipt } from '../../vehicle-hierarchy/artifact-release';
 import { resolveSnapshotPath } from '../snapshot-reference';
 import { CorpusIndex } from './corpus-store';
 import { NpmRebuildRunner } from './rebuild-runner';
@@ -62,6 +72,14 @@ import {
   StructureSession,
   StructureSessionOptions,
 } from './structure-session';
+import { buildMarketTargetSnapshot } from '../weekly/hierarchy-gate';
+import { TargetStateStore } from '../weekly/target-state-store';
+import { WeeklyEvidenceStore } from '../weekly/evidence-store';
+import { AtomicWeeklyMarketPublisher } from '../weekly/artifact-publisher';
+import {
+  WeeklyCheckpointPayload,
+  WeeklyMarketSession,
+} from '../weekly/weekly-session';
 
 const DEFAULT_SOURCE = 'sahibinden';
 const DEFAULT_BASE_URL = 'https://www.sahibinden.com/';
@@ -77,7 +95,7 @@ const DEFAULT_REBUILD_EVERY = 50;
 const DEFAULT_PACE_MS = 5000;
 const DEFAULT_JITTER = 0.4;
 
-type Mode = 'market' | 'structure';
+type Mode = 'market' | 'structure' | 'weekly';
 
 interface CliArgs {
   mode: Mode;
@@ -100,6 +118,8 @@ interface CliArgs {
   paceMs: number;
   jitter: number;
   dryRun: boolean;
+  /** Weekly mode is deliberately bounded to one explicit exact target. */
+  targetId: string | null;
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -149,8 +169,10 @@ function parseArgs(argv: string[]): CliArgs {
   }
 
   const modeRaw = (get('mode') || 'market').toLowerCase();
-  if (modeRaw !== 'market' && modeRaw !== 'structure') {
-    throw new Error(`--mode must be "market" or "structure", got "${modeRaw}"`);
+  if (modeRaw !== 'market' && modeRaw !== 'structure' && modeRaw !== 'weekly') {
+    throw new Error(
+      `--mode must be "market", "structure" or "weekly", got "${modeRaw}"`,
+    );
   }
   const mode = modeRaw;
 
@@ -184,6 +206,19 @@ function parseArgs(argv: string[]): CliArgs {
         'Structure mode takes --roots, --max-pages, --rebuild-every, --pace-ms, --jitter, --dry-run.',
     );
   }
+  if (mode === 'weekly' && !get('target-id')) {
+    throw new Error(
+      '--mode weekly requires exactly one --target-id. Full-market execution is intentionally unavailable.',
+    );
+  }
+  if (
+    mode === 'weekly' &&
+    (scope || get('coverage-manifest') || has('dry-run'))
+  ) {
+    throw new Error(
+      '--mode weekly accepts --target-id, --max-pages, --run-id, --port and pacing flags only',
+    );
+  }
 
   return {
     mode,
@@ -191,7 +226,7 @@ function parseArgs(argv: string[]): CliArgs {
     port: Number(get('port') || 8791),
     runId:
       get('run-id') ||
-      `${mode === 'structure' ? 'structure' : 'autopilot'}-${new Date().toISOString().slice(0, 10)}`,
+      `${mode === 'structure' ? 'structure' : mode === 'weekly' ? 'weekly' : 'autopilot'}-${new Date().toISOString().slice(0, 10)}`,
     source: get('source') || DEFAULT_SOURCE,
     baseUrl: get('base-url') || DEFAULT_BASE_URL,
     windowSpec: get('window'),
@@ -213,6 +248,7 @@ function parseArgs(argv: string[]): CliArgs {
     paceMs: positiveInt('pace-ms', DEFAULT_PACE_MS) as number,
     jitter,
     dryRun: has('dry-run'),
+    targetId: get('target-id'),
   };
 }
 
@@ -549,6 +585,142 @@ async function runStructure(args: CliArgs): Promise<void> {
   );
 }
 
+// ------------------------------------------------------------------- weekly
+
+async function runWeekly(args: CliArgs): Promise<void> {
+  const root = backendRoot();
+  const artifact = loadArtifact();
+  if (!artifact) throw new Error('Validated hierarchy artifact not found');
+  const receipt = loadActiveHierarchyReceipt(root);
+  if (!receipt) {
+    throw new Error(
+      'Weekly refresh refused: no active PASS validation receipt. Run structure refresh/rebuild first.',
+    );
+  }
+  const tree = artifactToTree(artifact);
+  const coverageFile = path.join(
+    path.dirname(resolveArtifactPath()),
+    'page-coverage.json',
+  );
+  if (!fs.existsSync(coverageFile)) {
+    throw new Error(
+      `Weekly refresh refused: staged coverage graph missing (${coverageFile})`,
+    );
+  }
+  const coverage = JSON.parse(
+    fs.readFileSync(coverageFile, 'utf-8'),
+  ) as NodeCoverage[];
+  if (!Array.isArray(coverage))
+    throw new Error(`Malformed coverage graph ${coverageFile}`);
+  const sourcePaths = new Map(
+    coverage.map((node) => [node.nodeId, node.categoryUrl]),
+  );
+  const snapshot = buildMarketTargetSnapshot(tree, {
+    sourcePathsByNode: sourcePaths,
+  });
+
+  console.log(
+    `[weekly] PATH gate: targets=${snapshot.integrity.marketTargets} ` +
+      `paths=${snapshot.integrity.pathsChecked} edges=${snapshot.integrity.edgesChecked} ` +
+      `skipped=${snapshot.integrity.skippedLevels} wrongParent=${snapshot.integrity.wrongParents} ` +
+      `orphans=${snapshot.integrity.orphans} ambiguous=${snapshot.integrity.ambiguousPaths}`,
+  );
+  if (!snapshot.integrity.ok) {
+    throw new Error(
+      `PATH_INTEGRITY_GATE_FAIL ${snapshot.integrity.findings.slice(0, 10).join(' | ')}`,
+    );
+  }
+  if (receipt.hierarchyVersion !== snapshot.hierarchyVersion) {
+    throw new Error(
+      `Weekly refresh refused: PASS receipt is for ${receipt.hierarchyVersion}, ` +
+        `but loaded hierarchy is ${snapshot.hierarchyVersion}`,
+    );
+  }
+
+  const targetId = args.targetId as string;
+  const target = snapshot.targets.find(
+    (candidate) => candidate.targetId === targetId,
+  );
+  if (!target) {
+    throw new Error(
+      `--target-id "${targetId}" is not a validated terminal target in hierarchy ${snapshot.hierarchyVersion}`,
+    );
+  }
+  const targetCoverage = coverage.find((node) => node.nodeId === targetId);
+  if (!targetCoverage?.pageSavedOnDisk || !targetCoverage.terminalConfirmed) {
+    throw new Error(
+      `Weekly refresh refused: exact target page/terminal evidence is incomplete for ${target.fullPath}`,
+    );
+  }
+
+  const weeklyRoot = path.join(root, 'data', 'market-refresh', 'weekly');
+  const runDir = path.join(weeklyRoot, 'runs', args.runId);
+  fs.mkdirSync(runDir, { recursive: true });
+  const checkpointFile = new AtomicChecksummedFile<WeeklyCheckpointPayload>(
+    path.join(runDir, 'checkpoint.json'),
+  );
+  const evidence = new WeeklyEvidenceStore(
+    path.join(runDir, 'raw-observations.jsonl'),
+  );
+  const states = new TargetStateStore(
+    path.join(weeklyRoot, 'target-state.json'),
+  );
+  const publisher = new AtomicWeeklyMarketPublisher(
+    path.join(weeklyRoot, 'published'),
+  );
+  const baselineAssignments = loadAssignments();
+  const knownListingIds = new Set(
+    Object.keys(baselineAssignments?.assignments ?? {}),
+  );
+  const baseOptions = {
+    runId: args.runId,
+    source: args.source,
+    baseUrl: args.baseUrl,
+    tree,
+    snapshot,
+    selectedTargetIds: [targetId],
+    checkpointFile,
+    evidence,
+    rawPageDir: path.join(runDir, 'raw-pages'),
+    states,
+    publisher,
+    knownListingIds,
+    baselineAssignments: baselineAssignments?.assignments,
+    overlapDays: 1,
+    maxPagesPerTarget: args.maxPages ?? 20,
+  };
+
+  let session: WeeklyMarketSession | null = null;
+  const provider: BridgeSessionProvider = {
+    current: () => session,
+    start: () => {
+      session = checkpointFile.exists()
+        ? WeeklyMarketSession.resume(baseOptions)
+        : WeeklyMarketSession.start(baseOptions);
+      return session;
+    },
+    resume: () => {
+      session = WeeklyMarketSession.resume(baseOptions);
+      return session;
+    },
+  };
+  await serve(
+    args,
+    provider,
+    [
+      'mode        weekly (one frozen exact target; raw HTML -> canonical placement)',
+      `run id      ${args.runId}${checkpointFile.exists() ? '   (checkpoint found: START resumes it)' : ''}`,
+      `hierarchy   ${snapshot.hierarchyVersion} (PASS ${receipt.validatedAt})`,
+      `target id   ${target.targetId}`,
+      `exact path  ${target.fullPath}`,
+      `source path ${target.categoryPath}`,
+      `boundary    previous date + IDs + 1-day overlap; max ${args.maxPages ?? 20} page(s)`,
+      `run dir     ${runDir}`,
+    ],
+    () => Promise.resolve(),
+  );
+}
+
 function printDryRun(
   session: StructureSession,
   scan: { present: number; missing: number },
@@ -608,6 +780,7 @@ export async function main(
 ): Promise<void> {
   const args = parseArgs(argv);
   if (args.mode === 'structure') return runStructure(args);
+  if (args.mode === 'weekly') return runWeekly(args);
   return runMarket(args);
 }
 

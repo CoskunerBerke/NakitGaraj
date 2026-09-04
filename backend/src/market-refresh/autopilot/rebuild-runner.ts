@@ -16,6 +16,7 @@
 import { spawn } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
+import { publishHierarchyStage } from '../../vehicle-hierarchy/artifact-release';
 
 export interface RebuildStepResult {
   name: string;
@@ -73,6 +74,14 @@ export class NpmRebuildRunner implements RebuildRunner {
     fs.mkdirSync(this.opts.logDir, { recursive: true });
     const stamp = startedAt.replace(/[:.]/g, '-');
     const results: RebuildStepResult[] = [];
+    const stageDir = path.join(
+      this.opts.cwd,
+      'data',
+      'vehicle-hierarchy',
+      'staging',
+      `${stamp}-${process.pid}`,
+    );
+    fs.mkdirSync(stageDir, { recursive: true });
     let ok = true;
     let gate: 'PASS' | 'FAIL' = 'PASS';
     let detail: string | null = null;
@@ -84,7 +93,9 @@ export class NpmRebuildRunner implements RebuildRunner {
       );
       this.log(`rebuild: ${step} ...`);
       const t0 = Date.now();
-      const exitCode = await runNpmScript(step, this.opts.cwd, logFile);
+      const exitCode = await runNpmScript(step, this.opts.cwd, logFile, {
+        VEHICLE_HIERARCHY_ARTIFACT: path.join(stageDir, 'hierarchy.json'),
+      });
       const seconds = Math.round((Date.now() - t0) / 1000);
       results.push({ name: step, exitCode, seconds, logFile });
       this.log(`rebuild: ${step} -> exit ${exitCode} (${seconds}s)`);
@@ -99,6 +110,24 @@ export class NpmRebuildRunner implements RebuildRunner {
       // Kapi HIC kosmadiysa (onceki adim dustu) yine FAIL'dir: sessiz gecis yok.
       gate = 'FAIL';
       ok = false;
+    }
+    if (ok && gate === 'PASS') {
+      try {
+        const published = publishHierarchyStage({
+          packageRoot: this.opts.cwd,
+          stageDir,
+          validatedAt: new Date().toISOString(),
+          steps: results.map(({ name, exitCode }) => ({ name, exitCode })),
+        });
+        this.log(
+          `rebuild: atomically published hierarchy ${published.hierarchyVersion} ` +
+            `from ${published.releaseDir}`,
+        );
+      } catch (error: any) {
+        ok = false;
+        gate = 'FAIL';
+        detail = `atomic hierarchy publish failed: ${error?.message || error}`;
+      }
     }
     return {
       ok,
@@ -115,6 +144,7 @@ function runNpmScript(
   script: string,
   cwd: string,
   logFile: string,
+  extraEnv: Record<string, string> = {},
 ): Promise<number | null> {
   return new Promise((resolve) => {
     const out = fs.openSync(logFile, 'w');
@@ -123,7 +153,7 @@ function runNpmScript(
       cwd,
       shell: true,
       stdio: ['ignore', out, out],
-      env: process.env,
+      env: { ...process.env, ...extraEnv },
     });
     child.on('error', () => {
       fs.closeSync(out);

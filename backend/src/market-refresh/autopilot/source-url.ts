@@ -29,6 +29,8 @@ export const MAX_CARDS_PER_PAGE = 60;
 
 export const PAGING_SIZE_PARAM = 'pagingSize';
 export const PAGING_OFFSET_PARAM = 'pagingOffset';
+export const SORTING_PARAM = 'sorting';
+export const NEWEST_FIRST_SORT = 'date_desc';
 
 /**
  * Dugum yolunu mutlak URL'e cevirir. Yol goreli ("/audi-a3", "audi-a3") ya da
@@ -75,12 +77,37 @@ export function buildLeafPageUrl(baseUrl: string, nodePath: string, page: number
   return url.toString();
 }
 
+/** Weekly exact-target page: deterministic 50/page and newest -> oldest. */
+export function buildIncrementalPageUrl(baseUrl: string, nodePath: string, page: number): string {
+  const url = new URL(buildLeafPageUrl(baseUrl, nodePath, page));
+  url.searchParams.set(SORTING_PARAM, NEWEST_FIRST_SORT);
+  return url.toString();
+}
+
+/** Redirect guard: ignore only paging/sort mechanics, preserve category filters. */
+export function sameCategoryUrl(baseUrl: string, expected: string, actual: string): boolean {
+  try {
+    const normalize = (raw: string): string => {
+      const url = resolveNodeUrl(baseUrl, raw);
+      url.searchParams.delete(PAGING_SIZE_PARAM);
+      url.searchParams.delete(PAGING_OFFSET_PARAM);
+      url.searchParams.delete(SORTING_PARAM);
+      url.searchParams.sort();
+      return `${url.pathname.replace(/\/+$/, '') || '/'}?${url.searchParams.toString()}`;
+    };
+    return normalize(expected) === normalize(actual);
+  } catch {
+    return false;
+  }
+}
+
 /** Kimlik anahtari: ayni dugum iki kez kuyruga girmesin diye normalize edilir. */
 export function normalizeNodePath(baseUrl: string, nodePath: string): string {
   const url = resolveNodeUrl(baseUrl, nodePath);
   // Sayfalama parametreleri KIMLIGIN parcasi degildir.
   url.searchParams.delete(PAGING_SIZE_PARAM);
   url.searchParams.delete(PAGING_OFFSET_PARAM);
+  url.searchParams.delete(SORTING_PARAM);
   url.hash = '';
   url.searchParams.sort();
   const query = url.searchParams.toString();

@@ -60,6 +60,14 @@ describe('EXTENSION IS TOKENLESS', () => {
 });
 
 describe('EXTENSION SENDS THE MARKER', () => {
+  it('forwards weekly raw-HTML capture without interpreting placement', () => {
+    const background = read('background.js');
+    const content = read('content-script.js');
+    expect(background).toContain('captureRawHtml: directive.captureRawHtml === true');
+    expect(background).toContain('rawHtml: observation.rawHtml');
+    expect(content).toContain('op && op.captureRawHtml');
+    expect(content).toContain('document.documentElement.outerHTML');
+  });
   /**
    * Baslik sozlesmesi TEK dosyada yasar: bridge-client.js. Servis calisani
    * onu importScripts ile yukler ve kendi fetch'i YOKTUR; boylece

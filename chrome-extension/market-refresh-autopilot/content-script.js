@@ -220,6 +220,9 @@
       }
       const link = row.querySelector('a.classifiedTitle');
       const attributes = row.querySelectorAll('td.searchResultsAttributeValue');
+      const modelCells = Array.from(
+        row.querySelectorAll('td.searchResultsTagAttributeValue'),
+      ).map((cell) => text(cell)).filter(Boolean);
 
       cards.push({
         sourceListingId,
@@ -229,6 +232,9 @@
         mileageText: text(attributes[1]) || null,
         priceText: text(row.querySelector('.searchResultsPriceValue')) || null,
         locationText: text(row.querySelector('.searchResultsLocationValue')) || null,
+        modelCells,
+        listingDateText:
+          text(row.querySelector('td.searchResultsDateValue, .searchResultsDateValue')) || null,
       });
     }
 
@@ -300,6 +306,12 @@
       cards,
       parseFailures,
       hasNextPage: hasNextPage(),
+      ...(op && op.captureRawHtml
+        ? {
+            pageTitle: document.title,
+            rawHtml: `${document.doctype ? `<!DOCTYPE ${document.doctype.name}>\n` : ''}${document.documentElement.outerHTML}`,
+          }
+        : {}),
     };
   };
 })();

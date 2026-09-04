@@ -20,6 +20,12 @@ import { artifactToTree, loadArtifact, resolveArtifactPath } from './hierarchy-s
 import { identityFromPath, LeafTargetIdentity } from './leaf-target';
 import { AssignmentArtifact, loadAssignments } from './build-listing-assignments';
 import { isExactEvidence } from './listing-resolver';
+import {
+  AtomicWeeklyMarketPublisher,
+  resolveWeeklyMarketArtifactRoot,
+} from '../market-refresh/weekly/artifact-publisher';
+import { WeeklyRawObservation } from '../market-refresh/weekly/evidence-store';
+import { hierarchyVersionOf } from '../market-refresh/weekly/hierarchy-gate';
 
 /** Frontend'in ihtiyaci olan asgari dugum sozlesmesi. */
 export interface HierarchyNodeDto {
@@ -81,6 +87,10 @@ export class VehicleHierarchyService {
   /** nodeId -> KESIN cozulmus ilan kimlikleri (tekillestirilmis). */
   private poolByNode: Map<string, string[]> | null = null;
   private assignmentsMissing = false;
+  private weeklyByNode = new Map<string, WeeklyRawObservation[]>();
+  private weeklyAssignments: Record<string, { status: string; requestedTargetIds: string[] }> = {};
+  private crossPoolConflicts = new Map<string, string[]>();
+  private weeklyRevision: string | null | undefined;
 
   /** Artefakti tembel yukler. Yoksa UNKNOWN'dir — yaprak DEGIL. */
   private require(): HierarchyTree {
@@ -112,9 +122,13 @@ export class VehicleHierarchyService {
    * ust kategori satirlarini yanlis dugume yaziyordu.
    */
   private pools(): Map<string, string[]> {
-    if (this.poolByNode) return this.poolByNode;
+    const weeklyPublisher = new AtomicWeeklyMarketPublisher(resolveWeeklyMarketArtifactRoot());
+    const weeklyRevision = weeklyPublisher.revision();
+    if (this.poolByNode && this.weeklyRevision === weeklyRevision) return this.poolByNode;
+    this.weeklyRevision = weeklyRevision;
     const artifact: AssignmentArtifact | null = loadAssignments();
     const map = new Map<string, string[]>();
+    const resolved = new Map<string, { nodeId: string; exact: boolean }>();
     if (!artifact) {
       if (!this.assignmentsMissing) {
         this.assignmentsMissing = true;
@@ -123,17 +137,73 @@ export class VehicleHierarchyService {
             'Market pools are EMPTY until then (fail-closed).',
         );
       }
-      this.poolByNode = map;
-      return map;
+    } else {
+      for (const [listingId, assignment] of Object.entries(artifact.assignments)) {
+        resolved.set(listingId, {
+          nodeId: assignment.nodeId,
+          exact: isExactEvidence(assignment.evidence),
+        });
+      }
     }
-    for (const [listingId, assignment] of Object.entries(artifact.assignments)) {
-      if (!isExactEvidence(assignment.evidence)) continue;
+
+    this.weeklyByNode.clear();
+    this.weeklyAssignments = {};
+    this.crossPoolConflicts.clear();
+    const weekly = weeklyPublisher.loadCurrent();
+    if (weekly) {
+      const loadedVersion = hierarchyVersionOf(this.require());
+      if (weekly.hierarchyVersion !== loadedVersion) {
+        this.logger.warn(
+          `Ignoring weekly market artifact ${weekly.hierarchyVersion}; active hierarchy is ${loadedVersion}`,
+        );
+      } else {
+        for (const [listingId, assignment] of Object.entries(weekly.assignments)) {
+          this.weeklyAssignments[listingId] = {
+            status: assignment.status,
+            requestedTargetIds: [...assignment.requestedTargetIds],
+          };
+          const previous = resolved.get(listingId);
+          const incomingExact = assignment.status === 'EXACT' && Boolean(assignment.nodeId);
+          if (previous?.exact && incomingExact && previous.nodeId !== assignment.nodeId) {
+            const previousNode = this.require().nodes.get(previous.nodeId);
+            const incomingNode = this.require().nodes.get(assignment.nodeId as string);
+            if (previousNode && incomingNode && incomingNode.depth > previousNode.depth) {
+              resolved.set(listingId, { nodeId: assignment.nodeId as string, exact: true });
+              if (assignment.sourceObservation) {
+                const list = this.weeklyByNode.get(assignment.nodeId as string) ?? [];
+                list.push(assignment.sourceObservation);
+                this.weeklyByNode.set(assignment.nodeId as string, list);
+              }
+              continue;
+            }
+            resolved.set(listingId, { nodeId: '', exact: false });
+            this.crossPoolConflicts.set(listingId, [previous.nodeId, assignment.nodeId as string]);
+            continue;
+          }
+          if (!incomingExact) {
+            resolved.set(listingId, { nodeId: '', exact: false });
+            continue;
+          }
+          resolved.set(listingId, { nodeId: assignment.nodeId as string, exact: true });
+          if (assignment.sourceObservation) {
+            const list = this.weeklyByNode.get(assignment.nodeId as string) ?? [];
+            list.push(assignment.sourceObservation);
+            this.weeklyByNode.set(assignment.nodeId as string, list);
+          }
+        }
+      }
+    }
+
+    for (const [listingId, assignment] of resolved) {
+      if (!assignment.exact || !assignment.nodeId) continue;
       const list = map.get(assignment.nodeId);
       if (list) list.push(listingId);
       else map.set(assignment.nodeId, [listingId]);
     }
     this.poolByNode = map;
-    this.logger.log(`Listing assignments loaded: ${artifact.stats?.exactListings ?? 0} exact listings`);
+    this.logger.log(
+      `Exact market pool loaded: ${[...map.values()].reduce((sum, ids) => sum + ids.length, 0)} listings`,
+    );
     return map;
   }
 
@@ -142,10 +212,44 @@ export class VehicleHierarchyService {
     return this.pools().get(nodeId) ?? [];
   }
 
+  /** Full exact-pool provenance for valuation/debugging; no broader fallback. */
+  marketPoolTrace(nodeId: string) {
+    const tree = this.require();
+    const node = tree.nodes.get(nodeId);
+    if (!node) throw new NotFoundException(`Unknown hierarchy node "${nodeId}"`);
+    const marketPoolListingIds = [...this.marketListingIds(nodeId)];
+    const requestedHere = Object.entries(this.weeklyAssignments)
+      .filter(([, assignment]) => assignment.requestedTargetIds.includes(nodeId));
+    return {
+      selectedFullHierarchyPath: [...node.pathSegments],
+      targetNodeId: node.id,
+      marketPoolListingIds,
+      poolSize: marketPoolListingIds.length,
+      duplicateIdsRemoved: [],
+      ambiguousRowsExcluded: requestedHere
+        .filter(([, assignment]) => assignment.status === 'AMBIGUOUS')
+        .map(([id]) => id),
+      unresolvedRowsExcluded: requestedHere
+        .filter(([, assignment]) => assignment.status === 'UNRESOLVED')
+        .map(([id]) => id),
+      crossPoolConflictsExcluded: [...this.crossPoolConflicts.entries()]
+        .filter(([, nodeIds]) => nodeIds.includes(nodeId))
+        .map(([id]) => id),
+      siblingLeakage: 0,
+      parentLeakage: 0,
+      parentFallback: false,
+      siblingFallback: false,
+    };
+  }
+
   reload(): void {
     this.tree = null;
     this.poolByNode = null;
     this.assignmentsMissing = false;
+    this.weeklyByNode.clear();
+    this.weeklyAssignments = {};
+    this.crossPoolConflicts.clear();
+    this.weeklyRevision = undefined;
   }
 
   /** Kokler = markalar. */
@@ -242,6 +346,9 @@ export class VehicleHierarchyService {
     sourceFiles: string[];
     /** KESIN cozulmus ilan kimlikleri — emsal havuzu BUDUR. */
     listingIds: string[];
+    /** Validated live-artifact rows not necessarily imported into Prisma yet. */
+    weeklyListings: WeeklyRawObservation[];
+    poolTrace: ReturnType<VehicleHierarchyService['marketPoolTrace']>;
   } {
     const tree = this.require();
     const node = tree.nodes.get(String(leafId || '').trim());
@@ -288,6 +395,8 @@ export class VehicleHierarchyService {
       identity: identityFromPath(node.pathSegments, node.fullPath),
       sourceFiles: [...node.sourceFiles],
       listingIds,
+      weeklyListings: [...(this.weeklyByNode.get(node.id) ?? [])],
+      poolTrace: this.marketPoolTrace(node.id),
     };
   }
 

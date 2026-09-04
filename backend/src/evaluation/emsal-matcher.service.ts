@@ -40,6 +40,21 @@ export interface CleanListingItem {
   listedAt?: Date | null;
 }
 
+/** Exact, validated weekly artifact row that may not be in Prisma yet. */
+export interface ExternalExactListing {
+  sourceListingId: string;
+  make: string;
+  model: string;
+  variant?: string;
+  trim?: string;
+  title: string;
+  year: number | null;
+  mileageKm: number | null;
+  price: number | null;
+  city: string | null;
+  listingDate: string;
+}
+
 export interface EmsalMatchResult {
   level: number; // 1, 2, 3, or 4
   matchedCount: number;
@@ -514,6 +529,7 @@ export class EmsalMatcherService {
     yearMax: number,
     sourceFiles?: string[],
     listingIds?: string[],
+    externalExactListings: ExternalExactListing[] = [],
   ) {
     const cleanMake = make.trim();
     const cleanModel = model.trim();
@@ -528,7 +544,7 @@ export class EmsalMatcherService {
     const byListing = Array.isArray(listingIds) && listingIds.length > 0;
     const exactLeaf = byListing || (Array.isArray(sourceFiles) && sourceFiles.length > 0);
 
-    const rows = (await this.prisma.rawVehicleListing.findMany({
+    const dbRows = (await this.prisma.rawVehicleListing.findMany({
       where: {
         ...(byListing
           ? { sourceListingId: { in: listingIds } }
@@ -564,6 +580,33 @@ export class EmsalMatcherService {
         scrapedAt: true,
       },
     })) as unknown as RawCandidate[];
+
+    const allowedIds = new Set(listingIds ?? []);
+    const externalRows: RawCandidate[] = externalExactListings
+      .filter((row) => allowedIds.has(row.sourceListingId))
+      .filter((row) => row.year !== null && row.price !== null)
+      .map((row) => ({
+        sourceListingId: row.sourceListingId,
+        rawMake: row.make,
+        rawModel: row.model,
+        canonicalModel: row.model,
+        rawVariant: row.variant || null,
+        canonicalVariant: row.variant || null,
+        canonicalTrim: row.trim || null,
+        canonicalBodyType: null,
+        canonicalFuelType: null,
+        canonicalTransmission: null,
+        rawTitle: row.title,
+        year: row.year as number,
+        mileageKm: row.mileageKm,
+        price: row.price as number,
+        city: row.city,
+        isDamaged: false,
+        scrapedAt: new Date(`${row.listingDate}T00:00:00.000Z`),
+      }));
+    // Current validated raw evidence wins over an older DB snapshot for the
+    // same stable listing ID; the deduper below still emits one candidate.
+    const rows = [...externalRows, ...dbRows];
 
     const seen = new Set<string>();
     const out: RawCandidate[] = [];
@@ -614,6 +657,7 @@ export class EmsalMatcherService {
     sourceFiles: string[],
     year: number,
     listingIds?: string[],
+    externalExactListings: ExternalExactListing[] = [],
   ): Promise<{ variant: string; trim: string }> {
     const byListing = Array.isArray(listingIds) && listingIds.length > 0;
     const rows = (await this.prisma.rawVehicleListing.findMany({
@@ -644,8 +688,14 @@ export class EmsalMatcherService {
     };
 
     return {
-      variant: top(rows.map((r) => r.canonicalVariant || r.rawVariant)),
-      trim: top(rows.map((r) => r.canonicalTrim)),
+      variant: top([
+        ...externalExactListings.map((row) => row.variant),
+        ...rows.map((r) => r.canonicalVariant || r.rawVariant),
+      ]),
+      trim: top([
+        ...externalExactListings.map((row) => row.trim),
+        ...rows.map((r) => r.canonicalTrim),
+      ]),
     };
   }
 
@@ -677,6 +727,8 @@ export class EmsalMatcherService {
     sourceFiles?: string[];
     /** Satir-seviyesi cozumlemeden gelen KESIN ilan kimlikleri. Havuz BUDUR. */
     listingIds?: string[];
+    /** Validated exact rows from the atomically published weekly artifact. */
+    externalExactListings?: ExternalExactListing[];
   }): Promise<EmsalMatchResult> {
     const { make, model, year } = params;
     const targetKm = params.mileageKm > 0 ? params.mileageKm : 0;
@@ -706,6 +758,7 @@ export class EmsalMatcherService {
         params.sourceFiles ?? [],
         year,
         params.listingIds,
+        params.externalExactListings,
       );
       if (poolKey.variant) variant = poolKey.variant;
       if (poolKey.trim) trim = poolKey.trim;
@@ -802,6 +855,7 @@ export class EmsalMatcherService {
       year + 2,
       params.sourceFiles,
       params.listingIds,
+      params.externalExactListings,
     );
 
     // KATALOG SOZLUGU != ILAN SOZLUGU.

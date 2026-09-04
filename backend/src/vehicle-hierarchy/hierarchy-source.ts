@@ -364,7 +364,29 @@ function findPackageRoot(startDir: string): string {
 export function resolveArtifactPath(): string {
   const fromEnv = process.env.VEHICLE_HIERARCHY_ARTIFACT;
   if (fromEnv && fromEnv.trim()) return path.resolve(fromEnv.trim());
-  return path.join(findPackageRoot(__dirname), 'data', 'vehicle-hierarchy', 'hierarchy.json');
+  const packageRoot = findPackageRoot(__dirname);
+  const artifactRoot = path.join(packageRoot, 'data', 'vehicle-hierarchy');
+  const pointerFile = path.join(artifactRoot, 'current.json');
+  if (fs.existsSync(pointerFile)) {
+    const pointer = JSON.parse(fs.readFileSync(pointerFile, 'utf-8')) as {
+      version?: string;
+      release?: string;
+    };
+    if (
+      pointer.version !== 'vehicle-hierarchy-pointer-v1' ||
+      !pointer.release ||
+      !/^[a-zA-Z0-9._-]+$/.test(pointer.release)
+    ) {
+      throw new Error(`Invalid hierarchy release pointer at ${pointerFile}`);
+    }
+    const released = path.join(artifactRoot, 'versions', pointer.release, 'hierarchy.json');
+    if (!fs.existsSync(released)) {
+      throw new Error(`Hierarchy release pointer references missing artifact ${released}`);
+    }
+    return released;
+  }
+  // Backwards-compatible last-known-good used until the first staged release.
+  return path.join(artifactRoot, 'hierarchy.json');
 }
 
 export function saveArtifact(artifact: HierarchyArtifact, filePath = resolveArtifactPath()): string {

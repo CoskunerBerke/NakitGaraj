@@ -147,7 +147,10 @@ async function observe(tabId, directive) {
   const [entry] = await chrome.scripting.executeScript({
     target: { tabId },
     func: (op) => window.__ngAutopilotObserve(op),
-    args: [{ type: directive.type }],
+    args: [{
+      type: directive.type,
+      captureRawHtml: directive.captureRawHtml === true,
+    }],
   });
   if (!entry || !entry.result) throw new Error('Content script returned no observation');
   return entry.result;
@@ -271,6 +274,8 @@ async function runLoop() {
             cards: observation.cards,
             hasNextPage: observation.hasNextPage,
             parseFailures: observation.parseFailures,
+            rawHtml: observation.rawHtml,
+            pageTitle: observation.pageTitle,
           },
         });
       }

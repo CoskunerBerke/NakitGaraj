@@ -58,4 +58,10 @@ export class VehicleHierarchyController {
   getNode(@Query('id') id: string): HierarchyNodeDto {
     return this.hierarchy.getNode(id);
   }
+
+  /** Exact pool provenance; includes excluded weekly ambiguity/conflicts. */
+  @Get('market-pool')
+  marketPool(@Query('id') id: string) {
+    return this.hierarchy.marketPoolTrace(id);
+  }
 }

@@ -25,7 +25,16 @@ export interface CategoryPageOptions {
   nav?: NavEntry[];
   /** Menu kapsayicisi hic yazilmasin (UNKNOWN_DATA_FORMAT uretir). */
   omitNav?: boolean;
-  rows?: Array<{ id: string; model: string; price?: string }>;
+  rows?: Array<{
+    id: string;
+    model: string;
+    price?: string;
+    date?: string;
+    year?: string;
+    mileage?: string;
+    location?: string;
+  }>;
+  nextPage?: boolean;
   /** Chrome canli-DOM bicimi: mutlak href + kucuk oznitelik + jsp sarmalayici. */
   domSave?: boolean;
   title?: string;
@@ -91,7 +100,11 @@ ${navItems}
 <tr data-id="${r.id}" class="searchResultsItem">
   <td class="searchResultsTagAttributeValue">${r.model}</td>
   <td><a class="classifiedTitle" href="/ilan/${r.id}/detay">${r.model} ilan</a></td>
+  <td class="searchResultsAttributeValue">${r.year ?? '2022'}</td>
+  <td class="searchResultsAttributeValue">${r.mileage ?? '10.000 km'}</td>
   <td class="searchResultsPriceValue">${r.price ?? '1.000.000 TL'}</td>
+  <td class="searchResultsDateValue">${r.date ?? '4 Eylül 2026'}</td>
+  <td class="searchResultsLocationValue">${r.location ?? 'İstanbul'}</td>
 </tr>`,
     )
     .join('');
@@ -103,6 +116,7 @@ ${navItems}
 ${breadcrumb}
 ${nav}
 <table id="searchResultsTable"><tbody>${rows}</tbody></table>
+${options.nextPage ? '<a class="prevNextBut" title="Sonraki" href="?pagingOffset=50">Sonraki</a>' : ''}
 </body></html>`;
 }
 
