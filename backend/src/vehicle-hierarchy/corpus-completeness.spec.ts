@@ -19,7 +19,8 @@
  * bu sinif hata bir daha sessizce gecemez.
  */
 import * as fs from 'fs';
-import { extractNavChildren, isStrictDescendantSlug, sahibindenSlug } from './nav-children';
+import { ownSlugOf, splitNavChildren } from './nav-children';
+import { classifyPage } from './page-classification';
 import { artifactToTree, loadArtifact } from './hierarchy-source';
 import { HierarchyNode } from './hierarchy-tree';
 
@@ -41,10 +42,19 @@ describeIfCorpus('KORPUSA KARSI TAMLIK', () => {
     } catch {
       return null;
     }
-    const nav = extractNavChildren(html);
-    if (nav === null) return null;
-    const own = sahibindenSlug(node.pathSegments);
-    return nav.filter((c) => isStrictDescendantSlug(own, c.slug)).map((c) => c.label);
+    const page = classifyPage(html, node.sourceFiles[0]);
+    if (page.navChildren === null) return null;
+    /**
+     * DOGRUDAN cocuk = alt soy slug'i + kaynagin seviye isareti; uretimle AYNI
+     * suzgec. Kaynak bir ara seviyeyi atlayip torunlari listelediyse bu
+     * sayfa hicbir dogrudan cocuk ILAN ETMEZ (agac da ondan cocuk beklemez).
+     */
+    const own = ownSlugOf(page.ownPath, node.pathSegments);
+    return splitNavChildren(
+      page.navChildren,
+      own,
+      node.pathSegments.length,
+    ).direct.map((c) => c.label);
   }
 
   it('korpus gercekten okunabiliyor (aksi halde test anlamsiz olurdu)', () => {
@@ -76,7 +86,9 @@ describeIfCorpus('KORPUSA KARSI TAMLIK', () => {
     for (const node of withPage) {
       const declared = declaredChildren(node);
       if (!declared) continue;
-      const present = new Set(node.childIds.map((id) => tree.nodes.get(id)?.name));
+      const present = new Set(
+        node.childIds.map((id) => tree.nodes.get(id)?.name),
+      );
       for (const label of declared) {
         if (!present.has(label)) missing.push(`${node.fullPath} -> ${label}`);
       }
@@ -101,7 +113,9 @@ describeIfCorpus('KORPUSA KARSI TAMLIK', () => {
    * "370 ilan var, oyleyse burada durabiliriz".
    */
   it('ilan sayisi yaprak kaniti olarak KULLANILMAZ', () => {
-    const richNonLeaves = nodes.filter((n) => n.ownListingCount > 100 && !n.isLeaf);
+    const richNonLeaves = nodes.filter(
+      (n) => n.ownListingCount > 100 && !n.isLeaf,
+    );
     expect(richNonLeaves.length).toBeGreaterThan(0);
     for (const node of richNonLeaves) expect(node.isLeaf).toBe(false);
   });
@@ -120,8 +134,11 @@ describeIfCorpus('KORPUSA KARSI TAMLIK', () => {
     for (const node of withPage) {
       const declared = declaredChildren(node);
       if (!declared) continue;
-      const present = new Set(node.childIds.map((id) => tree.nodes.get(id)?.name));
-      for (const label of declared) if (!present.has(label)) missing.push(`${node.fullPath} -> ${label}`);
+      const present = new Set(
+        node.childIds.map((id) => tree.nodes.get(id)?.name),
+      );
+      for (const label of declared)
+        if (!present.has(label)) missing.push(`${node.fullPath} -> ${label}`);
     }
     expect(missing.length).toBe(0);
   });
@@ -136,14 +153,19 @@ describeIfCorpus('KORPUSA KARSI TAMLIK', () => {
     for (const node of withPage) {
       const declared = declaredChildren(node);
       if (!declared || declared.length === 0) continue;
-      const present = new Set(node.childIds.map((id) => tree.nodes.get(id)?.name));
-      for (const label of declared) if (!present.has(label)) shrunk.push(node.fullPath);
+      const present = new Set(
+        node.childIds.map((id) => tree.nodes.get(id)?.name),
+      );
+      for (const label of declared)
+        if (!present.has(label)) shrunk.push(node.fullPath);
     }
     expect(shrunk.slice(0, 5)).toEqual([]);
   });
 
   it('bildirilen karsi ornek: Audi / A3 / A3 Hatchback yaprak DEGILDIR', () => {
-    const hatchback = nodes.find((n) => n.fullPath === 'Audi / A3 / A3 Hatchback');
+    const hatchback = nodes.find(
+      (n) => n.fullPath === 'Audi / A3 / A3 Hatchback',
+    );
     if (!hatchback) return; // korpus farkliysa test bir sey iddia etmez
     expect(hatchback.isLeaf).toBe(false);
     expect(hatchback.childIds.length).toBeGreaterThan(0);

@@ -14,7 +14,11 @@
  * dosya, tamami gercek kategori sayfasi — biri "Audi / A3 / A3 Sedan" ve tek
  * basina 9 alt kategori ilan ediyor.
  */
-import { extractBreadcrumb, extractNavChildren, normalizeHref } from './nav-children';
+import {
+  extractBreadcrumb,
+  extractNavChildren,
+  normalizeHref,
+} from './nav-children';
 
 /** Goreli bicim (korpusun cogunlugu). */
 const RELATIVE = `
@@ -60,7 +64,9 @@ const COMPLETE = `
 
 describe('BAGLANTI BICIMI TEK BICIME INDIRGENIR', () => {
   it('mutlak ve goreli baglanti ayni yolu verir', () => {
-    expect(normalizeHref('https://www.sahibinden.com/audi-a3')).toBe('/audi-a3');
+    expect(normalizeHref('https://www.sahibinden.com/audi-a3')).toBe(
+      '/audi-a3',
+    );
     expect(normalizeHref('http://sahibinden.com/audi-a3')).toBe('/audi-a3');
     expect(normalizeHref('/audi-a3')).toBe('/audi-a3');
   });
@@ -79,7 +85,14 @@ describe('IKI KAYIT BICIMI DE AYNI SONUCU VERIR', () => {
   it('kategori menusu her iki bicimde de okunur', () => {
     const rel = extractNavChildren(RELATIVE);
     const cmp = extractNavChildren(COMPLETE);
-    expect(rel).toEqual([{ slug: 'audi-a3-a3-sedan-35-tfsi', label: '35 TFSI', count: 1180 }]);
+    expect(rel).toEqual([
+      {
+        slug: 'audi-a3-a3-sedan-35-tfsi',
+        label: '35 TFSI',
+        count: 1180,
+        level: 5,
+      },
+    ]);
     expect(cmp).toEqual(rel);
   });
 

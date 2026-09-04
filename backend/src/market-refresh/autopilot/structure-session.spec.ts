@@ -38,6 +38,8 @@ import {
   StructureCheckpointPayload,
   StructureSession,
   StructureSessionOptions,
+  isRetryableLegacyBreadcrumbMismatch,
+  isSafeRefinement,
 } from './structure-session';
 import {
   buildHierarchy,
@@ -949,7 +951,7 @@ describe('REBUILD BETWEEN STRUCTURAL WAVES', () => {
     jest.spyOn(corpus, 'present').mockReturnValue({
       file: 'already.html',
       page: classifyPage(sahinPage(), 'already.html'),
-    } as any);
+    });
     const session = StructureSession.start(
       options({ rebuildEvery: 50, rebuild: runner }, corpus),
       ['/zorlu-sahin'],
@@ -1017,5 +1019,538 @@ describe('SECURITY PAUSES DO NOT CONSUME THE PAGE BUDGET', () => {
     const d = expectCapture(session, '/zorlu-kartal');
     expect(submit(session, d, kartalPage()).outcome).toBe('SAVED');
     expect((session.nextDirective() as any).state).toBe('SMOKE_LIMIT_REACHED');
+  });
+});
+
+// ------------------------------------------------- ic ice menu / inceltme
+
+/**
+ * CANLI KOSUDA KANITLANDI: kaynak, tek cocuklu bir ara seviyeyi atlayip
+ * torunlari listeliyor ("Cupra / Leon" menusu "1.5 eTSI"yi degil cl5 sinifli
+ * "Impulse, Standart, ..."i gosteriyor). Eski kod torunu dogrudan cocuk sanip
+ * "Cupra / Leon / Impulse" bekledi, sayfa "Cupra / Leon / 1.5 eTSI / Impulse"
+ * deyince REDIRECT_MISMATCH verdi ve 5 ardisik hatayla durdu. Marka adlari
+ * burada kurgusaldir; kural marka bilmez.
+ */
+describe('NESTED NAV: GRANDCHILDREN ARE NOT DIRECT CHILDREN', () => {
+  const K16 = { label: '1.6', slug: 'zorlu-kartal-1.6' };
+  const GL = { label: 'GL', slug: 'zorlu-kartal-1.6-gl' };
+  const LX = { label: 'LX', slug: 'zorlu-kartal-1.6-lx' };
+  /** Kartal sayfasi: kaynak "1.6"yi atlamis, GL/LX'i torun seviyesiyle (cl5) listeliyor. */
+  const collapsedKartalPage = () =>
+    categoryPage({
+      chain: [ZORLU, KARTAL],
+      nav: [
+        { label: 'GL', slug: GL.slug, count: 3, level: 5 },
+        { label: 'LX', slug: LX.slug, count: 2, level: 5 },
+      ],
+    });
+  /** ESKI davranisi taklit eden sayfa: GL dogrudan cocuk SEVIYESIYLE (cl4) listelenmis. */
+  const lyingKartalPage = () =>
+    categoryPage({
+      chain: [ZORLU, KARTAL],
+      nav: [{ label: 'GL', slug: GL.slug, count: 3, level: 4 }],
+    });
+  const glPage = () =>
+    categoryPage({ chain: [ZORLU, KARTAL, K16, GL], nav: [] });
+  const k16Page = () =>
+    categoryPage({
+      chain: [ZORLU, KARTAL, K16],
+      nav: [
+        { label: 'GL', slug: GL.slug, count: 3 },
+        { label: 'LX', slug: LX.slug, count: 2 },
+      ],
+    });
+  const makeWithKartal = () =>
+    categoryPage({
+      chain: [ZORLU],
+      nav: [{ label: 'Kartal', slug: KARTAL.slug, count: 5 }],
+    });
+
+  function startAtKartal(page = collapsedKartalPage()) {
+    const session = StructureSession.start(options(), ['/zorlu']);
+    submit(session, expectCapture(session, '/zorlu'), makeWithKartal());
+    const result = submit(
+      session,
+      expectCapture(session, '/zorlu-kartal'),
+      page,
+    );
+    return { session, result };
+  }
+
+  it("queues a collapsed menu's grandchildren as descendants under the ancestor, never as direct children", () => {
+    const { session, result } = startAtKartal();
+    expect(result.outcome).toBe('SAVED');
+    expect(result.childrenDeclared).toBe(0);
+    expect(result.terminal).toBe(false); // torunlari var: terminal DEGIL
+    const gl = session
+      .targetsView()
+      .find((t) => t.key === '/zorlu-kartal-1.6-gl')!;
+    expect(gl).toMatchObject({
+      status: 'PENDING',
+      origin: 'NAV',
+      expectedPath: null,
+      expectedPrefix: ['Zorlu', 'Kartal'],
+      depth: null,
+    });
+    expect(
+      session.targetsView().find((t) => t.key === '/zorlu-kartal'),
+    ).toMatchObject({
+      childrenDeclared: 0,
+      deeperDeclared: 2,
+      terminal: false,
+    });
+    // "Zorlu / Kartal / GL" diye sahte bir beklenti YOK.
+    expect(
+      session
+        .targetsView()
+        .some(
+          (t) =>
+            t.expectedPath && t.expectedPath.join('/') === 'Zorlu/Kartal/GL',
+        ),
+    ).toBe(false);
+  });
+
+  it('accepts the grandchild page under its ancestor, takes the exact path from its breadcrumb and recovers the skipped level by href', () => {
+    const { session } = startAtKartal();
+    const d = expectCapture(session, '/zorlu-kartal-1.6-gl');
+    const result = submit(session, d, glPage());
+    expect(result.outcome).toBe('SAVED');
+    expect(result.breadcrumb).toEqual(['Zorlu', 'Kartal', '1.6', 'GL']);
+    const gl = session
+      .targetsView()
+      .find((t) => t.key === '/zorlu-kartal-1.6-gl')!;
+    expect(gl).toMatchObject({
+      status: 'COMPLETE',
+      expectedPath: ['Zorlu', 'Kartal', '1.6', 'GL'],
+      expectedPrefix: null,
+      parentKey: '/zorlu-kartal-1.6',
+    });
+    // Atlanan seviye breadcrumb HREF'inden kuyruga girdi — etiketten slug uydurulmadi.
+    const k16 = session
+      .targetsView()
+      .find((t) => t.key === '/zorlu-kartal-1.6')!;
+    expect(k16).toMatchObject({
+      status: 'PENDING',
+      origin: 'BREADCRUMB',
+      expectedPath: ['Zorlu', 'Kartal', '1.6'],
+      depth: 3,
+      parentKey: '/zorlu-kartal',
+      navResultCount: null,
+    });
+    expect(session.status().intermediatesRecovered).toBe(1);
+    expect(session.status().refinedPaths).toBe(1);
+    // Ara seviye toplaninca dogrudan cocuklari (GL tamam, LX kuyrukta) tekrar uretilmez.
+    submit(
+      session,
+      expectCapture(session, '/zorlu-kartal-1.6-lx'),
+      categoryPage({ chain: [ZORLU, KARTAL, K16, LX], nav: [] }),
+    );
+    const k16Result = submit(
+      session,
+      expectCapture(session, '/zorlu-kartal-1.6'),
+      k16Page(),
+    );
+    expect(k16Result).toMatchObject({
+      outcome: 'SAVED',
+      childrenDeclared: 2,
+      childrenEnqueued: 0,
+      childrenAlreadyKnown: 2,
+    });
+    expect(
+      session.targetsView().filter((t) => t.key === '/zorlu-kartal-1.6-gl'),
+    ).toHaveLength(1);
+    expect((session.nextDirective() as any).state).toBe('COMPLETE');
+  });
+
+  it('4) safe refinement: a legacy exact expectation "Zorlu / Kartal / GL" is refined to the source breadcrumb, not rejected', () => {
+    const { session } = startAtKartal(lyingKartalPage());
+    const gl = session
+      .targetsView()
+      .find((t) => t.key === '/zorlu-kartal-1.6-gl')!;
+    expect(gl.expectedPath).toEqual(['Zorlu', 'Kartal', 'GL']); // eski tarz beklenti
+    const result = submit(
+      session,
+      expectCapture(session, '/zorlu-kartal-1.6-gl'),
+      glPage(),
+    );
+    expect(result.outcome).toBe('SAVED');
+    expect(
+      session.targetsView().find((t) => t.key === '/zorlu-kartal-1.6-gl'),
+    ).toMatchObject({
+      expectedPath: ['Zorlu', 'Kartal', '1.6', 'GL'],
+      breadcrumb: ['Zorlu', 'Kartal', '1.6', 'GL'],
+      reconciledFrom: 'Zorlu / Kartal / GL',
+    });
+    expect(
+      session.targetsView().find((t) => t.key === '/zorlu-kartal-1.6'),
+    ).toMatchObject({
+      status: 'PENDING',
+      origin: 'BREADCRUMB',
+    });
+    expect(session.status().redirectMismatch).toBe(0);
+  });
+
+  it('5) multiple inserted levels are all recovered, in order, chained by parent', () => {
+    const ENGINE = { label: 'Engine', slug: 'zorlu-kartal-engine' };
+    const BODY = { label: 'Body', slug: 'zorlu-kartal-engine-body' };
+    const TRIM = { label: 'Trim', slug: 'zorlu-kartal-engine-body-trim' };
+    const lying = categoryPage({
+      chain: [ZORLU, KARTAL],
+      nav: [{ label: 'Trim', slug: TRIM.slug, count: 1, level: 4 }],
+    });
+    const { session } = startAtKartal(lying);
+    const result = submit(
+      session,
+      expectCapture(session, '/' + TRIM.slug),
+      categoryPage({ chain: [ZORLU, KARTAL, ENGINE, BODY, TRIM], nav: [] }),
+    );
+    expect(result.outcome).toBe('SAVED');
+    expect(pending(session)).toEqual([
+      '/zorlu-kartal-engine',
+      '/zorlu-kartal-engine-body',
+    ]);
+    expect(
+      session.targetsView().find((t) => t.key === '/zorlu-kartal-engine'),
+    ).toMatchObject({
+      expectedPath: ['Zorlu', 'Kartal', 'Engine'],
+      parentKey: '/zorlu-kartal',
+      depth: 3,
+    });
+    expect(
+      session.targetsView().find((t) => t.key === '/zorlu-kartal-engine-body'),
+    ).toMatchObject({
+      expectedPath: ['Zorlu', 'Kartal', 'Engine', 'Body'],
+      parentKey: '/zorlu-kartal-engine',
+      depth: 4,
+    });
+    expect(
+      session.targetsView().find((t) => t.key === '/' + TRIM.slug)!.parentKey,
+    ).toBe('/zorlu-kartal-engine-body');
+    expect(session.status().intermediatesRecovered).toBe(2);
+  });
+
+  it('6) wrong branch is still a redirect: same URL, breadcrumb under another sibling', () => {
+    const { session } = startAtKartal(lyingKartalPage());
+    const wrongBranch = categoryPage({
+      chain: [
+        ZORLU,
+        { label: 'Şahin', slug: 'zorlu-sahin' },
+        { label: '1.6', slug: 'zorlu-sahin-1.6' },
+        { label: 'GL', slug: 'zorlu-kartal-1.6-gl' },
+      ],
+      nav: [],
+    });
+    const result = submit(
+      session,
+      expectCapture(session, '/zorlu-kartal-1.6-gl'),
+      wrongBranch,
+    );
+    expect(result.outcome).toBe('REDIRECT_MISMATCH');
+    expect(
+      session.targetsView().find((t) => t.key === '/zorlu-kartal-1.6-gl')!
+        .status,
+    ).toBe('FAILED');
+    expect(
+      session.targetsView().some((t) => t.key === '/zorlu-sahin-1.6'),
+    ).toBe(false); // hicbir ara seviye kazanilmadi
+  });
+
+  it('7) a renamed final label is still a redirect even when the branch matches', () => {
+    const { session } = startAtKartal(lyingKartalPage());
+    const renamed = categoryPage({
+      chain: [
+        ZORLU,
+        KARTAL,
+        K16,
+        { label: 'GLX', slug: 'zorlu-kartal-1.6-gl' },
+      ],
+      nav: [],
+    });
+    expect(
+      submit(session, expectCapture(session, '/zorlu-kartal-1.6-gl'), renamed)
+        .outcome,
+    ).toBe('REDIRECT_MISMATCH');
+  });
+
+  it('8) a page that declares another own URL is a true redirect, whatever its breadcrumb says', () => {
+    const hybrid = { label: '1.6 Hybrid', slug: 'zorlu-kartal-1.6-hybrid' };
+    const session = StructureSession.start(options(), ['/zorlu']);
+    submit(session, expectCapture(session, '/zorlu'), makeWithKartal());
+    submit(
+      session,
+      expectCapture(session, '/zorlu-kartal'),
+      categoryPage({
+        chain: [ZORLU, KARTAL],
+        nav: [{ label: hybrid.label, slug: hybrid.slug, count: 7 }],
+      }),
+    );
+    const declaresOther = categoryPage({
+      chain: [ZORLU, KARTAL, K16],
+      nav: [],
+    }); // own = /zorlu-kartal-1.6
+    const result = submit(
+      session,
+      expectCapture(session, '/zorlu-kartal-1.6-hybrid'),
+      declaresOther,
+      'https://www.sahibinden.com/zorlu-kartal-1.6-extreme',
+    );
+    expect(result.outcome).toBe('REDIRECT_MISMATCH');
+    const target = session
+      .targetsView()
+      .find((t) => t.key === '/zorlu-kartal-1.6-hybrid')!;
+    expect(target.status).toBe('FAILED');
+    expect(target.lastError).toMatch(
+      /requested \/zorlu-kartal-1.6-hybrid but the page declares itself as \/zorlu-kartal-1.6/,
+    );
+  });
+
+  it('9) casing-only difference in the branch is accepted and the SOURCE casing is kept', () => {
+    const UNO = { label: 'Uno', slug: 'zorlu-uno' };
+    const session = StructureSession.start(options(), ['/zorlu']);
+    submit(
+      session,
+      expectCapture(session, '/zorlu'),
+      categoryPage({
+        chain: [ZORLU],
+        nav: [{ label: 'Uno', slug: UNO.slug, count: 5 }],
+      }),
+    );
+    submit(
+      session,
+      expectCapture(session, '/zorlu-uno'),
+      categoryPage({
+        chain: [ZORLU, UNO],
+        nav: [
+          { label: 'Trim', slug: 'zorlu-uno-1.4-trim', count: 1, level: 4 },
+        ],
+      }),
+    );
+    const actual = categoryPage({
+      chain: [
+        ZORLU,
+        { label: 'UNO', slug: 'zorlu-uno' },
+        { label: '1.4', slug: 'zorlu-uno-1.4' },
+        { label: 'Trim', slug: 'zorlu-uno-1.4-trim' },
+      ],
+      nav: [],
+    });
+    const result = submit(
+      session,
+      expectCapture(session, '/zorlu-uno-1.4-trim'),
+      actual,
+    );
+    expect(result.outcome).toBe('SAVED');
+    expect(result.breadcrumb).toEqual(['Zorlu', 'UNO', '1.4', 'Trim']);
+    expect(path.basename(result.savedFile!)).toBe(
+      "Zorlu UNO 1.4 Trim Fiyatları & Modelleri sahibinden.com'da.html",
+    );
+    // Ara seviye tek bir kez, kaynak casing'iyle.
+    expect(
+      session.targetsView().filter((t) => t.key === '/zorlu-uno-1.4'),
+    ).toHaveLength(1);
+    expect(
+      session.targetsView().find((t) => t.key === '/zorlu-uno-1.4')!
+        .expectedPath,
+    ).toEqual(['Zorlu', 'UNO', '1.4']);
+  });
+
+  it('10) an intermediate whose breadcrumb href is not a usable category path is skipped, never guessed', () => {
+    const { session } = startAtKartal(lyingKartalPage());
+    const badHref = categoryPage({
+      chain: [ZORLU, KARTAL, { label: '1.6', slug: 'ZORLU-KARTAL-1.6' }, GL],
+      nav: [],
+    });
+    const result = submit(
+      session,
+      expectCapture(session, '/zorlu-kartal-1.6-gl'),
+      badHref,
+    );
+    expect(result.outcome).toBe('SAVED');
+    expect(
+      session
+        .targetsView()
+        .some((t) => t.key.toLowerCase() === '/zorlu-kartal-1.6'),
+    ).toBe(false);
+    expect(session.status().intermediatesRecovered).toBe(0);
+  });
+
+  it('11+12) an intermediate already queued or already complete is neither duplicated nor re-requested', () => {
+    // Kartal sayfasi hem dogrudan cocuk "1.6"yi hem de (eski tarz) torun GL'yi listeliyor.
+    const both = categoryPage({
+      chain: [ZORLU, KARTAL],
+      nav: [
+        { label: '1.6', slug: K16.slug, count: 5 },
+        { label: 'GL', slug: GL.slug, count: 3, level: 4 },
+      ],
+    });
+    const { session } = startAtKartal(both);
+    // 1.6 zaten kuyrukta: once toplanir (COMPLETE), sonra GL'nin breadcrumb'i onu bir daha istemez.
+    submit(session, expectCapture(session, '/zorlu-kartal-1.6'), k16Page());
+    submit(session, expectCapture(session, '/zorlu-kartal-1.6-gl'), glPage());
+    expect(
+      session.targetsView().filter((t) => t.key === '/zorlu-kartal-1.6'),
+    ).toHaveLength(1);
+    expect(
+      session.targetsView().find((t) => t.key === '/zorlu-kartal-1.6')!.status,
+    ).toBe('COMPLETE');
+    expect(session.status().intermediatesRecovered).toBe(0);
+    expect(session.status().duplicatesSkipped).toBeGreaterThan(0);
+  });
+});
+
+describe('LEGACY CHECKPOINT MIGRATION', () => {
+  const CHERY_LEGACY =
+    'REDIRECT_MISMATCH: breadcrumb "Chery / Alia / 1.6 / Acteco Forza" differs from expected "Chery / Alia / Acteco Forza"';
+  const DACIA_LEGACY =
+    'REDIRECT_MISMATCH: requested /dacia-jogger-1.6-hybrid but the page declares itself as /dacia-jogger-1.6';
+
+  it("classifies the real run's errors: breadcrumb-only diff retryable, own-slug mismatch not", () => {
+    const failed = (lastError: string) => ({
+      status: 'FAILED' as const,
+      outcome: 'REDIRECT_MISMATCH' as const,
+      lastError,
+    });
+    expect(isRetryableLegacyBreadcrumbMismatch(failed(CHERY_LEGACY))).toBe(
+      true,
+    );
+    expect(isRetryableLegacyBreadcrumbMismatch(failed(DACIA_LEGACY))).toBe(
+      false,
+    );
+    expect(
+      isRetryableLegacyBreadcrumbMismatch(
+        failed(
+          'REDIRECT_MISMATCH: breadcrumb "Zorlu / Kartal Yeni" differs from expected "Zorlu / Kartal"',
+        ),
+      ),
+    ).toBe(false);
+    expect(
+      isRetryableLegacyBreadcrumbMismatch(
+        failed(
+          'REDIRECT_MISMATCH: breadcrumb "A / C / Engine / Trim" differs from expected "A / B / Trim"',
+        ),
+      ),
+    ).toBe(false);
+    expect(
+      isRetryableLegacyBreadcrumbMismatch(
+        failed(
+          'REDIRECT_MISMATCH: breadcrumb "A / B / Engine / NewTrim" differs from expected "A / B / Trim"',
+        ),
+      ),
+    ).toBe(false);
+    expect(
+      isRetryableLegacyBreadcrumbMismatch({
+        status: 'COMPLETE',
+        outcome: 'SAVED',
+        lastError: null,
+      }),
+    ).toBe(false);
+    expect(
+      isSafeRefinement(
+        ['A', 'B', 'Trim'],
+        ['A', 'B', 'Engine', 'Body', 'Trim'],
+      ),
+    ).toBe(true);
+    expect(
+      isSafeRefinement(['Fiat', 'Uno', 'Trim'], ['Fiat', 'UNO', '1.4', 'Trim']),
+    ).toBe(true);
+    expect(isSafeRefinement(['Zorlu'], ['Baska', 'Zorlu'])).toBe(false);
+  });
+
+  /** Eski kosunun checkpoint'ini taklit et: FAILED hedefler ESKI hata metniyle. */
+  function legacyCheckpoint(): StructureSessionOptions {
+    const opts = options();
+    const session = StructureSession.start(opts, ['/zorlu']);
+    submit(
+      session,
+      expectCapture(session, '/zorlu'),
+      categoryPage({
+        chain: [ZORLU],
+        nav: [
+          { label: 'Kartal', slug: 'zorlu-kartal', count: 5 },
+          { label: 'Şahin', slug: 'zorlu-sahin', count: 5 },
+          { label: 'Doğan', slug: 'zorlu-dogan', count: 5 },
+        ],
+      }),
+    );
+    const payload = opts.checkpointFile.load();
+    const kartal = payload.targets.find((t) => t.key === '/zorlu-kartal')!;
+    kartal.status = 'FAILED';
+    kartal.outcome = 'REDIRECT_MISMATCH';
+    kartal.attempts = 1;
+    kartal.lastError =
+      'REDIRECT_MISMATCH: breadcrumb "Zorlu / Kartal / 1.6 / GL" differs from expected "Zorlu / Kartal / GL"';
+    kartal.expectedPath = ['Zorlu', 'Kartal', 'GL'];
+    const sahin = payload.targets.find((t) => t.key === '/zorlu-sahin')!;
+    sahin.status = 'FAILED';
+    sahin.outcome = 'REDIRECT_MISMATCH';
+    sahin.attempts = 1;
+    sahin.lastError =
+      'REDIRECT_MISMATCH: requested /zorlu-sahin but the page declares itself as /zorlu-sahin-1.6';
+    payload.counters.redirectMismatch = 2;
+    payload.state = 'ERROR';
+    opts.checkpointFile.save(payload);
+    return opts;
+  }
+
+  it('13) a legacy breadcrumb-only mismatch becomes PENDING again on resume', () => {
+    const opts = legacyCheckpoint();
+    const resumed = StructureSession.resume(options());
+    const kartal = resumed
+      .targetsView()
+      .find((t) => t.key === '/zorlu-kartal')!;
+    expect(kartal.status).toBe('PENDING');
+    expect(kartal.attempts).toBe(1);
+    expect(kartal.lastError).toMatch(
+      /^RETRY\(nested-nav\): REDIRECT_MISMATCH: breadcrumb/,
+    );
+    expect(kartal.reconciledFrom).toMatch(/^REDIRECT_MISMATCH: breadcrumb/);
+    expect(resumed.status().legacyRetried).toBe(1);
+    expect(resumed.status().redirectMismatch).toBe(2); // tarihce silinmez
+    expect(opts.checkpointFile.exists()).toBe(true);
+  });
+
+  it('14) a legacy own-slug (canonical) mismatch stays FAILED on resume', () => {
+    legacyCheckpoint();
+    const resumed = StructureSession.resume(options());
+    expect(
+      resumed.targetsView().find((t) => t.key === '/zorlu-sahin'),
+    ).toMatchObject({
+      status: 'FAILED',
+      outcome: 'REDIRECT_MISMATCH',
+    });
+    expectCapture(resumed, '/zorlu-kartal'); // kuyruk sirasi korunur: Kartal once
+  });
+
+  it('15) repeated resume is idempotent: no duplicate target, no counter inflation', () => {
+    legacyCheckpoint();
+    const first = StructureSession.resume(options());
+    const count = first.targetsView().length;
+    const second = StructureSession.resume(options());
+    const third = StructureSession.resume(options());
+    expect(second.targetsView()).toHaveLength(count);
+    expect(third.targetsView()).toHaveLength(count);
+    expect(third.status().legacyRetried).toBe(1);
+    expect(
+      third
+        .targetsView()
+        .filter((t) => t.status === 'FAILED')
+        .map((t) => t.key),
+    ).toEqual(['/zorlu-sahin']);
+    expect(
+      third.targetsView().filter((t) => t.key === '/zorlu-kartal'),
+    ).toHaveLength(1);
+  });
+
+  it('a reopened legacy target that comes back SHALLOWER than expected still fails (rule unchanged)', () => {
+    legacyCheckpoint();
+    const resumed = StructureSession.resume(options());
+    const d = expectCapture(resumed, '/zorlu-kartal');
+    const shallow = submit(
+      resumed,
+      d,
+      categoryPage({ chain: [ZORLU, KARTAL], nav: [] }),
+    );
+    expect(shallow.outcome).toBe('REDIRECT_MISMATCH');
   });
 });
