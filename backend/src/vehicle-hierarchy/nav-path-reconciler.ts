@@ -19,9 +19,15 @@
  * Kaynak onceligi:
  *   exact breadcrumb / parent direct-nav path > flat categoryString
  *
- * Fail-closed celiski ancak AYNI kaynak dosyasi iki farkli exact breadcrumb
- * yolu iddia ederse veya AYNI exact yolun kaydedilmis sayfalari farkli direct
- * child setleri bildirirse uretilir.
+ * Ayrica exact path kimligi BUYUK/kucuk harfe duyarsizdir. Gercek korpusta
+ * listing discovery `Fiat / UNO`, kaydedilmis sayfa breadcrumb'i ise
+ * `Fiat / Uno` uretebiliyor. Audit de ayni parent altindaki bu iki etiketi
+ * zaten belirsiz kabul eder. Kaydedilmis breadcrumb casing'i kanonik kabul
+ * edilir ve source'suz turetilmis yol onun altina birlestirilir.
+ *
+ * Fail-closed celiski ancak AYNI kaynak dosyasi iki farkli (case-only olmayan)
+ * exact breadcrumb yolu iddia ederse veya AYNI exact yolun kaydedilmis
+ * sayfalari farkli direct child setleri bildirirse uretilir.
  */
 import { ObservedCategory } from './hierarchy-tree';
 
@@ -69,7 +75,10 @@ export function reconcileDirectNavPaths(observations: ObservedCategory[]): Obser
       // Exact path zaten varsa kanit tamamdir. Ayni duz dizeyle baska exact
       // yollarin bulunmasi celiski degildir; categoryString lossy bir alias'tir.
       const exact = reconciled.find(
-        (o) => o.categoryString === categoryString && o.pathSegments && samePath(o.pathSegments, exactPath),
+        (o) =>
+          o.categoryString === categoryString &&
+          o.pathSegments &&
+          samePathFolded(o.pathSegments, exactPath),
       );
       if (exact) continue;
 
@@ -93,7 +102,42 @@ export function reconcileDirectNavPaths(observations: ObservedCategory[]): Obser
     }
   }
 
+  canonicalizeCaseOnlyPaths(reconciled);
   return reconciled;
+}
+
+/**
+ * Kaydedilmis exact breadcrumb casing'ini kanoniklestirir.
+ *
+ * Source-backed derin bir breadcrumb tum prefix'lerinin casing'ini de kanitlar.
+ * Ornegin `Fiat / Uno / 70 SX` varsa source'suz `Fiat / UNO / 45 S` yolu
+ * `Fiat / Uno / 45 S` olarak normalize edilir. Segment SINIRI degismez;
+ * yalnizca case-only alias tek kimlige indirilir.
+ */
+function canonicalizeCaseOnlyPaths(observations: ObservedCategory[]): void {
+  const canonicalPrefixes = new Map<string, string[]>();
+
+  for (const observation of observations) {
+    if (!observation.pathSegments?.length || observation.sourceFiles.length === 0) continue;
+    for (let length = 1; length <= observation.pathSegments.length; length += 1) {
+      const prefix = observation.pathSegments.slice(0, length);
+      const key = foldedPathKey(prefix);
+      if (!canonicalPrefixes.has(key)) canonicalPrefixes.set(key, prefix);
+    }
+  }
+
+  for (const observation of observations) {
+    if (!observation.pathSegments?.length) continue;
+    let normalized = [...observation.pathSegments];
+
+    for (let length = 1; length <= normalized.length; length += 1) {
+      const canonical = canonicalPrefixes.get(foldedPathKey(normalized.slice(0, length)));
+      if (!canonical) continue;
+      normalized = [...canonical, ...normalized.slice(length)];
+    }
+
+    observation.pathSegments = normalized;
+  }
 }
 
 function cloneObservation(o: ObservedCategory): ObservedCategory {
@@ -111,7 +155,7 @@ function sameIdentity(a: ObservedCategory, b: ObservedCategory): boolean {
   const bExact = Boolean(b.pathSegments && b.pathSegments.length > 0);
   if (aExact !== bExact) return false;
   if (!aExact && !bExact) return true;
-  return samePath(a.pathSegments!, b.pathSegments!);
+  return samePathFolded(a.pathSegments!, b.pathSegments!);
 }
 
 function mergeSameIdentity(target: ObservedCategory, incoming: ObservedCategory): void {
@@ -129,6 +173,16 @@ function mergeSameIdentity(target: ObservedCategory, incoming: ObservedCategory)
     target.navChildLabels = null;
   }
 
+  // Source-backed exact yolun casing'i source'suz alias'tan daha gucludur.
+  if (
+    incoming.sourceFiles.length > 0 &&
+    incoming.pathSegments?.length &&
+    target.pathSegments?.length &&
+    samePathFolded(target.pathSegments, incoming.pathSegments)
+  ) {
+    target.pathSegments = [...incoming.pathSegments];
+  }
+
   // Uretimde loadObservations zaten aggregate'dir; listing-discovery 0 sayimla
   // gelir. Max kullanmak ayni kaniti ikinci kez sayip havuzu sisirmeyi engeller.
   target.listingCount = Math.max(target.listingCount, incoming.listingCount);
@@ -141,7 +195,7 @@ function assertNoSourcePathConflict(existing: ObservedCategory[], incoming: Obse
 
   for (const candidate of existing) {
     if (!candidate.pathSegments || candidate.pathSegments.length === 0) continue;
-    if (samePath(candidate.pathSegments, incoming.pathSegments)) continue;
+    if (samePathFolded(candidate.pathSegments, incoming.pathSegments)) continue;
     const shared = candidate.sourceFiles.find((file) => incomingFiles.has(file));
     if (!shared) continue;
 
@@ -152,8 +206,12 @@ function assertNoSourcePathConflict(existing: ObservedCategory[], incoming: Obse
   }
 }
 
-function samePath(a: string[], b: string[]): boolean {
-  return a.length === b.length && a.every((segment, index) => segment === b[index]);
+function foldedPathKey(segments: string[]): string {
+  return segments.map((segment) => String(segment).trim().toLocaleLowerCase('tr')).join('\u0000');
+}
+
+function samePathFolded(a: string[], b: string[]): boolean {
+  return a.length === b.length && foldedPathKey(a) === foldedPathKey(b);
 }
 
 function sameLabelSet(a: string[], b: string[]): boolean {
