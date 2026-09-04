@@ -40,6 +40,35 @@ function render(state) {
   $('state').textContent = shown;
   $('state').dataset.state = shown;
 
+  /**
+   * YAPI MODU: kopru `mode: 'STRUCTURE'` gonderir. Panel yalnizca GOSTERIR;
+   * hangi sayfanin cekilecegine, neyin cocuk oldugna kopru karar verir.
+   */
+  const structure = status.mode === 'STRUCTURE';
+  $('structureCard').hidden = !structure;
+  $('marketCard').hidden = structure;
+  if (structure) {
+    const currentPath = Array.isArray(status.currentPath) ? status.currentPath.join(' › ') : status.currentKey;
+    setText('sRunId', status.runId);
+    setText('sPath', currentPath);
+    setText('sMake', status.currentMake);
+    setText('sCompleted', status.completed);
+    setText('sQueued', status.queued);
+    setText('sFailed', `${status.failed ?? 0} / ${status.blocked ?? 0}`);
+    setText('sSaved', status.pagesSaved);
+    setText('sPresent', status.alreadyPresent);
+    setText('sNew', status.newNodesDiscovered);
+    setText('sLast', status.lastSuccessKey);
+    setText(
+      'sRebuild',
+      status.rebuildEvery > 0
+        ? `${status.rebuilds} yapıldı · ${status.sinceRebuild}/${status.rebuildEvery} sayfa · kapı ${status.lastGate || '—'}`
+        : 'kapalı',
+    );
+    setText('sComplete', status.runComplete === undefined ? null : status.runComplete ? 'EVET' : 'HAYIR');
+    setText('sPause', status.pauseReason);
+  }
+
   const trail = Array.isArray(status.currentTrail) ? status.currentTrail : [];
   setText('runId', status.runId);
   setText('make', trail[0]);

@@ -1,8 +1,63 @@
 # Market Refresh Autopilot (Chrome MV3)
 
-Aylık pazar tazelemesini **kendi giriş yapmış Chrome'unuzda** yürütür. Uzantı yalnızca
-gezinir ve okur; tüm dayanıklı durum (checkpoint, staging, tekilleştirme, bölümleme,
-tamamlanma sözleşmesi) `127.0.0.1` üzerindeki yerel köprüde yaşar.
+Aylık pazar tazelemesini **ve** yapısal kategori toplamayı **kendi giriş yapmış
+Chrome'unuzda** yürütür. Uzantı yalnızca gezinir ve okur; tüm dayanıklı durum
+(checkpoint, staging, tekilleştirme, bölümleme, kategori kimliği, tamamlanma
+sözleşmesi) `127.0.0.1` üzerindeki yerel köprüde yaşar.
+
+## 0) Yapı toplayıcı (`--mode structure`) — kategori sayfalarını korpusa topla
+
+Amaç: Sahibinden kategori ağacını (marka → seri → gövde → motor → paket …,
+derinlik sabit değil) **ham HTML** olarak `sahibindne ilan` korpusuna eklemek.
+Uzantı sayfayı **ayrıştırmaz**: `document.documentElement.outerHTML`'i olduğu
+gibi köprüye verir. Köprü, elle kaydedilmiş korpusu okuyan **aynı** ayrıştırıcıyı
+(`vehicle-hierarchy/page-classification`) çalıştırır:
+
+```
+HAM HTML TOPLA → KAYDET → MEVCUT AYRIŞTIRICI → BREADCRUMB + MENÜ
+→ DOĞRUDAN ÇOCUKLAR KUYRUĞA → CHECKPOINT → (N sayfada bir) YENİDEN KUR + DOĞRULA
+```
+
+Kurallar:
+
+| Kural | Davranış |
+| --- | --- |
+| Kimlik | Dosya adı değil, sayfanın **kendi breadcrumb'ı**. Yönlendirme (üst/alakasız sayfa) `REDIRECT_MISMATCH`, korpusa **yazılmaz** |
+| Mevcut korpus | Ayrıştırıcının okuyabildiği sayfa varsa **istek gönderilmez**; menüsü diskten okunur, çocukları kuyruğa girer |
+| Giriş / 2FA / engel / CAPTCHA | **Atlatma yok.** Koşu `ACCESS_RESTRICTED` ile durur, checkpoint yazılır, hedef kaybolmaz; Chrome'da elle düzeltip **Devam et** |
+| Bilinmeyen kayıt biçimi | Koşu `ERROR` ile **hemen** durur, sayfa `evidence/quarantine/` altına alınır. Önce ayrıştırıcı düzeltilir, sonra Devam et |
+| Checkpoint | Her başarılı sayfadan sonra. PC/Chrome/köprü yeniden başlasa da ilerleme kaybolmaz; START, checkpoint varsa **devam eder** (kopya hedef üretmez) |
+| Tempo | Köprü her adımla jitter'lı bekleme gönderir (`--pace-ms 5000 --jitter 0.4` → 3–7 s). Tek sekme, paralellik yok |
+| Yeniden kurma | `--rebuild-every 50`: 50 kayıttan sonra `hierarchy:build → listings:build → coverage:manifest → corpus:validate`. Kapı düşerse koşu durur |
+| Kökler | CLI'dan (`--roots`), uzantıdan **değil**. Varsayılan site kökü `/kategori/otomobil` → tüm markalar; marka adı hiçbir yerde sabit değil |
+| Sonuç sayfaları | Yapı modu **sayfalama yapmaz**; hiyerarşi tamamlanmadan piyasa derinliği toplanmaz |
+
+Komutlar (PowerShell; Git Bash'te başa `MSYS_NO_PATHCONV=1` ekleyin):
+
+```bash
+# 1) Kuru koşu — kaynağa istek YOK; kuyruk korpusa karşı açılır ve yazdırılır
+cd backend; npm run market:autopilot:bridge -- --mode structure --run-id smoke-a3-sedan --roots /audi-a3-a3-sedan --dry-run
+
+# 2) Sınırlı duman koşusu — en fazla 3 sayfa çekilir
+cd backend; npm run market:autopilot:bridge -- --mode structure --run-id smoke-a3-sedan --roots /audi-a3-a3-sedan --max-pages 3
+
+# 3) Tam yapısal koşu — site kökünden, tüm markalar, devam edilebilir
+cd backend; npm run market:autopilot:bridge -- --mode structure --run-id structure-2026-09
+```
+
+Sonra: uzantıyı `chrome://extensions` → **Yeniden yükle**, normal Chrome'da
+Sahibinden'e giriş yapıldığını doğrulayın, uzantı panelinde köprü adresini
+kaydedip **Koşuyu başlat**'a bir kez basın. Panel `Yapı toplayıcı` kartında
+tamamlanan/kuyruk/kaydedilen/yeni düğüm/son başarı/durma sebebini gösterir.
+
+Koşu dizini `backend/data/market-refresh/autopilot/<run-id>/`:
+`checkpoint.json` (atomik, checksum'lu), `report.json` (koşu raporu),
+`captures.jsonl` (her yakalama), `evidence/{security,mismatch,quarantine,site-root}/`,
+`rebuild-logs/`.
+
+Yapı modu bayrakları: `--mode structure --run-id --roots --max-pages
+--rebuild-every --no-rebuild --pace-ms --jitter --dry-run --port --window`.
+`--scope-*` ve `--coverage-*` yalnızca piyasa modunda geçerlidir.
 
 ## Ne YAPMAZ
 

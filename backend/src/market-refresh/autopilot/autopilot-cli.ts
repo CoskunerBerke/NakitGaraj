@@ -1,19 +1,35 @@
 /**
  * AUTOPILOT KOPRU BASLATICI.
  *
- * Kullanim:
+ * IKI MOD, TEK KOPRU, TEK UZANTI:
+ *
+ *   --mode market     (varsayilan) aylik pazar tazelemesi: kart gozlemi -> staging JSONL
+ *   --mode structure  YAPI TOPLAYICISI: kategori sayfalarini HAM HTML olarak korpusa
+ *                     kaydeder, korpusu okuyan AYNI hardened ayristiriciyla okur,
+ *                     menuden cikan dogrudan cocuklari kuyruga alir, her sayfadan
+ *                     sonra checkpoint yazar, N sayfada bir agaci yeniden kurup
+ *                     dogrulama kapisini kosar.
+ *
+ * YAPI MODU:
+ *   # kuru kosu — kaynaga istek YOK, kuyruk korpusa karsi acilir ve yazdirilir
+ *   npm run market:autopilot:bridge -- --mode structure --run-id smoke-1 --roots /audi-a3-a3-sedan --dry-run
+ *
+ *   # sinirli duman kosusu (en fazla 3 sayfa cekilir)
+ *   npm run market:autopilot:bridge -- --mode structure --run-id smoke-1 --roots /audi-a3-a3-sedan --max-pages 3
+ *
+ *   # tam yapisal kosu (site kokunden, tum markalar, sinirsiz; devam edilebilir)
+ *   npm run market:autopilot:bridge -- --mode structure --run-id structure-2026-09
+ *
+ * PIYASA MODU (degismedi):
  *   npm run market:autopilot:bridge -- --port 8791
  *   npm run market:autopilot:bridge -- --port 8791 --window 02:00-10:00
  *   npm run market:autopilot:bridge -- --port 8791 --reference off   (hizli duman testi)
- *
- * ILK CANLI DUMAN KOSUSU (kapsam korumali, tek model):
  *   npm run market:autopilot:bridge -- --port 8791
  *     --scope-root /audi-a3 --scope-make Audi --scope-series A3
- *     --max-result-pages 3 --require-child-structure --stop-on-unknown
- *     --makes Audi
+ *     --max-result-pages 3 --require-child-structure --stop-on-unknown --makes Audi
  *
- * KAPSAM UZANTIDAN DEGIL BURADAN VERILIR. Uzanti guvenilmez bir istemcidir;
- * kapsami genisletebilseydi koruma koruma olmazdi.
+ * KAPSAM VE KOKLER UZANTIDAN DEGIL BURADAN VERILIR. Uzanti guvenilmez bir
+ * istemcidir; kapsami genisletebilseydi koruma koruma olmazdi.
  *
  * JETON YOK. Kopru yalnizca 127.0.0.1'e baglanir, Host'u dogrular, web sayfasi
  * kokenlerini reddeder ve tum yollarda sabit (gizli olmayan) uzanti isaretini
@@ -33,15 +49,38 @@ import {
 import { SnapshotFingerprintLookup } from './snapshot-fingerprint-lookup';
 import { AutopilotScope, normalizeScopeRoot } from './scope-guard';
 import { buildCoverageQueue, loadManifest, pathKey } from './coverage-queue';
-import { artifactToTree, loadArtifact } from '../../vehicle-hierarchy/hierarchy-source';
+import {
+  artifactToTree,
+  loadArtifact,
+} from '../../vehicle-hierarchy/hierarchy-source';
 import { resolveSnapshotPath } from '../snapshot-reference';
+import { CorpusIndex } from './corpus-store';
+import { NpmRebuildRunner } from './rebuild-runner';
+import {
+  SITE_ROOT,
+  StructureCheckpointPayload,
+  StructureSession,
+  StructureSessionOptions,
+} from './structure-session';
 
 const DEFAULT_SOURCE = 'sahibinden';
 const DEFAULT_BASE_URL = 'https://www.sahibinden.com/';
 /** Snapshot'taki `source` degeri korpustan gelir; gozlem kaynagindan farklidir. */
 const DEFAULT_SNAPSHOT_SOURCE = 'SAHIBINDEN_HTML';
 
+/**
+ * Yapisal dalga boyu. Olculdu (7143 dosya): hierarchy 34s + listings 32s +
+ * coverage 12s + validate 143s ~= 3.7 dk. 50 sayfa ~5 dk toplama demek; yeni
+ * kanit binlerce sayfa beklemeden agaca girer, kapi da o siklikta kosar.
+ */
+const DEFAULT_REBUILD_EVERY = 50;
+const DEFAULT_PACE_MS = 5000;
+const DEFAULT_JITTER = 0.4;
+
+type Mode = 'market' | 'structure';
+
 interface CliArgs {
+  mode: Mode;
   port: number;
   runId: string;
   source: string;
@@ -54,12 +93,20 @@ interface CliArgs {
   coverageManifest: string | null;
   coveragePriorities: Array<'A' | 'B' | 'C' | 'D'>;
   coverageLimit: number | null;
+  /** Yapi modu. */
+  roots: string[];
+  maxPages: number | null;
+  rebuildEvery: number;
+  paceMs: number;
+  jitter: number;
+  dryRun: boolean;
 }
 
 function parseArgs(argv: string[]): CliArgs {
   const get = (name: string): string | null => {
     const idx = argv.indexOf(`--${name}`);
-    if (idx >= 0 && argv[idx + 1] && !argv[idx + 1].startsWith('--')) return argv[idx + 1];
+    if (idx >= 0 && argv[idx + 1] && !argv[idx + 1].startsWith('--'))
+      return argv[idx + 1];
     const inline = argv.find((a) => a.startsWith(`--${name}=`));
     return inline ? inline.slice(name.length + 3) : null;
   };
@@ -89,7 +136,10 @@ function parseArgs(argv: string[]): CliArgs {
       throw new Error('--max-result-pages must be a positive integer');
     }
     scope = {
-      rootPath: normalizeScopeRoot(scopeRoot, get('base-url') || DEFAULT_BASE_URL),
+      rootPath: normalizeScopeRoot(
+        scopeRoot,
+        get('base-url') || DEFAULT_BASE_URL,
+      ),
       make: scopeMake,
       series: scopeSeries,
       maxResultPages: pages,
@@ -98,21 +148,71 @@ function parseArgs(argv: string[]): CliArgs {
     };
   }
 
+  const modeRaw = (get('mode') || 'market').toLowerCase();
+  if (modeRaw !== 'market' && modeRaw !== 'structure') {
+    throw new Error(`--mode must be "market" or "structure", got "${modeRaw}"`);
+  }
+  const mode = modeRaw;
+
+  const positiveInt = (
+    name: string,
+    fallback: number | null,
+  ): number | null => {
+    const raw = get(name);
+    if (raw === null) return fallback;
+    const n = Number(raw);
+    if (!Number.isInteger(n) || n < 0)
+      throw new Error(`--${name} must be a non-negative integer`);
+    return n;
+  };
+
+  const jitterRaw = get('jitter');
+  const jitter = jitterRaw === null ? DEFAULT_JITTER : Number(jitterRaw);
+  if (!Number.isFinite(jitter) || jitter < 0 || jitter > 0.9) {
+    throw new Error('--jitter must be a number between 0 and 0.9');
+  }
+
+  const roots = (get('roots') || SITE_ROOT)
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((r) => normalizeScopeRoot(r, get('base-url') || DEFAULT_BASE_URL));
+
+  if (mode === 'structure' && (scope || get('coverage-manifest'))) {
+    throw new Error(
+      '--scope-* and --coverage-* flags belong to --mode market. ' +
+        'Structure mode takes --roots, --max-pages, --rebuild-every, --pace-ms, --jitter, --dry-run.',
+    );
+  }
+
   return {
+    mode,
     scope,
     port: Number(get('port') || 8791),
-    runId: get('run-id') || `autopilot-${new Date().toISOString().slice(0, 10)}`,
+    runId:
+      get('run-id') ||
+      `${mode === 'structure' ? 'structure' : 'autopilot'}-${new Date().toISOString().slice(0, 10)}`,
     source: get('source') || DEFAULT_SOURCE,
     baseUrl: get('base-url') || DEFAULT_BASE_URL,
     windowSpec: get('window'),
     reference: get('reference') === 'off' ? 'off' : 'auto',
     makes,
     coverageManifest: get('coverage-manifest'),
-    coveragePriorities: ((get('coverage-priority') || 'A')
+    coveragePriorities: (get('coverage-priority') || 'A')
       .split(',')
       .map((p) => p.trim().toUpperCase())
-      .filter((p) => ['A', 'B', 'C', 'D'].includes(p)) as Array<'A' | 'B' | 'C' | 'D'>),
+      .filter((p) => ['A', 'B', 'C', 'D'].includes(p)) as Array<
+      'A' | 'B' | 'C' | 'D'
+    >,
     coverageLimit: get('coverage-limit') ? Number(get('coverage-limit')) : null,
+    roots,
+    maxPages: positiveInt('max-pages', null),
+    rebuildEvery: has('no-rebuild')
+      ? 0
+      : (positiveInt('rebuild-every', DEFAULT_REBUILD_EVERY) as number),
+    paceMs: positiveInt('pace-ms', DEFAULT_PACE_MS) as number,
+    jitter,
+    dryRun: has('dry-run'),
   };
 }
 
@@ -123,7 +223,9 @@ function parseArgs(argv: string[]): CliArgs {
  * ve o an diskte olmayanlarla sinirlanir; boylece "yalnizca eksikler"
  * garantisi guvenilmez bir istemciye BAGLI OLMAZ.
  */
-function coverageRoots(args: CliArgs): Array<{ path: string; label: string }> | null {
+function coverageRoots(
+  args: CliArgs,
+): Array<{ path: string; label: string }> | null {
   if (!args.coverageManifest) return null;
 
   /** Su anda diskte olan kategoriler — agac artefaktindan (breadcrumb turevli). */
@@ -150,10 +252,14 @@ function coverageRoots(args: CliArgs): Array<{ path: string; label: string }> | 
       `${queue.needsReview.length} need URL review (no source href)`,
   );
   for (const t of queue.targets.slice(0, 10)) {
-    console.log(`[autopilot]   -> ${t.categoryUrl}  (${t.fullPath.join(' / ')})`);
+    console.log(
+      `[autopilot]   -> ${t.categoryUrl}  (${t.fullPath.join(' / ')})`,
+    );
   }
   if (queue.targets.length === 0) {
-    throw new Error('Coverage queue is empty: nothing left to collect for the chosen priorities.');
+    throw new Error(
+      'Coverage queue is empty: nothing left to collect for the chosen priorities.',
+    );
   }
   return queue.roots;
 }
@@ -162,9 +268,13 @@ function coverageRoots(args: CliArgs): Array<{ path: string; label: string }> | 
  * "02:00-10:00" -> bir sonraki kapanis aninin epoch ms degeri.
  * Kapanis saati suanki saatten kucukse ERTESI GUNE tasinir.
  */
-export function resolveWindowDeadline(spec: string, now: Date = new Date()): number {
+export function resolveWindowDeadline(
+  spec: string,
+  now: Date = new Date(),
+): number {
   const match = /^(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})$/.exec(spec.trim());
-  if (!match) throw new Error(`Invalid --window "${spec}"; expected HH:MM-HH:MM`);
+  if (!match)
+    throw new Error(`Invalid --window "${spec}"; expected HH:MM-HH:MM`);
   const endHour = Number(match[3]);
   const endMinute = Number(match[4]);
 
@@ -188,7 +298,10 @@ async function buildReference(args: CliArgs): Promise<{
   }
   const snapshotPath = resolveSnapshotPath();
   const lookup = new SnapshotFingerprintLookup(snapshotPath);
-  await lookup.open({ source: DEFAULT_SNAPSHOT_SOURCE, canonicalMakes: args.makes });
+  await lookup.open({
+    source: DEFAULT_SNAPSHOT_SOURCE,
+    canonicalMakes: args.makes,
+  });
   return {
     lookup,
     describe: `snapshot fingerprints: ${lookup.size} (read-only ${snapshotPath})`,
@@ -196,10 +309,62 @@ async function buildReference(args: CliArgs): Promise<{
   };
 }
 
-export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
-  const args = parseArgs(argv);
+/** backend paket koku — ts-node ve derlenmis kosuda ayni yere cikar. */
+function backendRoot(): string {
+  let dir = __dirname;
+  for (let up = 0; up < 8; up += 1) {
+    if (fs.existsSync(path.join(dir, 'package.json'))) return dir;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return path.resolve(__dirname, '../../..');
+}
 
-  const runDir = path.resolve(__dirname, '../../../data/market-refresh/autopilot', args.runId);
+async function serve(
+  args: CliArgs,
+  provider: BridgeSessionProvider,
+  banner: string[],
+  onShutdown: () => Promise<void>,
+): Promise<void> {
+  const bridge = new AutopilotBridge({
+    provider,
+    port: args.port,
+    log: (line) => console.log(`[autopilot] ${line}`),
+  });
+  const bound = await bridge.listen();
+
+  console.log('');
+  console.log('  NAKITGARAJ — CHROME AUTOPILOT BRIDGE');
+  console.log(
+    `  bind        http://${bound.host}:${bound.port}   (loopback only)`,
+  );
+  for (const line of banner) console.log(`  ${line}`);
+  console.log(
+    '  auth        none — loopback bind + Host check + extension origin/marker',
+  );
+  console.log(
+    '  -> Set the bridge address in the extension popup and press START once.',
+  );
+  console.log('');
+
+  const shutdown = async () => {
+    await bridge.close();
+    await onShutdown();
+    process.exit(0);
+  };
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+}
+
+// ------------------------------------------------------------------ market
+
+async function runMarket(args: CliArgs): Promise<void> {
+  const runDir = path.resolve(
+    backendRoot(),
+    'data/market-refresh/autopilot',
+    args.runId,
+  );
   fs.mkdirSync(runDir, { recursive: true });
 
   const staging = new StagingStore(path.join(runDir, 'staging.jsonl'));
@@ -233,52 +398,217 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
         deadlineMs !== null ? Date.now() + deadlineMs : deadlineFromWindow();
       // Manifest modunda uzantinin kok listesi YOK SAYILIR.
       const effective = manifestRoots ?? roots;
-      session = AutopilotSession.start({ ...baseOptions, deadlineAtMs }, effective);
+      session = AutopilotSession.start(
+        { ...baseOptions, deadlineAtMs },
+        effective,
+      );
       return session;
     },
     resume: () => {
-      session = AutopilotSession.resume({ ...baseOptions, deadlineAtMs: deadlineFromWindow() });
+      session = AutopilotSession.resume({
+        ...baseOptions,
+        deadlineAtMs: deadlineFromWindow(),
+      });
       return session;
     },
   };
 
-  const bridge = new AutopilotBridge({
+  await serve(
+    args,
     provider,
-    port: args.port,
-    log: (line) => console.log(`[autopilot] ${line}`),
-  });
-
-  const bound = await bridge.listen();
-
-  console.log('');
-  console.log('  NAKITGARAJ — CHROME AUTOPILOT BRIDGE');
-  console.log(`  bind        http://${bound.host}:${bound.port}   (loopback only)`);
-  console.log(`  run id      ${args.runId}`);
-  console.log(`  source      ${args.source} (${args.baseUrl})`);
-  console.log(`  run dir     ${runDir}`);
-  console.log(`  reference   ${reference.describe}`);
-  console.log(`  window      ${args.windowSpec || 'unbounded'}`);
-  console.log(
-    `  scope       ${
-      args.scope
-        ? `${args.scope.make} / ${args.scope.series} under ${args.scope.rootPath}, ` +
-          `max ${args.scope.maxResultPages} page(s)/leaf` +
-          `${args.scope.requireChildStructure ? ', stop if child structure unreadable' : ''}` +
-          `${args.scope.stopOnUnknown ? ', stop if count unreadable' : ''}`
-        : 'UNBOUNDED (full monthly refresh)'
-    }`,
+    [
+      `mode        market (monthly refresh: card observations -> staging)`,
+      `run id      ${args.runId}`,
+      `source      ${args.source} (${args.baseUrl})`,
+      `run dir     ${runDir}`,
+      `reference   ${reference.describe}`,
+      `window      ${args.windowSpec || 'unbounded'}`,
+      `scope       ${
+        args.scope
+          ? `${args.scope.make} / ${args.scope.series} under ${args.scope.rootPath}, ` +
+            `max ${args.scope.maxResultPages} page(s)/leaf` +
+            `${args.scope.requireChildStructure ? ', stop if child structure unreadable' : ''}` +
+            `${args.scope.stopOnUnknown ? ', stop if count unreadable' : ''}`
+          : 'UNBOUNDED (full monthly refresh)'
+      }`,
+    ],
+    () => reference.close(),
   );
-  console.log('  auth        none — loopback bind + Host check + extension origin/marker');
-  console.log('  -> Just set the bridge address in the extension popup and press START.');
-  console.log('');
+}
 
-  const shutdown = async () => {
-    await bridge.close();
-    await reference.close();
-    process.exit(0);
+// --------------------------------------------------------------- structure
+
+async function runStructure(args: CliArgs): Promise<void> {
+  const root = backendRoot();
+  const artifact = loadArtifact();
+  if (!artifact) {
+    throw new Error(
+      'Hierarchy artifact not found. Run "npm run hierarchy:build" first: the structure ' +
+        'collector needs it to know which category pages the corpus already holds.',
+    );
+  }
+  const corpus = new CorpusIndex();
+  if (!corpus.root || !fs.existsSync(corpus.root)) {
+    throw new Error(
+      `Corpus root unknown or missing (${corpus.root || 'null'}). Set VEHICLE_CORPUS_ROOT ` +
+        'to the folder that holds the make folders.',
+    );
+  }
+
+  const runDirName = args.dryRun ? `${args.runId}-dry-run` : args.runId;
+  const runDir = path.resolve(
+    root,
+    'data/market-refresh/autopilot',
+    runDirName,
+  );
+  fs.mkdirSync(runDir, { recursive: true });
+  const checkpointPath = path.join(runDir, 'checkpoint.json');
+  if (args.dryRun && fs.existsSync(checkpointPath))
+    fs.unlinkSync(checkpointPath);
+  const checkpointFile = new AtomicChecksummedFile<StructureCheckpointPayload>(
+    checkpointPath,
+  );
+
+  const log = (line: string) => console.log(`[structure] ${line}`);
+  const rebuild =
+    args.rebuildEvery > 0 && !args.dryRun
+      ? new NpmRebuildRunner({
+          cwd: root,
+          logDir: path.join(runDir, 'rebuild-logs'),
+          log,
+        })
+      : null;
+
+  const baseOptions: Omit<StructureSessionOptions, 'deadlineAtMs'> = {
+    runId: args.runId,
+    source: args.source,
+    baseUrl: args.baseUrl,
+    checkpointFile,
+    corpus,
+    runDir,
+    maxPages: args.maxPages,
+    rebuildEvery: args.rebuildEvery,
+    rebuild,
+    paceMs: args.paceMs,
+    jitter: args.jitter,
+    log,
   };
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
+
+  const deadlineFromWindow = () =>
+    args.windowSpec ? resolveWindowDeadline(args.windowSpec) : null;
+
+  if (args.dryRun) {
+    const session = StructureSession.start(
+      { ...baseOptions, deadlineAtMs: null },
+      args.roots,
+    );
+    const scan = session.scanCorpus();
+    printDryRun(session, scan, args, corpus.root);
+    return;
+  }
+
+  let session: StructureSession | null = null;
+  const provider: BridgeSessionProvider = {
+    current: () => session,
+    start: ({ deadlineMs }) => {
+      const deadlineAtMs =
+        deadlineMs !== null ? Date.now() + deadlineMs : deadlineFromWindow();
+      // Kokler CLI'dan gelir; uzantinin acik sekmesi kok DEGILDIR.
+      session = StructureSession.start(
+        { ...baseOptions, deadlineAtMs },
+        args.roots,
+      );
+      return session;
+    },
+    resume: () => {
+      session = StructureSession.resume({
+        ...baseOptions,
+        deadlineAtMs: deadlineFromWindow(),
+      });
+      return session;
+    },
+  };
+
+  const resumable = checkpointFile.exists();
+  await serve(
+    args,
+    provider,
+    [
+      `mode        structure (recursive category pages -> raw HTML -> corpus)`,
+      `run id      ${args.runId}${resumable ? '   (checkpoint found: START resumes it)' : ''}`,
+      `source      ${args.source} (${args.baseUrl})`,
+      `run dir     ${runDir}`,
+      `corpus      ${corpus.root}  (${corpus.nodeCount} known nodes)`,
+      `roots       ${args.roots.join(', ')}`,
+      `budget      ${args.maxPages === null ? 'unbounded' : `max ${args.maxPages} page(s) this run`}`,
+      `rebuild     ${args.rebuildEvery > 0 ? `every ${args.rebuildEvery} saved page(s) + final` : 'off'}`,
+      `pacing      ${args.paceMs} ms ± ${Math.round(args.jitter * 100)}%`,
+      `window      ${args.windowSpec || 'unbounded'}`,
+    ],
+    () => Promise.resolve(),
+  );
+}
+
+function printDryRun(
+  session: StructureSession,
+  scan: { present: number; missing: number },
+  args: CliArgs,
+  corpusRoot: string,
+): void {
+  const targets = session.targetsView();
+  const pending = targets.filter((t) => t.status === 'PENDING');
+  const byMake = new Map<string, number>();
+  const byDepth = new Map<number, number>();
+  for (const t of pending) {
+    byMake.set(t.make || '?', (byMake.get(t.make || '?') || 0) + 1);
+    const d = t.depth ?? -1;
+    byDepth.set(d, (byDepth.get(d) || 0) + 1);
+  }
+  console.log('');
+  console.log('  STRUCTURE DRY RUN — no request was sent to the source');
+  console.log(`  corpus       ${corpusRoot}`);
+  console.log(`  roots        ${args.roots.join(', ')}`);
+  console.log(
+    `  present      ${scan.present} category page(s) satisfied from disk (children expanded from them)`,
+  );
+  console.log(
+    `  to fetch     ${pending.length} category page(s) missing from the corpus`,
+  );
+  console.log(
+    `  by depth     ${[...byDepth.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .map(([d, n]) => `d${d}=${n}`)
+      .join('  ')}`,
+  );
+  console.log(
+    `  by make      ${[...byMake.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 15)
+      .map(([m, n]) => `${m}=${n}`)
+      .join('  ')}${byMake.size > 15 ? '  ...' : ''}`,
+  );
+  console.log('');
+  console.log('  first targets (in queue order):');
+  for (const t of pending.slice(0, 30)) {
+    console.log(
+      `    ${t.key.padEnd(48)} ${(t.expectedPath || [t.label]).join(' / ')}` +
+        `${t.navResultCount !== null ? `  (${t.navResultCount} ilan)` : ''}`,
+    );
+  }
+  if (pending.length > 30)
+    console.log(`    ... and ${pending.length - 30} more`);
+  console.log('');
+  console.log(
+    `  dry-run checkpoint: ${session.report().runId} -> data/market-refresh/autopilot/${args.runId}-dry-run/`,
+  );
+}
+
+export async function main(
+  argv: string[] = process.argv.slice(2),
+): Promise<void> {
+  const args = parseArgs(argv);
+  if (args.mode === 'structure') return runStructure(args);
+  return runMarket(args);
 }
 
 if (require.main === module) {

@@ -30,10 +30,148 @@ export type AutopilotState =
   | 'INCOMPLETE'
   /** Kuyruk bitti; tek eksiklik duman testinin kasitli sayfa kirpmasi. */
   | 'SMOKE_LIMIT_REACHED'
+  /**
+   * Yapi toplayicisi: toplama DURDU, agac/atama artefaktlari yeniden
+   * kuruluyor ve dogrulama kapisi kosuyor. Uzanti bu sirada yalnizca bekler.
+   */
+  | 'REBUILDING'
   | 'ERROR';
 
 /** Kopru -> uzanti: bir sonraki TEK adim. Uzanti kendi basina karar vermez. */
-export type DirectiveType = 'DISCOVER' | 'COLLECT_PAGE' | 'HALT';
+export type DirectiveType =
+  'DISCOVER' | 'COLLECT_PAGE' | 'CAPTURE_PAGE' | 'WAIT' | 'HALT';
+
+/**
+ * YAPI TOPLAYICISI: kategori sayfasini HAM HTML olarak yakala.
+ *
+ * Uzanti bu adimda HICBIR SEY AYRISTIRMAZ: sayfaya gider, yuklenmesini bekler,
+ * `document.documentElement.outerHTML`'i oldugu gibi kopruye verir. Breadcrumb,
+ * menu ve satir okuma KOPRUDE, korpusu okuyan AYNI ayristiriciyla yapilir
+ * (`vehicle-hierarchy/page-classification`). Boylece "toplayicinin okudugu"
+ * ile "agacin okudugu" hicbir zaman ayrisamaz.
+ */
+export interface CapturePageDirective {
+  type: 'CAPTURE_PAGE';
+  runId: string;
+  /** Hedef kimligi: normalize kategori yolu, orn. "/audi-a3-a3-sedan". */
+  targetKey: string;
+  url: string;
+  label: string;
+  /** Beklenen breadcrumb zinciri (Otomobil'den sonrasi). Bilinmiyorsa null. */
+  expectedPath: string[] | null;
+  /** Uzantinin bu adimdan SONRA bekleyecegi sure — koprude jitter'li hesaplanir. */
+  delayMs: number;
+}
+
+/** Kopru mesgul (yeniden kurma, korpus taramasi): uzanti bekler ve tekrar sorar. */
+export interface WaitDirective {
+  type: 'WAIT';
+  runId: string;
+  delayMs: number;
+  reason: string;
+}
+
+/** Uzantidan gelen ham sayfa yakalamasi. HTML DEGISTIRILMEDEN tasinir. */
+export interface PageCapture {
+  runId: string;
+  targetKey: string;
+  /** Tarayicinin gezinme SONUNDA bulundugu adres (yonlendirme kaniti). */
+  finalUrl: string;
+  /** document.title — teshis icin; kimlik breadcrumb'dan okunur. */
+  title: string;
+  html: string;
+}
+
+/**
+ * Yakalama sonucu. YALNIZCA `SAVED` ve `ALREADY_PRESENT` hedefi tamamlar.
+ *
+ *   SAVED                 gecerli kategori sayfasi, breadcrumb hedefle ayni, korpusa yazildi
+ *   ALREADY_PRESENT       ayni kategori korpusta zaten okunabilir halde; istek GONDERILMEDI
+ *   REDIRECT_MISMATCH     kaynak baska bir kategoriye yonlendirdi; sayfa korpusa YAZILMADI
+ *   NO_BREADCRUMB         sayfa kimligini soylemiyor; kanit sayilmaz
+ *   NON_CATEGORY_PAGE     kok vitrin gibi arac kategorisi olmayan sayfa (kok hedef haric)
+ *   LOGIN_REQUIRED / TWO_FACTOR_REQUIRED / ACCESS_RESTRICTED
+ *                         guvenlik/erisim duvari: kosu DURUR, kullanici elle duzeltir
+ *   UNKNOWN_FORMAT        ayristirici sayfayi anlamadi: kosu DURUR, once ayristirici duzeltilir
+ *   PARSE_ERROR           ayristirici istisna atti: kosu DURUR
+ */
+export type CaptureOutcome =
+  | 'SAVED'
+  | 'ALREADY_PRESENT'
+  | 'REDIRECT_MISMATCH'
+  | 'NO_BREADCRUMB'
+  | 'NON_CATEGORY_PAGE'
+  | 'LOGIN_REQUIRED'
+  | 'TWO_FACTOR_REQUIRED'
+  | 'ACCESS_RESTRICTED'
+  | 'UNKNOWN_FORMAT'
+  | 'PARSE_ERROR';
+
+export interface PageCaptureResult {
+  outcome: CaptureOutcome;
+  /** Ayristiricinin sayfa sinifi (page-classification.PageStatus). */
+  pageStatus: string;
+  breadcrumb: string[] | null;
+  savedFile: string | null;
+  /** Sayfanin menusunde ilan edilen DOGRUDAN cocuk sayisi. */
+  childrenDeclared: number;
+  childrenEnqueued: number;
+  /** Cocuklardan zaten kuyrukta/tamamlanmis olanlar (tekrar YOK). */
+  childrenAlreadyKnown: number;
+  /** Menu okundu ve alt kategori yok: kaynaktan dogrulanmis terminal. */
+  terminal: boolean;
+  /** Bu yakalama kosuyu durdurdu mu (guvenlik/bilinmeyen bicim). */
+  paused: boolean;
+  pauseReason: string | null;
+}
+
+/** Yapi toplayicisinin canli durumu (panel + CLI). */
+export interface StructureStatus {
+  runId: string;
+  mode: 'STRUCTURE';
+  state: AutopilotState;
+  source: string;
+  completed: number;
+  queued: number;
+  remaining: number;
+  failed: number;
+  blocked: number;
+  attempted: number;
+  pagesSaved: number;
+  alreadyPresent: number;
+  redirectMismatch: number;
+  securityBlocks: number;
+  parseFailures: number;
+  /** Bu kosuda kaynaktan KESFEDILEN (korpusta olmayan) kategori sayisi. */
+  newNodesDiscovered: number;
+  newTerminalNodes: number;
+  duplicatesSkipped: number;
+  currentKey: string | null;
+  currentPath: string[] | null;
+  currentMake: string | null;
+  currentUrl: string | null;
+  lastSuccessKey: string | null;
+  lastSuccessAt: string | null;
+  lastSavedFile: string | null;
+  pauseReason: string | null;
+  lastError: string | null;
+  maxPages: number | null;
+  rebuildEvery: number;
+  rebuilds: number;
+  sinceRebuild: number;
+  lastGate: 'PASS' | 'FAIL' | null;
+  runComplete: boolean;
+  deadlineAt: string | null;
+  startedAt: string;
+  updatedAt: string;
+  /** Panel uyumu (piyasa modu alanlariyla ayni adlar). */
+  currentTrail: string[];
+  doneJobs: number;
+  pendingJobs: number;
+  blockedJobs: number;
+  scopeLimited: boolean;
+  scope: string | null;
+}
 
 /** Sayimi/cocuklari okunacak kaynak dugumu (henuz toplanmaz). */
 export interface DiscoverDirective {
@@ -63,7 +201,12 @@ export interface HaltDirective {
   reason: string;
 }
 
-export type AutopilotDirective = DiscoverDirective | CollectPageDirective | HaltDirective;
+export type AutopilotDirective =
+  | DiscoverDirective
+  | CollectPageDirective
+  | CapturePageDirective
+  | WaitDirective
+  | HaltDirective;
 
 /** Uzantidan gelen HAM kart. Sayisal alanlar METINDIR — ayristirma koprude. */
 export interface ObservedCard {
@@ -139,7 +282,8 @@ export interface DiscoveryReport {
   secondaryPartitions?: ObservedChildNode[];
 }
 
-export type AccessRestrictionKind = 'CAPTCHA' | 'AUTH_REQUIRED' | 'HTTP_403' | 'HTTP_429';
+export type AccessRestrictionKind =
+  'CAPTCHA' | 'AUTH_REQUIRED' | 'HTTP_403' | 'HTTP_429';
 
 export interface AccessRestrictionReport {
   runId: string;

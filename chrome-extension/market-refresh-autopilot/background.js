@@ -2,12 +2,20 @@
  * ARKA PLAN SERVIS CALISANI — OTOPILOT DONGUSU.
  *
  * Dongu tektir ve basittir:
- *   kopruden TEK yonerge al -> tek sekmede gezin -> sayfayi OKU -> gozlemi
- *   kopruye gonder -> sabit tempo bekle -> tekrar.
+ *   kopruden TEK yonerge al -> tek sekmede gezin -> sayfayi OKU/YAKALA -> gozlemi
+ *   kopruye gonder -> koprunun soyledigi kadar bekle -> tekrar.
  *
  * BURADA TOPLAYICI MANTIGI YOKTUR. Bolumleme, sayfalama karari, tekillestirme,
- * checkpoint ve tamamlanma sozlesmesi koprude yasar. Servis calisani oldurulse
- * bile kayip yoktur: durum diskteki checkpoint'tedir, RESUME kaldigi yerden devam eder.
+ * checkpoint, kategori kimligi ve tamamlanma sozlesmesi koprude yasar. Servis
+ * calisani oldurulse bile kayip yoktur: durum diskteki checkpoint'tedir, RESUME
+ * kaldigi yerden devam eder.
+ *
+ * IKI YONERGE AILESI, AYNI DONGU:
+ *   DISCOVER / COLLECT_PAGE  piyasa modu — icerik betigi DOM'dan kart/sayim okur
+ *   CAPTURE_PAGE             yapi modu  — sayfanin HAM HTML'i oldugu gibi kopruye
+ *                            gider; uzanti HICBIR SEY ayristirmaz, korpusu okuyan
+ *                            ayristirici koprude calisir
+ *   WAIT                     kopru mesgul (yeniden kurma / korpus taramasi): bekle
  *
  * ERISIM KONTROLU ATLATILMAZ: engel gorulurse dongu DURUR ve kullanicidan
  * manuel mudahale istenir. Otomatik yeniden deneme, hesap degistirme, CAPTCHA
@@ -26,7 +34,10 @@ const EXTENSION_MARKER = '1';
 
 const DEFAULTS = {
   bridgeUrl: 'http://127.0.0.1:8791',
-  /** Sabit, muhafazakar tempo. Rastgele "insan taklidi" YOK. */
+  /**
+   * Yedek tempo. Kopru her yonergeyle kendi (jitter'li) beklemesini gonderir;
+   * bu deger yalnizca kopru sure vermezse kullanilir.
+   */
   pacingMs: 1500,
   sourceOrigin: 'https://www.sahibinden.com',
   tabId: null,
@@ -34,6 +45,9 @@ const DEFAULTS = {
   lastState: 'IDLE',
   lastError: null,
 };
+
+/** Durdurmayan koprulerdeki durumlar: dongu surer. */
+const CONTINUE_STATES = new Set(['RUNNING', 'REBUILDING']);
 
 let loopRunning = false;
 
@@ -160,6 +174,7 @@ async function setState(state, error = null) {
   await writeConfig({ lastState: state, lastError: error });
   const badge = {
     RUNNING: { text: '▶', color: '#1a7f37' },
+    REBUILDING: { text: '⟳', color: '#0969da' },
     PAUSED: { text: '❚❚', color: '#9a6700' },
     ACCESS_RESTRICTED: { text: '!', color: '#b42318' },
     DEADLINE_REACHED: { text: '⏱', color: '#9a6700' },
@@ -172,6 +187,18 @@ async function setState(state, error = null) {
 
   await chrome.action.setBadgeText({ text: badge.text });
   await chrome.action.setBadgeBackgroundColor({ color: badge.color });
+}
+
+/**
+ * Koprunun bir gonderim sonrasi bildirdigi durum kosuyu durdurdu mu.
+ * Durdurduysa dongu biter; sebep panelde gorunur. Sessiz yeniden deneme YOK.
+ */
+async function stopIfHalted(payload) {
+  const status = payload && payload.status;
+  if (!status || !status.state || CONTINUE_STATES.has(status.state)) return false;
+  await writeConfig({ shouldRun: false });
+  await setState(status.state, status.pauseReason || status.lastError || null);
+  return true;
 }
 
 // --------------------------------------------------------------------- dongu
@@ -192,6 +219,13 @@ async function runLoop() {
         return;
       }
 
+      if (directive.type === 'WAIT') {
+        // Kopru mesgul (yeniden kurma / korpus taramasi). Gezinme YOK, sadece bekle.
+        await setState('RUNNING');
+        await sleep(Number(directive.delayMs) || config.pacingMs);
+        continue;
+      }
+
       const tabId = await ensureTab(config);
       await navigate(tabId, directive.url);
       const observation = await observe(tabId, directive);
@@ -202,7 +236,7 @@ async function runLoop() {
           method: 'POST',
           body: {
             runId: directive.runId,
-            nodePath: directive.nodePath,
+            nodePath: directive.nodePath || directive.targetKey || null,
             kind: observation.accessRestricted.kind,
             evidence: observation.accessRestricted.evidence,
           },
@@ -212,8 +246,24 @@ async function runLoop() {
         return;
       }
 
-      if (directive.type === 'DISCOVER') {
-        await bridgeFetch(config, '/autopilot/discovery', {
+      let payload;
+      if (directive.type === 'CAPTURE_PAGE') {
+        /**
+         * YAPI MODU: ham HTML, dokunulmadan. Kimlik (breadcrumb), menu ve
+         * satirlar koprude okunur; uzanti ne "cocuk", ne "yaprak" bilir.
+         */
+        payload = await bridgeFetch(config, '/autopilot/page-capture', {
+          method: 'POST',
+          body: {
+            runId: directive.runId,
+            targetKey: directive.targetKey,
+            finalUrl: observation.url,
+            title: observation.title,
+            html: observation.html,
+          },
+        });
+      } else if (directive.type === 'DISCOVER') {
+        payload = await bridgeFetch(config, '/autopilot/discovery', {
           method: 'POST',
           body: {
             runId: directive.runId,
@@ -225,7 +275,7 @@ async function runLoop() {
           },
         });
       } else {
-        await bridgeFetch(config, '/autopilot/page-batch', {
+        payload = await bridgeFetch(config, '/autopilot/page-batch', {
           method: 'POST',
           body: {
             runId: directive.runId,
@@ -240,8 +290,11 @@ async function runLoop() {
         });
       }
 
+      if (await stopIfHalted(payload)) return;
+
       await setState('RUNNING');
-      await sleep(config.pacingMs);
+      // Tempo KOPRUDEN gelir (muhafazakar, jitter'li); yoksa yedek sabit tempo.
+      await sleep(Number(directive.delayMs) || config.pacingMs);
     }
   } catch (err) {
     // Sessiz yeniden deneme YOK: hata gorunur kilinir, durum diskte durur.
@@ -254,16 +307,24 @@ async function runLoop() {
 
 // --------------------------------------------------------------------- komut
 
-/** Kok kategori: kullanicinin ACIK oldugu kaynak sayfasindan alinir. */
+/**
+ * Kok kategori: kullanicinin ACIK oldugu kaynak sayfasindan alinir (piyasa
+ * modu). Yapi modunda kopru bunu YOK SAYAR — kokler CLI'dan gelir — ama
+ * adanmis sekme yine burada secilir/acilir.
+ */
 async function resolveRootFromTabs(config) {
   const tabs = await chrome.tabs.query({ url: `${config.sourceOrigin}/*` });
   const tab = tabs.find((t) => t.id === config.tabId) || tabs[0];
   if (!tab || !tab.url) {
-    throw new Error('Open the source category page in a tab first, then press START.');
+    const created = await ensureTab(config);
+    return { tabId: created, roots: [] };
   }
   const url = new URL(tab.url);
   const path = `${url.pathname.replace(/\/+$/, '')}${url.search}` || '/';
-  return { tabId: tab.id, root: { path, label: (tab.title || path).replace(/\s+/g, ' ').trim() } };
+  return {
+    tabId: tab.id,
+    roots: [{ path, label: (tab.title || path).replace(/\s+/g, ' ').trim() }],
+  };
 }
 
 async function handleCommand(message) {
@@ -309,19 +370,19 @@ async function handleCommand(message) {
     }
 
     case 'START': {
-      const { tabId, root } = await resolveRootFromTabs(config);
+      const { tabId, roots } = await resolveRootFromTabs(config);
       await writeConfig({ tabId });
       await bridgeFetch(config, '/autopilot/start', {
         method: 'POST',
         body: {
-          roots: [root],
+          roots,
           ...(Number.isFinite(message.deadlineMs) ? { deadlineMs: message.deadlineMs } : {}),
         },
       });
       await writeConfig({ shouldRun: true });
       await setState('RUNNING');
       runLoop();
-      return { ok: true, root };
+      return { ok: true, roots };
     }
 
     case 'RESUME': {

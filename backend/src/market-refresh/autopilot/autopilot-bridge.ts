@@ -34,12 +34,13 @@ import * as http from 'http';
 import { AddressInfo } from 'net';
 import {
   AccessRestrictionReport,
+  AutopilotDirective,
   AutopilotProtocolError,
   ChildStructureSignal,
   DiscoveryReport,
   PageBatch,
+  PageCapture,
 } from './autopilot-contracts';
-import { AutopilotSession } from './autopilot-session';
 
 /**
  * Sabit, GIZLI OLMAYAN uzanti isareti. Kimlik dogrulama DEGILDIR; ozel baslik
@@ -50,16 +51,42 @@ export const AUTOPILOT_EXTENSION_MARKER = '1';
 
 /** 4 MB: 50 kartlik bir sayfa paketi icin fazlasiyla yeterli. */
 export const MAX_BODY_BYTES = 4 * 1024 * 1024;
+/**
+ * 16 MB: ham kategori sayfasi (canli DOM'un outerHTML'i). Korpustaki en buyuk
+ * kayit ~0.6 MB; tavan, kaynak sayfaya reklam/betik sisse bile yeter ama
+ * sinirsiz govdeye izin vermez.
+ */
+export const MAX_CAPTURE_BODY_BYTES = 16 * 1024 * 1024;
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]', '::1']);
 
+/**
+ * Koprunun bir oturumdan bekledigi yuzey. Iki oturum turu vardir:
+ *   - AutopilotSession  (piyasa modu: DISCOVER / COLLECT_PAGE, kart gozlemi)
+ *   - StructureSession  (yapi modu: CAPTURE_PAGE, ham HTML -> korpus)
+ * Her uc nokta yalnizca oturumun destekledigi islemi cagirir; digerine 400 doner.
+ */
+export interface BridgeSession {
+  status(): unknown;
+  nextDirective(): AutopilotDirective;
+  pause(): void;
+  stop(): void;
+  reportAccessRestricted(report: AccessRestrictionReport): void;
+  submitDiscovery?(report: DiscoveryReport): unknown;
+  submitPageBatch?(batch: PageBatch): unknown;
+  submitPageCapture?(capture: PageCapture): unknown;
+}
+
 export interface BridgeSessionProvider {
   /** Aktif oturum (yoksa null). */
-  current(): AutopilotSession | null;
-  /** Yeni kosu baslat. */
-  start(input: { roots: Array<{ path: string; label: string }>; deadlineMs: number | null }): AutopilotSession;
+  current(): BridgeSession | null;
+  /** Yeni kosu baslat. Kok listesi bos olabilir; modun kendisi karar verir. */
+  start(input: {
+    roots: Array<{ path: string; label: string }>;
+    deadlineMs: number | null;
+  }): BridgeSession;
   /** Checkpoint'ten devam et. */
-  resume(): AutopilotSession;
+  resume(): BridgeSession;
 }
 
 export interface BridgeOptions {
@@ -111,8 +138,12 @@ export class AutopilotBridge {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 
-  private async handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
-    const origin = typeof req.headers.origin === 'string' ? req.headers.origin : null;
+  private async handle(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    const origin =
+      typeof req.headers.origin === 'string' ? req.headers.origin : null;
 
     // 1) Uzak (loopback disi) baglantilar kabul edilmez.
     const remote = req.socket.remoteAddress || '';
@@ -147,17 +178,32 @@ export class AutopilotBridge {
       return sendJson(res, 403, { error: 'MISSING_EXTENSION_MARKER' }, origin);
     }
 
+    const pathname = new URL(req.url || '/', 'http://127.0.0.1').pathname;
+
     let body: unknown = null;
     if (req.method === 'POST') {
       try {
-        body = await readJsonBody(req);
+        const limit =
+          pathname === '/autopilot/page-capture'
+            ? MAX_CAPTURE_BODY_BYTES
+            : MAX_BODY_BYTES;
+        body = await readJsonBody(req, limit);
       } catch (err: any) {
-        return sendJson(res, 400, { error: 'BAD_BODY', message: err.message }, origin);
+        return sendJson(
+          res,
+          400,
+          { error: 'BAD_BODY', message: err.message },
+          origin,
+        );
       }
     }
 
-    const pathname = new URL(req.url || '/', 'http://127.0.0.1').pathname;
-    const ctx: RequestContext = { method: req.method || 'GET', pathname, origin, body };
+    const ctx: RequestContext = {
+      method: req.method || 'GET',
+      pathname,
+      origin,
+      body,
+    };
 
     try {
       const result = this.route(ctx);
@@ -166,7 +212,12 @@ export class AutopilotBridge {
     } catch (err: any) {
       if (err instanceof AutopilotProtocolError) {
         this.log(`${ctx.method} ${ctx.pathname} -> 400`);
-        return sendJson(res, 400, { error: 'PROTOCOL', message: err.message }, origin);
+        return sendJson(
+          res,
+          400,
+          { error: 'PROTOCOL', message: err.message },
+          origin,
+        );
       }
       throw err;
     }
@@ -186,7 +237,10 @@ export class AutopilotBridge {
     if (ctx.method === 'POST' && ctx.pathname === '/autopilot/start') {
       const input = requireObject(ctx.body);
       const roots = parseRoots(input.roots);
-      const deadlineMs = parseOptionalPositiveInt(input.deadlineMs, 'deadlineMs');
+      const deadlineMs = parseOptionalPositiveInt(
+        input.deadlineMs,
+        'deadlineMs',
+      );
       const session = provider.start({ roots, deadlineMs });
       return { status: 200, payload: session.status() };
     }
@@ -215,19 +269,37 @@ export class AutopilotBridge {
 
     if (ctx.method === 'POST' && ctx.pathname === '/autopilot/discovery') {
       const session = this.requireSession();
+      if (!session.submitDiscovery) throw unsupported('discovery');
       const report = parseDiscoveryReport(ctx.body);
-      const outcome = session.submitDiscovery(report);
+      const outcome = session.submitDiscovery(report) as object;
       return { status: 200, payload: { ...outcome, status: session.status() } };
     }
 
     if (ctx.method === 'POST' && ctx.pathname === '/autopilot/page-batch') {
       const session = this.requireSession();
+      if (!session.submitPageBatch) throw unsupported('page-batch');
       const batch = parsePageBatch(ctx.body);
-      const result = session.submitPageBatch(batch);
+      const result = session.submitPageBatch(batch) as object;
       return { status: 200, payload: { ...result, status: session.status() } };
     }
 
-    if (ctx.method === 'POST' && ctx.pathname === '/autopilot/access-restricted') {
+    /**
+     * YAPI MODU: ham HTML yakalamasi. Govde burada YALNIZCA sekil olarak
+     * dogrulanir; siniflandirma, kimlik kontrolu ve korpusa yazma oturumda,
+     * korpusu okuyan ayni ayristiriciyla yapilir.
+     */
+    if (ctx.method === 'POST' && ctx.pathname === '/autopilot/page-capture') {
+      const session = this.requireSession();
+      if (!session.submitPageCapture) throw unsupported('page-capture');
+      const capture = parsePageCapture(ctx.body);
+      const result = session.submitPageCapture(capture) as object;
+      return { status: 200, payload: { ...result, status: session.status() } };
+    }
+
+    if (
+      ctx.method === 'POST' &&
+      ctx.pathname === '/autopilot/access-restricted'
+    ) {
       const session = this.requireSession();
       const report = parseAccessRestriction(ctx.body);
       session.reportAccessRestricted(report);
@@ -237,18 +309,29 @@ export class AutopilotBridge {
     return { status: 404, payload: { error: 'NOT_FOUND' } };
   }
 
-  private requireSession(): AutopilotSession {
+  private requireSession(): BridgeSession {
     const session = this.opts.provider.current();
-    if (!session) throw new AutopilotProtocolError('No active run; call /autopilot/start first');
+    if (!session)
+      throw new AutopilotProtocolError(
+        'No active run; call /autopilot/start first',
+      );
     return session;
   }
+}
 
+function unsupported(endpoint: string): AutopilotProtocolError {
+  return new AutopilotProtocolError(
+    `/autopilot/${endpoint} is not supported by the active run mode (check --mode on the bridge)`,
+  );
 }
 
 function hasExtensionMarker(req: http.IncomingMessage): boolean {
   const raw = req.headers[AUTOPILOT_EXTENSION_HEADER];
   const provided = Array.isArray(raw) ? raw[0] : raw;
-  return typeof provided === 'string' && provided.trim() === AUTOPILOT_EXTENSION_MARKER;
+  return (
+    typeof provided === 'string' &&
+    provided.trim() === AUTOPILOT_EXTENSION_MARKER
+  );
 }
 
 // ------------------------------------------------------------------ helpers
@@ -270,7 +353,8 @@ function corsHeaders(origin: string | null): Record<string, string> {
   if (origin && isExtensionOrigin(origin)) {
     headers['Access-Control-Allow-Origin'] = origin;
     headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS';
-    headers['Access-Control-Allow-Headers'] = `content-type, ${AUTOPILOT_EXTENSION_HEADER}`;
+    headers['Access-Control-Allow-Headers'] =
+      `content-type, ${AUTOPILOT_EXTENSION_HEADER}`;
     headers['Access-Control-Max-Age'] = '600';
   }
   return headers;
@@ -291,14 +375,17 @@ function sendJson(
   res.end(body);
 }
 
-function readJsonBody(req: http.IncomingMessage): Promise<unknown> {
+function readJsonBody(
+  req: http.IncomingMessage,
+  limit = MAX_BODY_BYTES,
+): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
     req.on('data', (chunk: Buffer) => {
       size += chunk.length;
-      if (size > MAX_BODY_BYTES) {
-        reject(new Error(`Body exceeds ${MAX_BODY_BYTES} bytes`));
+      if (size > limit) {
+        reject(new Error(`Body exceeds ${limit} bytes`));
         req.destroy();
         return;
       }
@@ -341,14 +428,22 @@ function requirePositiveInt(value: unknown, field: string): number {
   return value;
 }
 
-function parseOptionalPositiveInt(value: unknown, field: string): number | null {
+function parseOptionalPositiveInt(
+  value: unknown,
+  field: string,
+): number | null {
   if (value === undefined || value === null) return null;
   return requirePositiveInt(value, field);
 }
 
+/**
+ * Kok listesi. BOS OLABILIR: yapi modunda kokler CLI'dan gelir ve uzantinin
+ * gonderdigi liste yok sayilir; piyasa modu bos listeyi kendisi reddeder.
+ */
 function parseRoots(value: unknown): Array<{ path: string; label: string }> {
-  if (!Array.isArray(value) || value.length === 0) {
-    throw new AutopilotProtocolError('"roots" must be a non-empty array');
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) {
+    throw new AutopilotProtocolError('"roots" must be an array');
   }
   return value.map((raw, i) => {
     const node = requireObject(raw);
@@ -366,7 +461,8 @@ function parseRoots(value: unknown): Array<{ path: string; label: string }> {
  */
 function parseChildren(value: unknown, field: string) {
   if (value === undefined || value === null) return [];
-  if (!Array.isArray(value)) throw new AutopilotProtocolError(`"${field}" must be an array`);
+  if (!Array.isArray(value))
+    throw new AutopilotProtocolError(`"${field}" must be an array`);
   return value.map((raw, i) => {
     const node = requireObject(raw);
     const count = node.count;
@@ -374,7 +470,10 @@ function parseChildren(value: unknown, field: string) {
       path: requireString(node.path, `${field}[${i}].path`),
       label: typeof node.label === 'string' ? node.label : String(node.path),
       countText: typeof node.countText === 'string' ? node.countText : null,
-      count: typeof count === 'number' && Number.isFinite(count) ? Math.floor(count) : null,
+      count:
+        typeof count === 'number' && Number.isFinite(count)
+          ? Math.floor(count)
+          : null,
     };
   });
 }
@@ -385,7 +484,10 @@ function parseDiscoveryReport(body: unknown): DiscoveryReport {
   const input = requireObject(body);
   const count = input.count;
   const structure = input.childStructure;
-  if (structure !== undefined && !CHILD_STRUCTURE_SIGNALS.has(String(structure))) {
+  if (
+    structure !== undefined &&
+    !CHILD_STRUCTURE_SIGNALS.has(String(structure))
+  ) {
     throw new AutopilotProtocolError(
       `"childStructure" must be one of ${[...CHILD_STRUCTURE_SIGNALS].join(', ')}`,
     );
@@ -393,58 +495,101 @@ function parseDiscoveryReport(body: unknown): DiscoveryReport {
   return {
     runId: requireString(input.runId, 'runId'),
     nodePath: requireString(input.nodePath, 'nodePath'),
-    count: typeof count === 'number' && Number.isFinite(count) ? Math.floor(count) : null,
+    count:
+      typeof count === 'number' && Number.isFinite(count)
+        ? Math.floor(count)
+        : null,
     /** Ham sayim metni: verildiginde sayiyi KOPRU cozer, uzanti degil. */
-    ...(typeof input.countText === 'string' ? { countText: input.countText } : {}),
+    ...(typeof input.countText === 'string'
+      ? { countText: input.countText }
+      : {}),
     children: parseChildren(input.children, 'children'),
-    secondaryPartitions: parseChildren(input.secondaryPartitions, 'secondaryPartitions'),
-    ...(structure === undefined ? {} : { childStructure: structure as ChildStructureSignal }),
+    secondaryPartitions: parseChildren(
+      input.secondaryPartitions,
+      'secondaryPartitions',
+    ),
+    ...(structure === undefined
+      ? {}
+      : { childStructure: structure as ChildStructureSignal }),
   };
 }
 
 function parsePageBatch(body: unknown): PageBatch {
   const input = requireObject(body);
   const cards = input.cards;
-  if (!Array.isArray(cards)) throw new AutopilotProtocolError('"cards" must be an array');
+  if (!Array.isArray(cards))
+    throw new AutopilotProtocolError('"cards" must be an array');
 
   return {
     runId: requireString(input.runId, 'runId'),
     nodePath: requireString(input.nodePath, 'nodePath'),
     page: requirePositiveInt(input.page, 'page'),
-    categoryText: typeof input.categoryText === 'string' ? input.categoryText : '',
+    categoryText:
+      typeof input.categoryText === 'string' ? input.categoryText : '',
     pageUrl: typeof input.pageUrl === 'string' ? input.pageUrl : '',
     hasNextPage: input.hasNextPage === true,
     parseFailures:
-      typeof input.parseFailures === 'number' && Number.isFinite(input.parseFailures)
+      typeof input.parseFailures === 'number' &&
+      Number.isFinite(input.parseFailures)
         ? Math.max(0, Math.floor(input.parseFailures))
         : 0,
     cards: cards.map((raw, i) => {
       const card = requireObject(raw);
       return {
-        sourceListingId: requireString(card.sourceListingId, `cards[${i}].sourceListingId`),
+        sourceListingId: requireString(
+          card.sourceListingId,
+          `cards[${i}].sourceListingId`,
+        ),
         href: typeof card.href === 'string' ? card.href : '',
         title: typeof card.title === 'string' ? card.title : '',
         priceText: typeof card.priceText === 'string' ? card.priceText : null,
-        mileageText: typeof card.mileageText === 'string' ? card.mileageText : null,
+        mileageText:
+          typeof card.mileageText === 'string' ? card.mileageText : null,
         yearText: typeof card.yearText === 'string' ? card.yearText : null,
-        locationText: typeof card.locationText === 'string' ? card.locationText : null,
+        locationText:
+          typeof card.locationText === 'string' ? card.locationText : null,
       };
     }),
   };
 }
 
-const ACCESS_KINDS = new Set(['CAPTCHA', 'AUTH_REQUIRED', 'HTTP_403', 'HTTP_429']);
+/**
+ * Ham sayfa yakalamasi. HTML DEGISTIRILMEZ ve burada AYRISTIRILMAZ; yalnizca
+ * bos olmadigi ve dize oldugu dogrulanir.
+ */
+function parsePageCapture(body: unknown): PageCapture {
+  const input = requireObject(body);
+  return {
+    runId: requireString(input.runId, 'runId'),
+    targetKey: requireString(input.targetKey, 'targetKey'),
+    finalUrl: typeof input.finalUrl === 'string' ? input.finalUrl : '',
+    title: typeof input.title === 'string' ? input.title : '',
+    html: requireString(input.html, 'html'),
+  };
+}
+
+const ACCESS_KINDS = new Set([
+  'CAPTCHA',
+  'AUTH_REQUIRED',
+  'HTTP_403',
+  'HTTP_429',
+]);
 
 function parseAccessRestriction(body: unknown): AccessRestrictionReport {
   const input = requireObject(body);
   const kind = requireString(input.kind, 'kind');
   if (!ACCESS_KINDS.has(kind)) {
-    throw new AutopilotProtocolError(`"kind" must be one of ${[...ACCESS_KINDS].join(', ')}`);
+    throw new AutopilotProtocolError(
+      `"kind" must be one of ${[...ACCESS_KINDS].join(', ')}`,
+    );
   }
   return {
     runId: requireString(input.runId, 'runId'),
     nodePath: typeof input.nodePath === 'string' ? input.nodePath : null,
     kind: kind as AccessRestrictionReport['kind'],
-    evidence: typeof input.evidence === 'string' ? input.evidence.slice(0, 500) : undefined,
+    evidence:
+      typeof input.evidence === 'string'
+        ? input.evidence.slice(0, 500)
+        : undefined,
   };
 }

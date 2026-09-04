@@ -255,6 +255,24 @@
     }
 
     /**
+     * YAPI MODU: HAM HTML, AYRISTIRMA YOK.
+     *
+     * Sayfanin canli DOM'u oldugu gibi seri hale getirilir ve kopruye
+     * verilir. Breadcrumb, kategori menusu ve ilan satirlari BURADA OKUNMAZ;
+     * kopru, elle kaydedilmis korpusu okuyan AYNI ayristiriciyi kullanir.
+     * Boylece toplayici ile agac kurucusu iki farkli sey "goremez".
+     */
+    if (op && op.type === 'CAPTURE_PAGE') {
+      const doctype = document.doctype ? `<!DOCTYPE ${document.doctype.name}>` : '';
+      return {
+        ok: true,
+        url: location.href,
+        title: document.title,
+        html: `${doctype}\n${document.documentElement.outerHTML}`,
+      };
+    }
+
+    /**
      * KESIF ADIMI ILAN OKUMAZ.
      *
      * Sira sozlesmesi: once dugumun BUYUKLUGU okunur, sonra toplanip

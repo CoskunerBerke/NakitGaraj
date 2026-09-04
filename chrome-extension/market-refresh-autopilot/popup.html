@@ -23,14 +23,33 @@
 
   <section class="card">
     <div class="controls">
-      <button id="start" class="primary">Aylık tazelemeyi başlat</button>
+      <button id="start" class="primary">Koşuyu başlat</button>
       <button id="pause" class="secondary">Duraklat</button>
       <button id="resume" class="secondary">Devam et</button>
       <button id="stop" class="danger">Durdur</button>
     </div>
   </section>
 
-  <section class="card">
+  <section class="card" id="structureCard" hidden>
+    <h2>Yapı toplayıcı</h2>
+    <dl class="status">
+      <div><dt>Koşu</dt><dd id="sRunId">—</dd></div>
+      <div><dt>Şu anki yol</dt><dd id="sPath">—</dd></div>
+      <div><dt>Marka</dt><dd id="sMake">—</dd></div>
+      <div><dt>Tamamlanan</dt><dd id="sCompleted">—</dd></div>
+      <div><dt>Kuyrukta</dt><dd id="sQueued">—</dd></div>
+      <div><dt>Başarısız / bloke</dt><dd id="sFailed">—</dd></div>
+      <div><dt>Kaydedilen sayfa</dt><dd id="sSaved">—</dd></div>
+      <div><dt>Zaten mevcut</dt><dd id="sPresent">—</dd></div>
+      <div><dt>Yeni düğüm</dt><dd id="sNew">—</dd></div>
+      <div><dt>Son başarı</dt><dd id="sLast">—</dd></div>
+      <div><dt>Yeniden kurma</dt><dd id="sRebuild">—</dd></div>
+      <div><dt>Koşu tam mı</dt><dd id="sComplete">—</dd></div>
+      <div><dt>Durma sebebi</dt><dd id="sPause">—</dd></div>
+    </dl>
+  </section>
+
+  <section class="card" id="marketCard">
     <dl class="status">
       <div><dt>Koşu</dt><dd id="runId">—</dd></div>
       <div><dt>Marka</dt><dd id="make">—</dd></div>
