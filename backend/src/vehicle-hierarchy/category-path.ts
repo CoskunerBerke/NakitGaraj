@@ -44,8 +44,16 @@ const LISTING_SUFFIXES: RegExp[] = [
   /\s*-?\s*sahibinden\.com('?da)?\b.*$/i,
 ];
 
-/** Kaydedilen dosyanin "- 3" gibi kopya numarasi ve uzantisi. */
-const FILE_NOISE: RegExp[] = [/\.html?$/i, /\s*-\s*\d+\s*$/, /\s*\(\d+\)\s*$/];
+/**
+ * Kaydedilen dosyanin " - 3" gibi KOPYA numarasi ve uzantisi.
+ *
+ * COK ONEMLI: tireden once EN AZ BIR BOSLUK zorunludur. Eski `/\s*-\s*\d+$/`
+ * kalibi `Saab 9-5` gibi gercek model adlarinin sonundaki `-5` bolumunu da
+ * kopya numarasi sanip siliyor ve hem `Saab 9-3` hem `Saab 9-5` dosyalarini
+ * `Saab 9` altinda birlestiriyordu. Dosya kopya eki korpusta `... - 3.html`
+ * bicimindedir; model icindeki tire ise bosluksuzdur.
+ */
+const FILE_NOISE: RegExp[] = [/\.html?$/i, /\s+-\s*\d+\s*$/, /\s*\(\d+\)\s*$/];
 
 /**
  * Tamamen pazarlama metni olan, hicbir arac kategorisi tasimayan sayfalar.
