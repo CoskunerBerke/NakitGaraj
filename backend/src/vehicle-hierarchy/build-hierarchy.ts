@@ -17,6 +17,7 @@ import {
 } from './hierarchy-source';
 import { findByPath } from './hierarchy-tree';
 import { discoverChildrenFromListings } from './listing-children';
+import { reconcileDirectNavPaths } from './nav-path-reconciler';
 import * as fs from 'fs';
 
 /** Sunum oncesi zorunlu regresyon: gercek Sahibinden zinciri. */
@@ -47,7 +48,19 @@ export async function main(): Promise<void> {
         `${evidence.recoveredFromLaterFile} recovered from a later file of the same category`,
     );
 
-    let artifact = buildArtifact(observations, knownMakes);
+    /**
+     * DIRECT-NAV YOL UZLASTIRMASI — KESIN KANIT DUZ categoryString'DEN USTUN.
+     *
+     * Gercek korpusta kanitlandi: Seat/Ibiza ebeveyn sayfasi `1.6 TDI`yi
+     * dogrudan cocuk ilan ederken, cocugun kendi dosyasi breadcrumb vermeyip
+     * yalnizca `Seat Ibiza 1.6 TDI` categoryString'i tasiyabiliyor. Bu durumda
+     * flat gozlemi marka+geri-kalan diye kurtarmak `Seat / Ibiza` ara seviyesini
+     * atlar. Parent direct-nav exact yolu flat gozleme PROMOTE eder; iki exact
+     * kanit celisirse reconciler throw eder ve build fail-closed durur.
+     */
+    const reconciled = reconcileDirectNavPaths(observations);
+
+    let artifact = buildArtifact(reconciled, knownMakes);
     let tree = artifactToTree(artifact);
 
     /**
@@ -68,7 +81,8 @@ export async function main(): Promise<void> {
         'whose own page was never saved',
     );
     if (discovery.observations.length > 0) {
-      artifact = buildArtifact([...observations, ...discovery.observations], knownMakes);
+      const withDiscovery = reconcileDirectNavPaths([...reconciled, ...discovery.observations]);
+      artifact = buildArtifact(withDiscovery, knownMakes);
       tree = artifactToTree(artifact);
     }
     const report = auditHierarchy(tree);
