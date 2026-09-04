@@ -174,6 +174,50 @@ describe('direct-nav path reconciliation', () => {
     expect(auditHierarchy(tree).findings.filter((f) => f.kind === 'DUPLICATE_CHILD_NAME')).toEqual([]);
   });
 
+  it('lets the exact parent page casing outrank descendant breadcrumb prefixes', () => {
+    /**
+     * Gercek Fiat/Uno gate regresyonu. Dosya sirasi child-first olabilir:
+     * derin sayfa prefix olarak `UNO` tasirken parent'in kendi sayfasi `Uno`
+     * tasiyor. Parent own-page exact breadcrumb kanonik olmali; ilk gorulen
+     * descendant prefix casing'i kazanamamali.
+     */
+    const observations: ObservedCategory[] = [
+      {
+        categoryString: 'Fiat UNO 60 S',
+        listingCount: 5,
+        sourceFiles: ['fiat-uno-60-s.html'],
+        pathSegments: ['Fiat', 'UNO', '60 S'],
+        navChildLabels: [],
+      },
+      {
+        categoryString: 'Fiat Uno',
+        listingCount: 0,
+        sourceFiles: ['fiat-uno.html'],
+        pathSegments: ['Fiat', 'Uno'],
+        navChildLabels: ['60 S'],
+      },
+      {
+        categoryString: 'Fiat UNO 45 S',
+        listingCount: 0,
+        sourceFiles: [],
+        pathSegments: ['Fiat', 'UNO', '45 S'],
+      },
+    ];
+
+    const reconciled = reconcileDirectNavPaths(observations);
+    expect(
+      reconciled.find((o) => o.categoryString === 'Fiat UNO 60 S')?.pathSegments,
+    ).toEqual(['Fiat', 'Uno', '60 S']);
+    expect(
+      reconciled.find((o) => o.categoryString === 'Fiat UNO 45 S')?.pathSegments,
+    ).toEqual(['Fiat', 'Uno', '45 S']);
+
+    const tree = buildHierarchy(reconciled, { knownMakes: ['Fiat'] });
+    expect(findByPath(tree, ['Fiat', 'Uno'])).not.toBeNull();
+    expect(findByPath(tree, ['Fiat', 'Uno', '60 S'])).not.toBeNull();
+    expect(findByPath(tree, ['Fiat', 'UNO'])).toBeNull();
+  });
+
   it('fails closed when the same source file claims two exact breadcrumb paths', () => {
     const observations: ObservedCategory[] = [
       {
