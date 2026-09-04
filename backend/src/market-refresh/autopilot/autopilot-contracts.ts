@@ -146,6 +146,12 @@ export interface StructureStatus {
   newNodesDiscovered: number;
   newTerminalNodes: number;
   duplicatesSkipped: number;
+  /** Breadcrumb'i beklentiden derin cikip ayni dalda kabul edilen sayfalar. */
+  refinedPaths?: number;
+  /** Torun breadcrumb'indan URL'iyle kazanilan, menude listelenmemis ara seviyeler. */
+  intermediatesRecovered?: number;
+  /** Devam ederken yeniden acilan eski sahte REDIRECT_MISMATCH hedefleri. */
+  legacyRetried?: number;
   currentKey: string | null;
   currentPath: string[] | null;
   currentMake: string | null;

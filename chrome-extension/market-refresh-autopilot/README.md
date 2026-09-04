@@ -31,6 +31,7 @@ Kurallar:
 | Yeniden kurma | `--rebuild-every 50`: 50 kayıttan sonra `hierarchy:build → listings:build → coverage:manifest → corpus:validate`. Kapı düşerse koşu durur |
 | Kökler | CLI'dan (`--roots`), uzantıdan **değil**. Varsayılan site kökü `/kategori/otomobil` → tüm markalar; marka adı hiçbir yerde sabit değil |
 | Sonuç sayfaları | Yapı modu **sayfalama yapmaz**; hiyerarşi tamamlanmadan piyasa derinliği toplanmaz |
+| Atlanan ara seviye | Kaynak menüsü tek çocuklu bir seviyeyi atlayıp torunları listeleyebilir (`li.clN` seviye işareti bunu söyler). Torun "doğrudan çocuk" sayılmaz; kendi breadcrumb'ı ile kabul edilir ve atlanan seviye breadcrumb'ın **kendi href'i** ile kuyruğa girer (etiketten slug uydurulmaz). Aynı dal + aynı son etiket + araya giren seviye = güvenli inceltme; başka dal, başka son etiket ya da başka own-URL = `REDIRECT_MISMATCH` |
 
 Komutlar (PowerShell; Git Bash'te başa `MSYS_NO_PATHCONV=1` ekleyin):
 

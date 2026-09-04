@@ -23,8 +23,8 @@ import * as fs from 'fs';
 import {
   BreadcrumbItem,
   extractBreadcrumbItems,
-  isStrictDescendantSlug,
-  sahibindenSlug,
+  ownSlugOf,
+  splitNavChildren,
 } from './nav-children';
 import {
   PageStatus,
@@ -60,12 +60,16 @@ interface FormatFingerprint {
  * KATEGORI baglantilarinin bicimiydi. Bu yuzden breadcrumb'in kendi href'ine
  * bakilir — ayristiricinin gercekten okudugu alan.
  */
-function fingerprint(html: string, breadcrumbItems: BreadcrumbItem[] | null): FormatFingerprint {
+function fingerprint(
+  html: string,
+  breadcrumbItems: BreadcrumbItem[] | null,
+): FormatFingerprint {
   const categoryHrefs = (breadcrumbItems ?? []).map((i) => i.href);
   return {
     absoluteHrefs: categoryHrefs.some((h) => /^https?:\/\//i.test(h)),
     lowercasedAttributes:
-      html.includes('data-categorybreadcrumbid') && !html.includes('data-categoryBreadcrumbId'),
+      html.includes('data-categorybreadcrumbid') &&
+      !html.includes('data-categoryBreadcrumbId'),
     wrappedNav: html.includes('jspPane') || html.includes('jspContainer'),
   };
 }
@@ -92,16 +96,34 @@ export interface CorpusReport {
   makeFolders: number;
   byStatus: Record<string, number>;
   formats: Record<string, number>;
-  failures: Array<{ file: string; status: PageStatus; title: string; detail?: string }>;
+  failures: Array<{
+    file: string;
+    status: PageStatus;
+    title: string;
+    detail?: string;
+  }>;
   navEdges: number;
   navParents: number;
   matchedEdges: number;
   missingEdges: Array<{ parent: string; child: string; file: string }>;
-  wrongParentEdges: Array<{ parent: string; child: string; foundUnder: string; file: string }>;
+  wrongParentEdges: Array<{
+    parent: string;
+    child: string;
+    foundUnder: string;
+    file: string;
+  }>;
   ignoredUsefulFiles: string[];
   listingRowsSeen: number;
   uniqueListingIds: number;
   assignments: AssignmentAudit | null;
+  /** Menusu yalnizca torun listeleyen sayfalar (kaynak ara seviyeyi atlamis). */
+  collapsedNavPages: number;
+  /** Dogrudan cocuk OLMAYAN alt soy baglantilari (torun ve otesi). */
+  deeperNavLinks: number;
+  /** Slug alt soy derken seviye isareti ust/kardes diyen baglantilar. SIFIR olmali. */
+  inconsistentNavLinks: number;
+  /** Seviye isareti tasimayan alt soy baglantilari (dogrudan sayildi). */
+  unleveledNavLinks: number;
 }
 
 /**
@@ -123,7 +145,10 @@ export interface AssignmentAudit {
   danglingNodeIds: number;
 }
 
-export function validateCorpus(root: string, nodes: Map<string, HierarchyNode> | null): CorpusReport {
+export function validateCorpus(
+  root: string,
+  nodes: Map<string, HierarchyNode> | null,
+): CorpusReport {
   const files = listAllHtmlFiles(root);
   /**
    * Boru hattinin GERCEKTEN gordugu kume — kural burada TEKRAR YAZILMAZ,
@@ -141,6 +166,10 @@ export function validateCorpus(root: string, nodes: Map<string, HierarchyNode> |
   const listingIds = new Set<string>();
   let listingRowsSeen = 0;
   let totalBytes = 0;
+  let collapsedNavPages = 0;
+  let deeperNavLinks = 0;
+  let inconsistentNavLinks = 0;
+  let unleveledNavLinks = 0;
 
   for (const file of files) {
     let html: string;
@@ -149,7 +178,12 @@ export function validateCorpus(root: string, nodes: Map<string, HierarchyNode> |
       html = fs.readFileSync(file, 'utf-8');
     } catch (err: any) {
       byStatus.PARSE_ERROR = (byStatus.PARSE_ERROR || 0) + 1;
-      failures.push({ file, status: 'PARSE_ERROR', title: '', detail: String(err?.message || err) });
+      failures.push({
+        file,
+        status: 'PARSE_ERROR',
+        title: '',
+        detail: String(err?.message || err),
+      });
       continue;
     }
 
@@ -157,7 +191,12 @@ export function validateCorpus(root: string, nodes: Map<string, HierarchyNode> |
     byStatus[page.status] = (byStatus[page.status] || 0) + 1;
 
     if (isFailure(page.status)) {
-      failures.push({ file, status: page.status, title: page.title, detail: page.detail });
+      failures.push({
+        file,
+        status: page.status,
+        title: page.title,
+        detail: page.detail,
+      });
       continue;
     }
 
@@ -177,14 +216,33 @@ export function validateCorpus(root: string, nodes: Map<string, HierarchyNode> |
      */
     if (!pipelineFiles.has(file)) ignoredUsefulFiles.push(file);
 
-    if (page.status !== 'CATEGORY_PAGE' || !page.breadcrumb || !page.navChildren) continue;
+    if (
+      page.status !== 'CATEGORY_PAGE' ||
+      !page.breadcrumb ||
+      !page.navChildren
+    )
+      continue;
 
     const parentPath = page.breadcrumb;
-    const own = sahibindenSlug(parentPath);
-    const direct = page.navChildren.filter((c) => isStrictDescendantSlug(own, c.slug));
+    /**
+     * DOGRUDAN COCUK = alt soy slug'i + kaynagin seviye isareti. Kaynak, tek
+     * cocuklu bir ara seviyeyi atlayip torunlari listeleyebilir; torun bir
+     * "ebeveyn -> cocuk" kenari DEGILDIR ve agactan istenmez. Bu sayfalar ve
+     * baglantilari ayrica sayilir; celiskili seviye (slug alt soy, isaret
+     * ust/kardes) kapiyi dusurur.
+     */
+    const own = ownSlugOf(page.ownPath, parentPath);
+    const split = splitNavChildren(page.navChildren, own, parentPath.length);
+    deeperNavLinks += split.deeper.length;
+    inconsistentNavLinks += split.inconsistent.length;
+    unleveledNavLinks += split.unleveled;
+    if (split.direct.length === 0 && split.deeper.length > 0)
+      collapsedNavPages += 1;
+    const direct = split.direct;
     if (direct.length === 0) continue;
     parents.add(parentPath.join(' / '));
-    for (const child of direct) edges.push({ parentPath, childLabel: child.label, file });
+    for (const child of direct)
+      edges.push({ parentPath, childLabel: child.label, file });
   }
 
   const missingEdges: CorpusReport['missingEdges'] = [];
@@ -204,7 +262,8 @@ export function validateCorpus(root: string, nodes: Map<string, HierarchyNode> |
     // Etiketlerde asla gecmeyen ayirici: ["A B","C"] ile ["A","B C"] karismasin.
     const SEP = '\u0000';
     const byPath = new Map<string, HierarchyNode>();
-    for (const node of nodes.values()) byPath.set(node.pathSegments.join(SEP), node);
+    for (const node of nodes.values())
+      byPath.set(node.pathSegments.join(SEP), node);
 
     for (const edge of edges) {
       const parent = byPath.get(edge.parentPath.join(SEP));
@@ -234,7 +293,9 @@ export function validateCorpus(root: string, nodes: Map<string, HierarchyNode> |
   try {
     makeFolders = fs
       .readdirSync(root, { withFileTypes: true })
-      .filter((e) => e.isDirectory() && !e.name.toLowerCase().endsWith('_files')).length;
+      .filter(
+        (e) => e.isDirectory() && !e.name.toLowerCase().endsWith('_files'),
+      ).length;
   } catch {
     makeFolders = 0;
   }
@@ -256,6 +317,10 @@ export function validateCorpus(root: string, nodes: Map<string, HierarchyNode> |
     ignoredUsefulFiles,
     listingRowsSeen,
     uniqueListingIds: listingIds.size,
+    collapsedNavPages,
+    deeperNavLinks,
+    inconsistentNavLinks,
+    unleveledNavLinks,
   };
 }
 
@@ -263,7 +328,9 @@ export function validateCorpus(root: string, nodes: Map<string, HierarchyNode> |
  * Atama artefaktini SALT OKUNUR denetler. Artefakt yoksa null doner ve kapi
  * bu basligi atlar — "dosya yok" ile "dosya bozuk" ayni sey degildir.
  */
-function auditAssignments(nodes: Map<string, HierarchyNode> | null): AssignmentAudit | null {
+function auditAssignments(
+  nodes: Map<string, HierarchyNode> | null,
+): AssignmentAudit | null {
   const artifact = loadAssignments();
   if (!artifact) return null;
 
@@ -285,10 +352,15 @@ function auditAssignments(nodes: Map<string, HierarchyNode> | null): AssignmentA
     if (assignment.evidence === 'UNRESOLVED') audit.unresolved += 1;
     if (assignment.evidence === 'AMBIGUOUS') audit.ambiguous += 1;
     // Kesin havuza yalnizca PAGE_EXACT / ROW_MODEL_EXACT girebilir.
-    if (exact && assignment.evidence !== 'PAGE_EXACT' && assignment.evidence !== 'ROW_MODEL_EXACT') {
+    if (
+      exact &&
+      assignment.evidence !== 'PAGE_EXACT' &&
+      assignment.evidence !== 'ROW_MODEL_EXACT'
+    ) {
       audit.leakedIntoExactPool += 1;
     }
-    if (nodes && exact && !nodes.has(assignment.nodeId)) audit.danglingNodeIds += 1;
+    if (nodes && exact && !nodes.has(assignment.nodeId))
+      audit.danglingNodeIds += 1;
   }
   return audit;
 }
@@ -303,14 +375,18 @@ export async function main(): Promise<void> {
     (await knownRootFromDatabase()) ||
     '';
   if (!root || !fs.existsSync(root)) {
-    console.error('[corpus] korpus koku bulunamadi. VEHICLE_CORPUS_ROOT tanimlayin.');
+    console.error(
+      '[corpus] korpus koku bulunamadi. VEHICLE_CORPUS_ROOT tanimlayin.',
+    );
     process.exit(1);
   }
 
   const artifact = loadArtifact();
   const nodes = artifact ? new Map(artifact.nodes.map((n) => [n.id, n])) : null;
   if (!artifact) {
-    console.log('[corpus] UYARI: artefakt yok — yapi karsilastirmasi atlaniyor.');
+    console.log(
+      '[corpus] UYARI: artefakt yok — yapi karsilastirmasi atlaniyor.',
+    );
   }
 
   const report = validateCorpus(root, nodes);
@@ -320,11 +396,15 @@ export async function main(): Promise<void> {
   line('total GB', (report.totalBytes / 1024 ** 3).toFixed(2));
   line('make folders', report.makeFolders);
   console.log('[corpus] --- page classification ---');
-  for (const [status, count] of Object.entries(report.byStatus).sort((a, b) => b[1] - a[1])) {
+  for (const [status, count] of Object.entries(report.byStatus).sort(
+    (a, b) => b[1] - a[1],
+  )) {
     line(`  ${status}`, count);
   }
   console.log('[corpus] --- save format fingerprints ---');
-  for (const [key, count] of Object.entries(report.formats).sort((a, b) => b[1] - a[1])) {
+  for (const [key, count] of Object.entries(report.formats).sort(
+    (a, b) => b[1] - a[1],
+  )) {
     line(`  ${key}`, count);
   }
   console.log('[corpus] --- structure ---');
@@ -333,6 +413,10 @@ export async function main(): Promise<void> {
   line('edges present in tree', report.matchedEdges);
   line('missing edges', report.missingEdges.length);
   line('wrong-parent edges', report.wrongParentEdges.length);
+  line('collapsed menus (grandchildren only)', report.collapsedNavPages);
+  line('deeper (non-direct) nav links', report.deeperNavLinks);
+  line('inconsistent-level nav links', report.inconsistentNavLinks);
+  line('unleveled nav links', report.unleveledNavLinks);
   console.log('[corpus] --- listings ---');
   line('listing rows read', report.listingRowsSeen);
   line('unique listing ids', report.uniqueListingIds);
@@ -352,14 +436,18 @@ export async function main(): Promise<void> {
   line('ignored useful HTML', report.ignoredUsefulFiles.length);
 
   for (const f of report.failures.slice(0, 20)) {
-    console.log(`[corpus]   ${f.status}  ${f.title || '(no title)'}  ${f.file}`);
+    console.log(
+      `[corpus]   ${f.status}  ${f.title || '(no title)'}  ${f.file}`,
+    );
     if (f.detail) console.log(`[corpus]       ${f.detail}`);
   }
   for (const e of report.missingEdges.slice(0, 20)) {
     console.log(`[corpus]   MISSING  ${e.parent}  ->  ${e.child}`);
   }
   for (const e of report.wrongParentEdges.slice(0, 20)) {
-    console.log(`[corpus]   WRONG PARENT  ${e.parent} -> ${e.child}  (found under ${e.foundUnder})`);
+    console.log(
+      `[corpus]   WRONG PARENT  ${e.parent} -> ${e.child}  (found under ${e.foundUnder})`,
+    );
   }
   for (const f of report.ignoredUsefulFiles.slice(0, 20)) {
     console.log(`[corpus]   IGNORED USEFUL  ${f}`);
@@ -369,9 +457,11 @@ export async function main(): Promise<void> {
     report.failures.length === 0 &&
     report.missingEdges.length === 0 &&
     report.wrongParentEdges.length === 0 &&
+    report.inconsistentNavLinks === 0 &&
     report.ignoredUsefulFiles.length === 0 &&
     (report.assignments === null ||
-      (report.assignments.leakedIntoExactPool === 0 && report.assignments.danglingNodeIds === 0));
+      (report.assignments.leakedIntoExactPool === 0 &&
+        report.assignments.danglingNodeIds === 0));
 
   console.log(`[corpus] RELEASE GATE: ${gate ? 'PASS' : 'FAIL'}`);
   if (!gate) process.exit(1);
@@ -386,7 +476,9 @@ async function knownRootFromDatabase(): Promise<string | null> {
         select: { sourceFile: true },
         take: 50,
       });
-      return resolveCorpusRoot(rows.map((r: any) => r.sourceFile).filter(Boolean));
+      return resolveCorpusRoot(
+        rows.map((r: any) => r.sourceFile).filter(Boolean),
+      );
     } finally {
       await prisma.$disconnect();
     }

@@ -44,9 +44,10 @@ import {
 } from '../../vehicle-hierarchy/page-classification';
 import {
   OTOMOBIL,
-  extractBreadcrumbItems,
+  extractBreadcrumbChain,
+  extractOwnPath,
   isStrictDescendantSlug,
-  normalizeHref,
+  splitNavChildren,
 } from '../../vehicle-hierarchy/nav-children';
 
 export const STRUCTURE_VERSION = 'structure-v1';
@@ -65,7 +66,13 @@ const SCAN_POLL_MS = 750;
 
 export type TargetStatus =
   'PENDING' | 'IN_PROGRESS' | 'COMPLETE' | 'FAILED' | 'BLOCKED';
-export type TargetOrigin = 'ROOT' | 'NAV';
+/**
+ * ROOT        CLI'dan verilen kok
+ * NAV         bir sayfanin menusunden (dogrudan cocuk ya da atlanmis seviyeli torun)
+ * BREADCRUMB  torun sayfasinin breadcrumb'inda gorulen, menude hic listelenmemis
+ *             ara seviye; URL'i breadcrumb'in KENDI href'inden alindi
+ */
+export type TargetOrigin = 'ROOT' | 'NAV' | 'BREADCRUMB';
 
 export interface StructureTarget {
   /** Normalize kategori yolu, orn. "/audi-a3-a3-sedan". Kuyruk kimligi. */
@@ -94,6 +101,17 @@ export interface StructureTarget {
   navResultCount: number | null;
   lastError: string | null;
   updatedAt: string;
+  /**
+   * Kesin yol BILINMIYOR ama bu ata zinciri KESIN: kaynak menusu tek cocuklu
+   * ara seviyeyi atlayip bu hedefi torun olarak listeledi. Breadcrumb bu
+   * onekle baslamali, daha uzun olmali ve son etiketi `label` ile ayni olmali.
+   * Eski checkpoint'lerde alan yoktur (= null).
+   */
+  expectedPrefix?: string[] | null;
+  /** Menude dogrudan cocuk OLMAYAN alt soy baglantisi sayisi (torun ve otesi). */
+  deeperDeclared?: number | null;
+  /** Breadcrumb kaniti bu hedefin beklentisini degistirdiyse onceki beklenti/hata. */
+  reconciledFrom?: string | null;
 }
 
 interface Counters {
@@ -114,6 +132,12 @@ interface Counters {
   newTerminal: number;
   duplicatesSkipped: number;
   consecutiveFailures: number;
+  /** Breadcrumb'in beklentiden DERIN cikip ayni dalda kaldigi kabul edilen sayfalar. */
+  refinedPaths: number;
+  /** Torun breadcrumb'indan URL'iyle kazanilan, menude hic listelenmemis ara seviyeler. */
+  intermediatesRecovered: number;
+  /** Devam ederken yeniden acilan eski sahte REDIRECT_MISMATCH hedefleri. */
+  legacyRetried: number;
 }
 
 export interface RebuildRecord {
@@ -199,6 +223,9 @@ export interface RunReport {
   newCategoryNodes: number;
   newTerminalNodes: number;
   duplicatesSkipped: number;
+  refinedPaths: number;
+  intermediatesRecovered: number;
+  legacyRetried: number;
   rebuilds: RebuildRecord[];
   pauseReason: string | null;
   lastError: string | null;
@@ -219,6 +246,9 @@ function emptyCounters(): Counters {
     newTerminal: 0,
     duplicatesSkipped: 0,
     consecutiveFailures: 0,
+    refinedPaths: 0,
+    intermediatesRecovered: 0,
+    legacyRetried: 0,
   };
 }
 
@@ -336,6 +366,24 @@ export class StructureSession {
       if (target.status === 'IN_PROGRESS') target.status = 'PENDING';
       if (target.status === 'BLOCKED') {
         target.status = target.attempts >= MAX_ATTEMPTS ? 'FAILED' : 'PENDING';
+      }
+      /**
+       * ESKI KOSUDAN KALAN SAHTE "YONLENDIRME" — GERI UYUMLU GOC.
+       *
+       * Kaynak menusu tek cocuklu ara seviyeyi atlayinca hedef "Cupra / Leon /
+       * Impulse" beklentisiyle kuyruga girmis, sayfa ise "Cupra / Leon /
+       * 1.5 eTSI / Impulse" demisti: ayni dal, ayni son etiket, araya bir
+       * seviye girmis. Bu bir yonlendirme DEGILDIR; hedef yeniden denenir ve
+       * kabul kurali (guvenli inceltme) sayfayi bu kez kaydeder. Gercek
+       * kanonik uyusmazlik ("requested X but the page declares itself as Y")
+       * FAILED kalir. Ikinci devam idempotenttir: PENDING'e donmus hedef
+       * artik FAILED degildir, sayac tekrar artmaz.
+       */
+      if (isRetryableLegacyBreadcrumbMismatch(target)) {
+        target.reconciledFrom = target.lastError;
+        target.lastError = `RETRY(nested-nav): ${target.lastError}`;
+        target.status = 'PENDING';
+        session.counters.legacyRetried += 1;
       }
     }
     session.state = 'RUNNING';
@@ -596,20 +644,40 @@ export class StructureSession {
       );
     }
     const chain = page.breadcrumb as string[];
-    if (
-      target.expectedPath &&
-      target.expectedPath.length > 0 &&
-      !samePath(chain, target.expectedPath)
-    ) {
+    /**
+     * KIMLIK IKI KATMANLI: (1) sayfanin kendi URL'i istenen URL ile AYNI olmali
+     * (yukarida); (2) breadcrumb beklentiyle ayni dalda olmali. Beklenti
+     * ebeveyn menusunden geldi ve kaynak menusu tek cocuklu ara seviyeyi
+     * ATLAYABILIYOR: "Cupra / Leon / Impulse" beklenirken sayfa "Cupra / Leon /
+     * 1.5 eTSI / Impulse" der. Ayni dal + ayni son etiket + araya giren
+     * seviye(ler) = GUVENLI INCELTME; breadcrumb otoritedir. Baska dal, baska
+     * son etiket ya da (1)'de baska URL = yonlendirme, korpusa yazilmaz.
+     */
+    const verdict = verifyExpectedPath(target, chain);
+    if (!verdict.ok) {
       return this.fail(
         target,
         capture,
         page,
         'REDIRECT_MISMATCH',
         base,
-        `breadcrumb "${chain.join(' / ')}" differs from expected "${target.expectedPath.join(' / ')}"`,
+        verdict.reason,
       );
     }
+    const previousExpectation = (
+      target.expectedPath ??
+      target.expectedPrefix ??
+      []
+    ).join(' / ');
+    if (verdict.refined) {
+      target.reconciledFrom = previousExpectation;
+      this.counters.refinedPaths += 1;
+      this.log(
+        `REFINED ${target.key}: expected "${previousExpectation}", source breadcrumb "${chain.join(' / ')}"`,
+      );
+    }
+    target.expectedPath = [...chain];
+    target.expectedPrefix = null;
 
     const savedFile = this.opts.corpus.save(chain, html);
     target.status = 'COMPLETE';
@@ -620,6 +688,11 @@ export class StructureSession {
     target.depth = chain.length;
     target.lastError = null;
     target.updatedAt = this.stamp();
+
+    // Breadcrumb'in gosterdigi, menude hic listelenmemis ara seviyeler kuyruga.
+    const recovered = verdict.refined
+      ? this.recoverIntermediates(target, html, chain)
+      : 0;
 
     const expansion = this.expandChildren(target, page, own.slice(1));
     this.counters.saved += 1;
@@ -633,7 +706,9 @@ export class StructureSession {
     this.appendCaptureLog(target, capture, page, 'SAVED', expansion);
     this.log(
       `SAVED ${chain.join(' / ')}  (+${expansion.enqueued} new children, ` +
-        `${expansion.declared} declared, queue ${this.pendingCount()})`,
+        `${expansion.declared} declared, ${expansion.deeper} deeper` +
+        `${recovered > 0 ? `, +${recovered} intermediate(s) from breadcrumb` : ''}, ` +
+        `queue ${this.pendingCount()})`,
     );
     this.persist();
     return {
@@ -712,8 +787,7 @@ export class StructureSession {
     target.make = chain[0] ?? null;
     target.depth = chain.length;
     target.updatedAt = this.stamp();
-    const html = safeRead(evidence.file);
-    const own = html ? ownPathOf(html) : null;
+    const own = page.ownPath;
     const expansion = this.expandChildren(
       target,
       page,
@@ -726,8 +800,12 @@ export class StructureSession {
   }
 
   /**
-   * Menuden DOGRUDAN cocuklar. Kural agacin kullandiginin aynisidir
-   * (`isStrictDescendantSlug`): ustler, kardesler, sayfalama, reklam elenir.
+   * Menuden cocuklar. Kural agacin kullandiginin AYNISIDIR (`splitNavChildren`):
+   * dogrudan cocuk = alt soy slug'i + kaynagin seviye isareti. Ustler,
+   * kardesler, sayfalama, reklam elenir. Kaynak tek cocuklu ara seviyeyi
+   * atlayip TORUN listelediyse torun da kuyruga girer — ama kesin yol
+   * beklentisiyle degil, "bu ata zincirinin altinda" beklentisiyle; kesin
+   * yolu ve atlanan seviyenin URL'ini torunun kendi breadcrumb'i verir.
    * Sayfanin kendi slug'i breadcrumb'in son baglantisindan okunur — etiketten
    * turetilmis slug degil, kaynagin YAZDIGI yol.
    */
@@ -735,57 +813,208 @@ export class StructureSession {
     target: StructureTarget,
     page: PageClassification,
     ownSlug: string | null,
-  ): { declared: number; enqueued: number; known: number } {
+  ): { declared: number; enqueued: number; known: number; deeper: number } {
     const chain = page.breadcrumb ?? [];
     const nav = page.navChildren ?? [];
     const own = ownSlug ?? (chain.length > 0 ? null : '');
-    const direct =
-      own === ''
-        ? nav
-        : own === null
-          ? []
-          : nav.filter((c) => isStrictDescendantSlug(own, c.slug));
+    if (own === null) {
+      target.childrenDeclared = 0;
+      target.deeperDeclared = 0;
+      target.terminal = false;
+      return { declared: 0, enqueued: 0, known: 0, deeper: 0 };
+    }
+    const split = splitNavChildren(nav, own, chain.length);
 
     let enqueued = 0;
     let known = 0;
-    for (const child of direct) {
-      const key = `/${child.slug}`;
-      if (this.seenKeys.has(key)) {
-        known += 1;
-        this.counters.duplicatesSkipped += 1;
-        continue;
-      }
-      this.seenKeys.add(key);
-      this.targets.push({
-        key,
+    for (const child of split.direct) {
+      const added = this.enqueueChild({
+        key: `/${child.slug}`,
         slug: child.slug,
         label: child.label,
         expectedPath: [...chain, child.label],
+        expectedPrefix: null,
         make: chain[0] ?? child.label,
         depth: chain.length + 1,
         parentKey: target.key,
         origin: 'NAV',
-        status: 'PENDING',
-        outcome: null,
-        attempts: 0,
-        savedFile: null,
-        evidenceFile: null,
-        breadcrumb: null,
-        childrenDeclared: null,
-        terminal: null,
         navResultCount: child.count,
-        lastError: null,
-        updatedAt: this.stamp(),
       });
-      enqueued += 1;
+      if (added) enqueued += 1;
+      else known += 1;
     }
-    target.childrenDeclared = direct.length;
+    for (const child of split.deeper) {
+      const added = this.enqueueChild({
+        key: `/${child.slug}`,
+        slug: child.slug,
+        label: child.label,
+        expectedPath: null,
+        expectedPrefix: [...chain],
+        make: chain[0] ?? child.label,
+        depth: null,
+        parentKey: target.key,
+        origin: 'NAV',
+        navResultCount: child.count,
+      });
+      if (added) enqueued += 1;
+      else known += 1;
+    }
+    target.childrenDeclared = split.direct.length;
+    target.deeperDeclared = split.deeper.length;
+    // Terminal: menu okundu, ne dogrudan cocuk ne de atlanmis seviyeli torun var.
     target.terminal =
       page.navChildren !== null &&
       own !== '' &&
-      own !== null &&
-      direct.length === 0;
-    return { declared: direct.length, enqueued, known };
+      split.direct.length === 0 &&
+      split.deeper.length === 0;
+    return {
+      declared: split.direct.length,
+      enqueued,
+      known,
+      deeper: split.deeper.length,
+    };
+  }
+
+  /** Kuyruga TEK giris noktasi: ayni anahtar ikinci kez girmez. */
+  private enqueueChild(fields: {
+    key: string;
+    slug: string;
+    label: string;
+    expectedPath: string[] | null;
+    expectedPrefix: string[] | null;
+    make: string | null;
+    depth: number | null;
+    parentKey: string | null;
+    origin: TargetOrigin;
+    navResultCount: number | null;
+  }): boolean {
+    if (this.seenKeys.has(fields.key)) {
+      this.counters.duplicatesSkipped += 1;
+      return false;
+    }
+    this.seenKeys.add(fields.key);
+    this.targets.push({
+      key: fields.key,
+      slug: fields.slug,
+      label: fields.label,
+      expectedPath: fields.expectedPath,
+      expectedPrefix: fields.expectedPrefix,
+      make: fields.make,
+      depth: fields.depth,
+      parentKey: fields.parentKey,
+      origin: fields.origin,
+      status: 'PENDING',
+      outcome: null,
+      attempts: 0,
+      savedFile: null,
+      evidenceFile: null,
+      breadcrumb: null,
+      childrenDeclared: null,
+      deeperDeclared: null,
+      terminal: null,
+      navResultCount: fields.navResultCount,
+      lastError: null,
+      reconciledFrom: null,
+      updatedAt: this.stamp(),
+    });
+    return true;
+  }
+
+  /**
+   * ATLANAN ARA SEVIYELERI KAZAN — URL KAYNAKTAN, ETIKETTEN DEGIL.
+   *
+   * Inceltilmis bir sayfanin breadcrumb'i ("Cupra / Leon / 1.5 eTSI / Impulse")
+   * menude hic listelenmemis bir ara seviyeyi gosterir. O seviyenin sayfasi
+   * toplanmazsa dogrudan cocuklari hicbir zaman ogrenilmez. URL, breadcrumb
+   * ogesinin KENDI href'inden alinir (/cupra-leon-1.5-etsi); etiketten slug
+   * TURETILMEZ. Href kullanilabilir bir kategori yolu degilse seviye atlanir ve
+   * gunluge yazilir (fail-closed, denetlenebilir).
+   *
+   * Ayni anahtar zaten kuyruktaysa kopya olusmaz; PENDING ise beklentisi
+   * breadcrumb'a cekilir; eski sahte REDIRECT_MISMATCH ise yeniden acilir;
+   * COMPLETE ise dokunulmaz.
+   */
+  private recoverIntermediates(
+    target: StructureTarget,
+    html: string,
+    chain: string[],
+  ): number {
+    const crumbs = extractBreadcrumbChain(html);
+    if (!crumbs || crumbs.length !== chain.length) return 0;
+    let recovered = 0;
+    let parentKey: string | null = null;
+    for (let i = 0; i < crumbs.length - 1; i += 1) {
+      const key = crumbs[i].path;
+      const slug = key.replace(/^\//, '');
+      const parentSlug = parentKey ? parentKey.replace(/^\//, '') : null;
+      const usable =
+        /^[a-z0-9][a-z0-9._-]*$/.test(slug) &&
+        key !== SITE_ROOT &&
+        (i === 0 ||
+          (parentSlug !== null && isStrictDescendantSlug(parentSlug, slug))) &&
+        isStrictDescendantSlug(slug, target.slug);
+      if (!usable) {
+        this.log(
+          `SKIP intermediate level ${i + 1} ("${chain[i]}") of ${target.key}: breadcrumb href "${key}" is not a usable category path`,
+        );
+        parentKey = null;
+        continue;
+      }
+      const expectedPath = chain.slice(0, i + 1);
+      const existing = this.targets.find((t) => t.key === key);
+      if (!existing) {
+        if (
+          this.enqueueChild({
+            key,
+            slug,
+            label: chain[i],
+            expectedPath,
+            expectedPrefix: null,
+            make: chain[0],
+            depth: i + 1,
+            parentKey,
+            origin: 'BREADCRUMB',
+            navResultCount: null,
+          })
+        ) {
+          recovered += 1;
+          this.counters.intermediatesRecovered += 1;
+          this.log(
+            `RECOVERED intermediate ${key} (${expectedPath.join(' / ')}) from breadcrumb of ${target.key}`,
+          );
+        }
+      } else if (existing.status === 'PENDING') {
+        if (
+          !existing.expectedPath ||
+          !samePathFolded(existing.expectedPath, expectedPath)
+        ) {
+          existing.reconciledFrom = (
+            existing.expectedPath ??
+            existing.expectedPrefix ??
+            []
+          ).join(' / ');
+          existing.expectedPath = expectedPath;
+          existing.expectedPrefix = null;
+          existing.updatedAt = this.stamp();
+        }
+      } else if (
+        existing.status === 'FAILED' &&
+        existing.outcome === 'REDIRECT_MISMATCH' &&
+        !isOwnSlugMismatch(existing)
+      ) {
+        existing.reconciledFrom = existing.lastError;
+        existing.expectedPath = expectedPath;
+        existing.expectedPrefix = null;
+        existing.status = 'PENDING';
+        existing.lastError = `RETRY(breadcrumb-evidence from ${target.key}): ${existing.lastError}`;
+        existing.updatedAt = this.stamp();
+        recovered += 1;
+        this.counters.intermediatesRecovered += 1;
+      }
+      parentKey = key;
+    }
+    if (parentKey) target.parentKey = parentKey;
+    return recovered;
   }
 
   // ----------------------------------------------------------------- failures
@@ -1047,6 +1276,9 @@ export class StructureSession {
       newNodesDiscovered: this.counters.discoveredMissing,
       newTerminalNodes: this.counters.newTerminal,
       duplicatesSkipped: this.counters.duplicatesSkipped,
+      refinedPaths: this.counters.refinedPaths,
+      intermediatesRecovered: this.counters.intermediatesRecovered,
+      legacyRetried: this.counters.legacyRetried,
       currentKey: current ? current.key : null,
       currentPath: current ? current.expectedPath : null,
       currentMake: current ? current.make : null,
@@ -1128,6 +1360,9 @@ export class StructureSession {
       newCategoryNodes: c.discoveredMissing,
       newTerminalNodes: c.newTerminal,
       duplicatesSkipped: c.duplicatesSkipped,
+      refinedPaths: c.refinedPaths,
+      intermediatesRecovered: c.intermediatesRecovered,
+      legacyRetried: c.legacyRetried,
       rebuilds: [...this.rebuilds],
       pauseReason: this.pauseReason,
       lastError: this.lastError,
@@ -1317,29 +1552,162 @@ export class StructureSession {
 /**
  * Sayfanin KENDI kategori yolu: breadcrumb'in son baglantisi. Etiketten slug
  * turetmek yerine kaynagin yazdigi href okunur; kimlik kontrolu buna dayanir.
+ * (Ayristiricinin `extractOwnPath`i — tek okuma yolu.)
  */
 export function ownPathOf(html: string): string | null {
-  const items = extractBreadcrumbItems(html);
-  if (!items || items.length === 0) return null;
-  const last = normalizeHref(items[items.length - 1].href);
-  if (!last) return null;
-  const clean = last.split('?')[0].replace(/\/+$/, '');
-  return clean || null;
+  return extractOwnPath(html);
 }
 
 function samePath(a: string[], b: string[]): boolean {
   return a.length === b.length && a.every((s, i) => s === b[i]);
 }
 
+/**
+ * Etiket esitligi icin Turkce duyarli katlama. YALNIZCA karsilastirma icindir;
+ * kaydedilen yol ve dosya adi daima KAYNAGIN yazdigi casing'i tasir.
+ */
+export function foldLabel(value: string): string {
+  return String(value ?? '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLocaleLowerCase('tr');
+}
+
+function samePathFolded(a: string[], b: string[]): boolean {
+  return (
+    a.length === b.length && a.every((s, i) => foldLabel(s) === foldLabel(b[i]))
+  );
+}
+
+/**
+ * GUVENLI INCELTME: beklenen yol ile gercek breadcrumb AYNI DALDA, gercek DAHA
+ * DERIN, SON ETIKET AYNI (Turkce katlamayla) ve fark yalnizca araya giren bir
+ * ya da daha fazla ara seviye. Baska dal, yeniden adlandirilmis son etiket ya
+ * da ayni derinlikte farkli etiket inceltme DEGILDIR.
+ *
+ *   Cupra / Leon / Impulse  ->  Cupra / Leon / 1.5 eTSI / Impulse   KABUL
+ *   A / B / Trim            ->  A / C / Engine / Trim               RED (baska dal)
+ *   A / B / Trim            ->  A / B / Engine / NewTrim            RED (son etiket)
+ *   Zorlu / Kartal          ->  Zorlu / Kartal Yeni                 RED (derin degil)
+ */
+export function isSafeRefinement(
+  expected: string[],
+  actual: string[],
+): boolean {
+  if (!expected || !actual) return false;
+  if (expected.length < 2 || actual.length <= expected.length) return false;
+  const parent = expected.slice(0, -1);
+  if (!samePathFolded(actual.slice(0, parent.length), parent)) return false;
+  if (
+    foldLabel(actual[actual.length - 1]) !==
+    foldLabel(expected[expected.length - 1])
+  ) {
+    return false;
+  }
+  const inserted = actual.slice(parent.length, -1);
+  return inserted.length >= 1 && inserted.every((s) => foldLabel(s).length > 0);
+}
+
+/** Torun hedefi: breadcrumb kesin ata zincirinin altinda ve son etiket ayni mi. */
+export function isUnderExpectedPrefix(
+  prefix: string[],
+  actual: string[],
+  lastLabel: string,
+): boolean {
+  if (actual.length <= prefix.length) return false;
+  if (!samePathFolded(actual.slice(0, prefix.length), prefix)) return false;
+  return foldLabel(actual[actual.length - 1]) === foldLabel(lastLabel);
+}
+
+export interface PathVerdict {
+  ok: boolean;
+  /** Kabul edildi ama beklenti breadcrumb'a cekildi (araya seviye girdi). */
+  refined: boolean;
+  reason: string;
+}
+
+/**
+ * Hedefin beklentisiyle sayfanin breadcrumb'ini karsilastirir. Sayfanin
+ * KENDI URL'inin istenen URL ile ayni oldugu ONCEDEN dogrulanmis olmalidir;
+ * burasi yalnizca dal/etiket tutarliligina bakar.
+ */
+export function verifyExpectedPath(
+  target: Pick<StructureTarget, 'expectedPath' | 'expectedPrefix' | 'label'>,
+  chain: string[],
+): PathVerdict {
+  const expected = target.expectedPath;
+  if (expected && expected.length > 0) {
+    if (samePath(chain, expected))
+      return { ok: true, refined: false, reason: 'exact' };
+    if (samePathFolded(chain, expected)) {
+      return {
+        ok: true,
+        refined: false,
+        reason: 'exact (casing follows the source)',
+      };
+    }
+    if (isSafeRefinement(expected, chain)) {
+      return {
+        ok: true,
+        refined: true,
+        reason: 'intermediate level(s) inserted by the source',
+      };
+    }
+    return {
+      ok: false,
+      refined: false,
+      reason: `breadcrumb "${chain.join(' / ')}" differs from expected "${expected.join(' / ')}"`,
+    };
+  }
+  const prefix = target.expectedPrefix;
+  if (prefix && prefix.length > 0) {
+    if (isUnderExpectedPrefix(prefix, chain, target.label)) {
+      return {
+        ok: true,
+        refined: true,
+        reason: 'descendant resolved under its expected ancestor',
+      };
+    }
+    return {
+      ok: false,
+      refined: false,
+      reason:
+        `breadcrumb "${chain.join(' / ')}" is not "${target.label}" under expected ancestor ` +
+        `"${prefix.join(' / ')}"`,
+    };
+  }
+  return { ok: true, refined: false, reason: 'no expectation' };
+}
+
+const LEGACY_BREADCRUMB_DIFF =
+  /^REDIRECT_MISMATCH: breadcrumb "(.+)" differs from expected "(.+)"$/;
+const LEGACY_OWN_SLUG =
+  /^REDIRECT_MISMATCH: requested \S+ but the page declares itself as /;
+
+/** Gercek kanonik uyusmazlik: sayfa istenen URL'den BASKA bir URL oldugunu soyledi. */
+export function isOwnSlugMismatch(
+  target: Pick<StructureTarget, 'lastError'>,
+): boolean {
+  return LEGACY_OWN_SLUG.test(String(target.lastError ?? ''));
+}
+
+/**
+ * Eski checkpoint'teki FAILED hedef, guvenli inceltme kuraliyla yeniden
+ * denenebilir mi. Yalnizca "breadcrumb differs from expected" sinifi VE
+ * yapisal olarak ayni dal + ayni son etiket + araya giren seviye. Kanonik
+ * ("requested X but the page declares itself as Y") uyusmazlik ASLA acilmaz.
+ */
+export function isRetryableLegacyBreadcrumbMismatch(
+  target: Pick<StructureTarget, 'status' | 'outcome' | 'lastError'>,
+): boolean {
+  if (target.status !== 'FAILED' || target.outcome !== 'REDIRECT_MISMATCH')
+    return false;
+  const m = LEGACY_BREADCRUMB_DIFF.exec(String(target.lastError ?? ''));
+  if (!m) return false;
+  return isSafeRefinement(m[2].split(' / '), m[1].split(' / '));
+}
+
 function describeError(err: unknown): string {
   if (err instanceof Error) return err.message;
   return String(err);
-}
-
-function safeRead(file: string): string | null {
-  try {
-    return fs.readFileSync(file, 'utf-8');
-  } catch {
-    return null;
-  }
 }

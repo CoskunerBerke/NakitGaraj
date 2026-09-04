@@ -16,6 +16,11 @@ export interface NavEntry {
   label: string;
   slug: string;
   count?: number | null;
+  /**
+   * Kaynagin `li.clN` seviye isareti. Verilmezse bu sayfanin DOGRUDAN cocugu
+   * yazilir (N = sayfa derinligi + 2). Torun taklidi icin +1 verin.
+   */
+  level?: number;
 }
 
 export interface CategoryPageOptions {
@@ -69,10 +74,11 @@ ${crumbs
   </ul>
 </div>`;
 
+  const directLevel = options.chain.length + 2;
   const navItems = (options.nav ?? [])
     .map(
       (n) =>
-        `    <li class="cl5" ${abs ? 'data-categorybreadcrumbid' : 'data-categoryBreadcrumbId'}="1">
+        `    <li class="cl${n.level ?? directLevel}" ${abs ? 'data-categorybreadcrumbid' : 'data-categoryBreadcrumbId'}="1">
       <a ${abs ? 'data-isyepyfilter' : 'data-isYepyFilter'}="false" href="${at(`/${n.slug}`)}?sorting=price_desc" title="${n.label}"><h2>${n.label}</h2></a>
       ${n.count === null || n.count === undefined ? '' : `<span>(${formatCount(n.count)})</span>`}
     </li>`,

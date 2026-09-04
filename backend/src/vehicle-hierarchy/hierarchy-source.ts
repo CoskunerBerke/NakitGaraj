@@ -13,8 +13,13 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { categoryStringFromSourceFile } from './category-path';
 import { auditHierarchy, AuditReport } from './hierarchy-audit';
-import { buildHierarchy, HierarchyNode, HierarchyTree, ObservedCategory } from './hierarchy-tree';
-import { NavChild, isStrictDescendantSlug, sahibindenSlug } from './nav-children';
+import {
+  buildHierarchy,
+  HierarchyNode,
+  HierarchyTree,
+  ObservedCategory,
+} from './hierarchy-tree';
+import { NavChild, ownSlugOf, splitNavChildren } from './nav-children';
 import { PageClassification, classifyPage } from './page-classification';
 
 // v2: dugumler artik `terminalConfirmed` tasiyor; v1 artefakti YUKLENMEZ
@@ -33,7 +38,9 @@ export interface HierarchyArtifact {
 /** Prisma'nin ihtiyac duyulan minik yuzeyi — test icin taklit edilebilir. */
 export interface HierarchySourceClient {
   rawVehicleListing: {
-    groupBy(args: any): Promise<Array<{ sourceFile: string; _count: { _all: number } }>>;
+    groupBy(
+      args: any,
+    ): Promise<Array<{ sourceFile: string; _count: { _all: number } }>>;
   };
   manufacturer: { findMany(args: any): Promise<Array<{ name: string }>> };
 }
@@ -42,9 +49,11 @@ export interface HierarchySourceClient {
  * Kategori sayfasi basina ilan sayisini SALT OKUNUR toplar.
  * groupBy kullanilir: 280k satir bellege cekilmez.
  */
-export async function loadObservations(
-  client: HierarchySourceClient,
-): Promise<{ observations: ObservedCategory[]; knownMakes: string[]; skipped: number }> {
+export async function loadObservations(client: HierarchySourceClient): Promise<{
+  observations: ObservedCategory[];
+  knownMakes: string[];
+  skipped: number;
+}> {
   const groups = await client.rawVehicleListing.groupBy({
     by: ['sourceFile'],
     _count: { _all: true },
@@ -103,7 +112,11 @@ export async function loadObservations(
     if (existing) {
       if (!existing.sourceFiles.includes(file)) existing.sourceFiles.push(file);
     } else {
-      byCategory.set(categoryString, { categoryString, listingCount: 0, sourceFiles: [file] });
+      byCategory.set(categoryString, {
+        categoryString,
+        listingCount: 0,
+        sourceFiles: [file],
+      });
     }
   }
 
@@ -146,7 +159,10 @@ const ASSET_DIR_SUFFIX = '_files';
  * bir seviye daha derine kaydedilmis gercek bir sayfa SESSIZCE gorulmezdi.
  * Derinlik bir varsayim olmaktan cikarildi.
  */
-export function discoverCorpusFiles(knownFiles: string[], rootOverride?: string): string[] {
+export function discoverCorpusFiles(
+  knownFiles: string[],
+  rootOverride?: string,
+): string[] {
   const root = rootOverride || corpusRoot(knownFiles);
   if (!root) return [];
   const known = new Set(knownFiles);
@@ -170,7 +186,8 @@ function walkHtml(dir: string, out: string[], skipAssetDirs: boolean): void {
   for (const entry of entries) {
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      if (skipAssetDirs && entry.name.toLowerCase().endsWith(ASSET_DIR_SUFFIX)) continue;
+      if (skipAssetDirs && entry.name.toLowerCase().endsWith(ASSET_DIR_SUFFIX))
+        continue;
       walkHtml(full, out, skipAssetDirs);
     } else if (entry.name.toLowerCase().endsWith('.html')) {
       out.push(full);
@@ -212,7 +229,9 @@ function corpusRoot(knownFiles: string[]): string | null {
 }
 
 /** Kaydedilen dosyanin bulundugu marka klasoru (yoksa null). */
-export function makeFolderOf(sourceFile: string | null | undefined): string | null {
+export function makeFolderOf(
+  sourceFile: string | null | undefined,
+): string | null {
   const parts = String(sourceFile || '').split(/[\\/]/);
   if (parts.length < 2) return null;
   const folder = parts[parts.length - 2].trim();
@@ -240,6 +259,11 @@ export function attachNavEvidence(
   withPath: number;
   /** Ilk dosyasi kullanilamaz olup SONRAKI dosyasindan kanit alinan kategoriler. */
   recoveredFromLaterFile: number;
+  /**
+   * Menusu yalnizca TORUN listeleyen sayfalar (kaynak tek cocuklu ara
+   * seviyeyi atlamis): dogrudan cocuk kumesi bilinmiyor, terminal degil.
+   */
+  collapsedNav: number;
 } {
   let withEvidence = 0;
   let terminal = 0;
@@ -247,6 +271,7 @@ export function attachNavEvidence(
   let unreadable = 0;
   let withPath = 0;
   let recoveredFromLaterFile = 0;
+  let collapsedNav = 0;
 
   for (const observation of observations) {
     /**
@@ -298,11 +323,31 @@ export function attachNavEvidence(
     observation.pathSegments = chain;
     withPath += 1;
 
-    // Menude ustler ve kardesler de var; yalnizca BU dugumu uzatanlar cocuktur.
-    const own = sahibindenSlug(chain);
-    const direct = (classified.navChildren as NavChild[]).filter((c) =>
-      isStrictDescendantSlug(own, c.slug),
+    /**
+     * Menude ustler ve kardesler de var; yalnizca BU dugumu uzatanlar alt
+     * soydur. Alt soy da yetmez: kaynak, tek cocuklu bir ara seviyeyi
+     * ATLAYIP torunlari listeleyebiliyor (canli DOM, 36 sayfa). Torunu
+     * dogrudan cocuk yazmak "Cupra / Leon / Impulse" gibi ARA SEVIYESI
+     * ATLANMIS sahte bir dugum uretir. Dogrudan cocuk, kaynagin seviye
+     * isaretiyle ayrilir (`splitNavChildren`).
+     */
+    const own = ownSlugOf(classified.ownPath, chain);
+    const split = splitNavChildren(
+      classified.navChildren as NavChild[],
+      own,
+      chain.length,
     );
+    if (split.direct.length === 0 && split.deeper.length > 0) {
+      /**
+       * COCUKLARI VAR AMA DOGRUDAN KUME BILINMIYOR: kanit yok (null).
+       * Terminal SAYILMAZ, sahte cocuk da uretilmez. Gercek cocuk, torun
+       * sayfasinin breadcrumb'i toplandiginda exact yol olarak gelir.
+       */
+      observation.navChildLabels = null;
+      collapsedNav += 1;
+      continue;
+    }
+    const direct = split.direct;
     observation.navChildLabels = direct.map((c) => c.label);
     withEvidence += 1;
     if (direct.length === 0) terminal += 1;
@@ -315,6 +360,7 @@ export function attachNavEvidence(
     unreadable,
     withPath,
     recoveredFromLaterFile,
+    collapsedNav,
   };
 }
 
@@ -379,9 +425,16 @@ export function resolveArtifactPath(): string {
     ) {
       throw new Error(`Invalid hierarchy release pointer at ${pointerFile}`);
     }
-    const released = path.join(artifactRoot, 'versions', pointer.release, 'hierarchy.json');
+    const released = path.join(
+      artifactRoot,
+      'versions',
+      pointer.release,
+      'hierarchy.json',
+    );
     if (!fs.existsSync(released)) {
-      throw new Error(`Hierarchy release pointer references missing artifact ${released}`);
+      throw new Error(
+        `Hierarchy release pointer references missing artifact ${released}`,
+      );
     }
     return released;
   }
@@ -389,7 +442,10 @@ export function resolveArtifactPath(): string {
   return path.join(artifactRoot, 'hierarchy.json');
 }
 
-export function saveArtifact(artifact: HierarchyArtifact, filePath = resolveArtifactPath()): string {
+export function saveArtifact(
+  artifact: HierarchyArtifact,
+  filePath = resolveArtifactPath(),
+): string {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const tmp = `${filePath}.tmp-${process.pid}`;
   fs.writeFileSync(tmp, JSON.stringify(artifact), 'utf-8');
@@ -397,9 +453,13 @@ export function saveArtifact(artifact: HierarchyArtifact, filePath = resolveArti
   return filePath;
 }
 
-export function loadArtifact(filePath = resolveArtifactPath()): HierarchyArtifact | null {
+export function loadArtifact(
+  filePath = resolveArtifactPath(),
+): HierarchyArtifact | null {
   if (!fs.existsSync(filePath)) return null;
-  const parsed = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as HierarchyArtifact;
+  const parsed = JSON.parse(
+    fs.readFileSync(filePath, 'utf-8'),
+  ) as HierarchyArtifact;
   if (parsed.version !== HIERARCHY_ARTIFACT_VERSION) return null;
   return parsed;
 }

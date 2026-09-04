@@ -28,7 +28,8 @@ export async function main(): Promise<void> {
   const prisma = new PrismaClient();
 
   try {
-    const { observations, knownMakes, skipped } = await loadObservations(prisma as any);
+    const { observations, knownMakes, skipped } =
+      await loadObservations(prisma);
     console.log(
       `[hierarchy] observed categories: ${observations.length} ` +
         `(skipped non-category pages: ${skipped}), known makes: ${knownMakes.length}`,
@@ -45,7 +46,8 @@ export async function main(): Promise<void> {
       `[hierarchy] nav evidence: ${evidence.withEvidence} page(s) read, ` +
         `${evidence.terminal} terminal, ${evidence.declaredChildren} declared child categories, ` +
         `${evidence.withPath} with exact breadcrumb path, ${evidence.unreadable} without evidence, ` +
-        `${evidence.recoveredFromLaterFile} recovered from a later file of the same category`,
+        `${evidence.recoveredFromLaterFile} recovered from a later file of the same category, ` +
+        `${evidence.collapsedNav} with a collapsed menu (grandchildren only; direct set unknown)`,
     );
 
     /**
@@ -81,19 +83,27 @@ export async function main(): Promise<void> {
         'whose own page was never saved',
     );
     if (discovery.observations.length > 0) {
-      const withDiscovery = reconcileDirectNavPaths([...reconciled, ...discovery.observations]);
+      const withDiscovery = reconcileDirectNavPaths([
+        ...reconciled,
+        ...discovery.observations,
+      ]);
       artifact = buildArtifact(withDiscovery, knownMakes);
       tree = artifactToTree(artifact);
     }
     const report = auditHierarchy(tree);
 
-    console.log('[hierarchy] ' + summarizeAudit(report).split('\n').join('\n[hierarchy] '));
+    console.log(
+      '[hierarchy] ' +
+        summarizeAudit(report).split('\n').join('\n[hierarchy] '),
+    );
 
     // Zorunlu zincir adim adim yurunebiliyor mu.
     console.log('[hierarchy] required chain: ' + REQUIRED_CHAIN.join(' > '));
     let cursor = findByPath(tree, [REQUIRED_CHAIN[0]]);
     for (let i = 1; i <= REQUIRED_CHAIN.length && cursor; i += 1) {
-      const marker = cursor.isLeaf ? 'LEAF' : `${cursor.childIds.length} child(ren)`;
+      const marker = cursor.isLeaf
+        ? 'LEAF'
+        : `${cursor.childIds.length} child(ren)`;
       console.log(
         `[hierarchy]   ${'  '.repeat(i - 1)}${cursor.name}  [${marker}]  ` +
           `own=${cursor.ownListingCount} total=${cursor.totalListingCount}`,
@@ -107,23 +117,30 @@ export async function main(): Promise<void> {
     const leaf = findByPath(tree, REQUIRED_CHAIN);
     console.log(
       `[hierarchy] required chain resolved: ${Boolean(leaf)}` +
-        (leaf ? ` id=${leaf.id} isLeaf=${leaf.isLeaf} listings=${leaf.ownListingCount}` : ''),
+        (leaf
+          ? ` id=${leaf.id} isLeaf=${leaf.isLeaf} listings=${leaf.ownListingCount}`
+          : ''),
     );
 
     const savedTo = saveArtifact(artifact);
     console.log(`[hierarchy] artifact written: ${savedTo}`);
 
-    const hard = report.findings.filter((f) => f.kind !== 'UNRESOLVED_CATEGORY');
+    const hard = report.findings.filter(
+      (f) => f.kind !== 'UNRESOLVED_CATEGORY',
+    );
     if (hard.length > 0) {
       console.log('[hierarchy] HARD FINDINGS (reported, nothing deleted):');
-      for (const f of hard.slice(0, 20)) console.log(`[hierarchy]   ${f.kind}: ${f.detail}`);
-      if (hard.length > 20) console.log(`[hierarchy]   ... and ${hard.length - 20} more`);
+      for (const f of hard.slice(0, 20))
+        console.log(`[hierarchy]   ${f.kind}: ${f.detail}`);
+      if (hard.length > 20)
+        console.log(`[hierarchy]   ... and ${hard.length - 20} more`);
     }
     if (artifact.unresolved.length > 0) {
       console.log(
         `[hierarchy] unresolved category strings (left out of the tree): ${artifact.unresolved.length}`,
       );
-      for (const u of artifact.unresolved.slice(0, 10)) console.log(`[hierarchy]   ${u}`);
+      for (const u of artifact.unresolved.slice(0, 10))
+        console.log(`[hierarchy]   ${u}`);
     }
   } finally {
     await (prisma as any).$disconnect();

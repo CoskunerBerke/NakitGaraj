@@ -31,6 +31,7 @@ import {
   extractBreadcrumb,
   extractBreadcrumbItems,
   extractNavChildren,
+  extractOwnPath,
   normalizeHref,
 } from './nav-children';
 import { ListingRow, extractListingRows } from './listing-rows';
@@ -67,6 +68,11 @@ export interface PageClassification {
   breadcrumb: string[] | null;
   /** Menude ilan edilen baglantilar. `null` = menu blogu yok (KANIT YOK). */
   navChildren: NavChild[] | null;
+  /**
+   * Sayfanin KENDI kategori yolu: breadcrumb'in son href'i ("/audi-a3").
+   * Kimlik ve dogrudan-cocuk suzgeci buna dayanir; etiketten turetilmez.
+   */
+  ownPath: string | null;
   /** Sayfadaki ilan satirlari. */
   rows: ListingRow[];
   /** Teshis icin: hangi imzalar goruldu. */
@@ -103,17 +109,20 @@ export function classifyPage(html: string, filePath = ''): PageClassification {
     breadcrumbBlock: html.includes('search-result-bc'),
     navContainer: html.includes('searchCategoryContainer'),
     listingRows: html.includes('<tr data-id="'),
-    domSave: html.includes('jspPane') || html.includes('data-categorybreadcrumbid'),
+    domSave:
+      html.includes('jspPane') || html.includes('data-categorybreadcrumbid'),
   };
 
   let breadcrumb: string[] | null = null;
   let breadcrumbItems: BreadcrumbItem[] | null = null;
   let navChildren: NavChild[] | null = null;
   let rows: ListingRow[] = [];
+  let ownPath: string | null = null;
   try {
     breadcrumbItems = extractBreadcrumbItems(html);
     breadcrumb = extractBreadcrumb(html);
     navChildren = extractNavChildren(html);
+    ownPath = extractOwnPath(html);
     rows = extractListingRows(html);
   } catch (err: any) {
     return {
@@ -121,6 +130,7 @@ export function classifyPage(html: string, filePath = ''): PageClassification {
       title,
       breadcrumb,
       navChildren,
+      ownPath,
       rows,
       markers,
       detail: String(err?.message || err),
@@ -146,13 +156,22 @@ export function classifyPage(html: string, filePath = ''): PageClassification {
           title,
           breadcrumb,
           navChildren,
+          ownPath,
           rows,
           markers,
           detail:
             'breadcrumb okundu ama kategori menusu bulunamadi — yeni bir kayit bicimi olabilir',
         };
       }
-      return { status: 'CATEGORY_PAGE', title, breadcrumb, navChildren, rows, markers };
+      return {
+        status: 'CATEGORY_PAGE',
+        title,
+        breadcrumb,
+        navChildren,
+        ownPath,
+        rows,
+        markers,
+      };
     }
 
     /**
@@ -161,13 +180,16 @@ export function classifyPage(html: string, filePath = ''): PageClassification {
      * bir arac kategorisi tanimlamaz (satirlari tum markalarin karisimidir).
      */
     if (breadcrumbItems && breadcrumbItems.length > 0) {
-      const last = normalizeHref(breadcrumbItems[breadcrumbItems.length - 1].href);
+      const last = normalizeHref(
+        breadcrumbItems[breadcrumbItems.length - 1].href,
+      );
       if (last === OTOMOBIL) {
         return {
           status: 'SHOWCASE_OR_NON_CATEGORY_PAGE',
           title,
           breadcrumb,
           navChildren,
+          ownPath,
           rows,
           markers,
         };
@@ -175,7 +197,15 @@ export function classifyPage(html: string, filePath = ''): PageClassification {
     }
 
     if (rows.length > 0) {
-      return { status: 'RESULT_PAGE', title, breadcrumb, navChildren, rows, markers };
+      return {
+        status: 'RESULT_PAGE',
+        title,
+        breadcrumb,
+        navChildren,
+        ownPath,
+        rows,
+        markers,
+      };
     }
 
     /**
@@ -187,6 +217,7 @@ export function classifyPage(html: string, filePath = ''): PageClassification {
       title,
       breadcrumb,
       navChildren,
+      ownPath,
       rows,
       markers,
       detail: `arac sayfasi isaretleri var (${describe(markers)}) ama breadcrumb, menu ve satir bos`,
@@ -195,17 +226,52 @@ export function classifyPage(html: string, filePath = ''): PageClassification {
 
   // --- Veri tasimayan, BILINEN ekranlar -------------------------------------
 
-  if (TWO_FACTOR_TITLE.test(title) || (TWO_FACTOR.test(html) && !html.includes(LOGIN_FORM))) {
-    return { status: 'TWO_FACTOR_PAGE', title, breadcrumb, navChildren, rows, markers };
+  if (
+    TWO_FACTOR_TITLE.test(title) ||
+    (TWO_FACTOR.test(html) && !html.includes(LOGIN_FORM))
+  ) {
+    return {
+      status: 'TWO_FACTOR_PAGE',
+      title,
+      breadcrumb,
+      navChildren,
+      ownPath,
+      rows,
+      markers,
+    };
   }
   if (html.includes(LOGIN_FORM)) {
-    return { status: 'LOGIN_PAGE', title, breadcrumb, navChildren, rows, markers };
+    return {
+      status: 'LOGIN_PAGE',
+      title,
+      breadcrumb,
+      navChildren,
+      ownPath,
+      rows,
+      markers,
+    };
   }
   if (html.includes(ACCESS_BLOCK_FORM)) {
-    return { status: 'ACCESS_RESTRICTION_PAGE', title, breadcrumb, navChildren, rows, markers };
+    return {
+      status: 'ACCESS_RESTRICTION_PAGE',
+      title,
+      breadcrumb,
+      navChildren,
+      ownPath,
+      rows,
+      markers,
+    };
   }
   if (ASSET_DIR.test(filePath)) {
-    return { status: 'SAVED_ASSET', title, breadcrumb, navChildren, rows, markers };
+    return {
+      status: 'SAVED_ASSET',
+      title,
+      breadcrumb,
+      navChildren,
+      ownPath,
+      rows,
+      markers,
+    };
   }
 
   return {
@@ -213,6 +279,7 @@ export function classifyPage(html: string, filePath = ''): PageClassification {
     title,
     breadcrumb,
     navChildren,
+    ownPath,
     rows,
     markers,
     detail: 'bilinen hicbir imza yok',

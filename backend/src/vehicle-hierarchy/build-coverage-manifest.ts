@@ -21,10 +21,20 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
-import { artifactToTree, loadArtifact, resolveArtifactPath } from './hierarchy-source';
+import {
+  artifactToTree,
+  loadArtifact,
+  resolveArtifactPath,
+} from './hierarchy-source';
 import { loadAssignments } from './build-listing-assignments';
 import { isExactEvidence } from './listing-resolver';
-import { extractNavChildren, isStrictDescendantSlug, sahibindenSlug } from './nav-children';
+import {
+  extractNavChildren,
+  extractOwnPath,
+  ownSlugOf,
+  sahibindenSlug,
+  splitNavChildren,
+} from './nav-children';
 import { HierarchyNode, HierarchyTree } from './hierarchy-tree';
 
 /** Toplama onceligi. */
@@ -36,9 +46,7 @@ export interface MissingPage {
   /** Kaynagin KENDI menusunden gelen yol; yoksa slug'dan turetilir. */
   categoryUrl: string;
   urlSource: 'NAV_HREF' | 'DERIVED_FROM_PATH';
-  reason:
-    | 'NAV_DECLARED_PAGE_MISSING'
-    | 'ROW_DISCOVERED_NODE_PAGE_MISSING';
+  reason: 'NAV_DECLARED_PAGE_MISSING' | 'ROW_DISCOVERED_NODE_PAGE_MISSING';
   priority: CoveragePriority;
   /** Bu dugume KESIN cozulmus, tekillestirilmis ilan sayisi. */
   recoveredMarketRows: number;
@@ -95,10 +103,20 @@ function collectNavFacts(
       if (html === null) continue;
       const nav = extractNavChildren(html);
       if (!nav) continue;
-      const own = sahibindenSlug(node.pathSegments);
-      for (const child of nav) {
-        if (!isStrictDescendantSlug(own, child.slug)) continue;
-        if (!bySlug.has(child.slug)) bySlug.set(child.slug, { href: `/${child.slug}`, count: child.count });
+      const own = ownSlugOf(extractOwnPath(html), node.pathSegments);
+      /**
+       * Href gercekleri alt soyun TAMAMINDAN alinir: kaynak bir ara seviyeyi
+       * atlayip torunu listelediyse torunun href'i de gercektir. Yalnizca
+       * "ebeveyn -> cocuk" YAPISI dogrudan cocuklarla sinirlidir; o karar
+       * agac kurucusunda verilir, burada degil.
+       */
+      const split = splitNavChildren(nav, own, node.pathSegments.length);
+      for (const child of [...split.direct, ...split.deeper]) {
+        if (!bySlug.has(child.slug))
+          bySlug.set(child.slug, {
+            href: `/${child.slug}`,
+            count: child.count,
+          });
       }
     }
   }
@@ -194,7 +212,9 @@ export function buildCoverage(
       fullPath: [...node.pathSegments],
       categoryUrl: coverage.categoryUrl,
       urlSource: coverage.urlSource,
-      reason: nav ? 'NAV_DECLARED_PAGE_MISSING' : 'ROW_DISCOVERED_NODE_PAGE_MISSING',
+      reason: nav
+        ? 'NAV_DECLARED_PAGE_MISSING'
+        : 'ROW_DISCOVERED_NODE_PAGE_MISSING',
       priority,
       recoveredMarketRows: market,
       subtreeMarketRows: branch,
@@ -206,22 +226,47 @@ export function buildCoverage(
   const totals: Record<string, number> = {
     hierarchyNodes: nodes.length,
     savedPages: nodes.filter((n) => n.pageSavedOnDisk).length,
-    savedButNotImported: nodes.filter((n) => n.status === 'PAGE_PRESENT_NOT_IMPORTED').length,
+    savedButNotImported: nodes.filter(
+      (n) => n.status === 'PAGE_PRESENT_NOT_IMPORTED',
+    ).length,
     missingPages: missing.length,
-    navDeclaredMissing: missing.filter((m) => m.reason === 'NAV_DECLARED_PAGE_MISSING').length,
-    rowDiscoveredMissing: missing.filter((m) => m.reason === 'ROW_DISCOVERED_NODE_PAGE_MISSING').length,
+    navDeclaredMissing: missing.filter(
+      (m) => m.reason === 'NAV_DECLARED_PAGE_MISSING',
+    ).length,
+    rowDiscoveredMissing: missing.filter(
+      (m) => m.reason === 'ROW_DISCOVERED_NODE_PAGE_MISSING',
+    ).length,
     structureBlocking: missing.filter((m) => m.priority === 'A').length,
     priorityA: missing.filter((m) => m.priority === 'A').length,
     priorityB: missing.filter((m) => m.priority === 'B').length,
     priorityC: missing.filter((m) => m.priority === 'C').length,
     priorityD: missing.filter((m) => m.priority === 'D').length,
-    noDataNodes: nodes.filter((n) => !n.hasKnownChildren && n.marketListingCount === 0).length,
-    priceableNodes: nodes.filter((n) => !n.hasKnownChildren && n.marketListingCount > 0).length,
+    noDataNodes: nodes.filter(
+      (n) => !n.hasKnownChildren && n.marketListingCount === 0,
+    ).length,
+    priceableNodes: nodes.filter(
+      (n) => !n.hasKnownChildren && n.marketListingCount > 0,
+    ).length,
   };
 
-  const makes = new Map<string, { nodes: number; savedPages: number; missingPages: number; priorityA: number; noData: number }>();
+  const makes = new Map<
+    string,
+    {
+      nodes: number;
+      savedPages: number;
+      missingPages: number;
+      priorityA: number;
+      noData: number;
+    }
+  >();
   for (const n of nodes) {
-    const entry = makes.get(n.make) ?? { nodes: 0, savedPages: 0, missingPages: 0, priorityA: 0, noData: 0 };
+    const entry = makes.get(n.make) ?? {
+      nodes: 0,
+      savedPages: 0,
+      missingPages: 0,
+      priorityA: 0,
+      noData: 0,
+    };
     entry.nodes += 1;
     if (n.pageSavedOnDisk) entry.savedPages += 1;
     else entry.missingPages += 1;
@@ -251,7 +296,8 @@ function safeRead(file: string): string | null {
 
 export async function main(): Promise<void> {
   const artifact = loadArtifact();
-  if (!artifact) throw new Error('Hierarchy artifact yok. Once "npm run hierarchy:build".');
+  if (!artifact)
+    throw new Error('Hierarchy artifact yok. Once "npm run hierarchy:build".');
   const tree = artifactToTree(artifact);
 
   const assignments = loadAssignments();
@@ -259,7 +305,10 @@ export async function main(): Promise<void> {
   if (assignments) {
     for (const assignment of Object.values(assignments.assignments)) {
       if (!isExactEvidence(assignment.evidence)) continue;
-      exactByNode.set(assignment.nodeId, (exactByNode.get(assignment.nodeId) ?? 0) + 1);
+      exactByNode.set(
+        assignment.nodeId,
+        (exactByNode.get(assignment.nodeId) ?? 0) + 1,
+      );
     }
   }
 
@@ -288,17 +337,26 @@ export async function main(): Promise<void> {
   console.log(`  row-discovered, page missing  : ${t.rowDiscoveredMissing}`);
   console.log(`structure-blocking (priority A) : ${t.structureBlocking}`);
   console.log('');
-  console.log(`priority A / B / C / D          : ${t.priorityA} / ${t.priorityB} / ${t.priorityC} / ${t.priorityD}`);
+  console.log(
+    `priority A / B / C / D          : ${t.priorityA} / ${t.priorityB} / ${t.priorityC} / ${t.priorityD}`,
+  );
   console.log(`currently priceable nodes       : ${t.priceableNodes}`);
   console.log(`current NO_DATA nodes           : ${t.noDataNodes}`);
 
-  const rank = (m: MissingPage) => (m.navResultCount ?? 0) + m.subtreeMarketRows;
+  const rank = (m: MissingPage) =>
+    (m.navResultCount ?? 0) + m.subtreeMarketRows;
   const top = [...report.missing]
-    .sort((a, b) => (a.priority === b.priority ? rank(b) - rank(a) : a.priority.localeCompare(b.priority)))
+    .sort((a, b) =>
+      a.priority === b.priority
+        ? rank(b) - rank(a)
+        : a.priority.localeCompare(b.priority),
+    )
     .slice(0, 50);
   console.log('');
   console.log('=== TOP 50 MISSING PAGES ===');
-  console.log('pri | make | full path | url | ownRows | branchRows | navCount | knownChildren');
+  console.log(
+    'pri | make | full path | url | ownRows | branchRows | navCount | knownChildren',
+  );
   for (const m of top) {
     console.log(
       `${m.priority} | ${m.make} | ${m.fullPath.join(' / ')} | ${m.categoryUrl} | ` +
@@ -310,7 +368,9 @@ export async function main(): Promise<void> {
   console.log('=== MAKE COVERAGE (top 25 by missing) ===');
   console.log('make | nodes | saved | missing | priorityA | NO_DATA');
   for (const m of report.byMake.slice(0, 25)) {
-    console.log(`${m.make} | ${m.nodes} | ${m.savedPages} | ${m.missingPages} | ${m.priorityA} | ${m.noData}`);
+    console.log(
+      `${m.make} | ${m.nodes} | ${m.savedPages} | ${m.missingPages} | ${m.priorityA} | ${m.noData}`,
+    );
   }
 
   const dir = path.dirname(resolveArtifactPath());
@@ -324,7 +384,9 @@ export async function main(): Promise<void> {
         totals: report.totals,
         byMake: report.byMake,
         missing: [...report.missing].sort((a, b) =>
-          a.priority === b.priority ? rank(b) - rank(a) : a.priority.localeCompare(b.priority),
+          a.priority === b.priority
+            ? rank(b) - rank(a)
+            : a.priority.localeCompare(b.priority),
         ),
       },
       null,
