@@ -25,6 +25,12 @@
  * zaten belirsiz kabul eder. Kaydedilmis breadcrumb casing'i kanonik kabul
  * edilir ve source'suz turetilmis yol onun altina birlestirilir.
  *
+ * ONEMLI INCELIK: derin bir sayfanin breadcrumb prefix'i, ebeveynin KENDI
+ * kaydedilmis sayfasinin casing'ini ezemez. Ornegin bir trim sayfasi
+ * `Fiat / UNO / 60 S` derken ebeveynin kendi sayfasi `Fiat / Uno` diyorsa
+ * kanonik ebeveyn `Uno`dur. Bu nedenle canonicalization iki seviyeli kanit
+ * kullanir: exact-own page > descendant prefix.
+ *
  * Fail-closed celiski ancak AYNI kaynak dosyasi iki farkli (case-only olmayan)
  * exact breadcrumb yolu iddia ederse veya AYNI exact yolun kaydedilmis
  * sayfalari farkli direct child setleri bildirirse uretilir.
@@ -109,20 +115,31 @@ export function reconcileDirectNavPaths(observations: ObservedCategory[]): Obser
 /**
  * Kaydedilmis exact breadcrumb casing'ini kanoniklestirir.
  *
- * Source-backed derin bir breadcrumb tum prefix'lerinin casing'ini de kanitlar.
- * Ornegin `Fiat / Uno / 70 SX` varsa source'suz `Fiat / UNO / 45 S` yolu
- * `Fiat / Uno / 45 S` olarak normalize edilir. Segment SINIRI degismez;
- * yalnizca case-only alias tek kimlige indirilir.
+ * KANIT SIRASI:
+ *   1) Bir yolun KENDI kaydedilmis kategori sayfasinin exact breadcrumb'i.
+ *   2) Daha derin kaydedilmis bir sayfanin ayni yola ait breadcrumb prefix'i.
+ *
+ * Bu ayrim gercek Fiat/Uno vakasinda zorunludur: derin sayfalar `UNO`
+ * yazabilirken parent'in kendi sayfasi `Uno` yaziyor. Eski kod ilk gorulen
+ * prefix'i kazandiriyordu; dosya sirasi degisince `UNO` kanonik oluyor ve
+ * validator `Fiat -> Uno` edge'ini kayip sayiyordu.
  */
 function canonicalizeCaseOnlyPaths(observations: ObservedCategory[]): void {
-  const canonicalPrefixes = new Map<string, string[]>();
+  const ownExact = new Map<string, string[]>();
+  const descendantPrefixes = new Map<string, string[]>();
 
   for (const observation of observations) {
     if (!observation.pathSegments?.length || observation.sourceFiles.length === 0) continue;
-    for (let length = 1; length <= observation.pathSegments.length; length += 1) {
+
+    // En guclu kanit: bu kaydedilmis sayfanin KENDI tam breadcrumb yolu.
+    const ownKey = foldedPathKey(observation.pathSegments);
+    if (!ownExact.has(ownKey)) ownExact.set(ownKey, [...observation.pathSegments]);
+
+    // Daha zayif ama yine kaynaktan gelen kanit: derin breadcrumb prefix'leri.
+    for (let length = 1; length < observation.pathSegments.length; length += 1) {
       const prefix = observation.pathSegments.slice(0, length);
       const key = foldedPathKey(prefix);
-      if (!canonicalPrefixes.has(key)) canonicalPrefixes.set(key, prefix);
+      if (!descendantPrefixes.has(key)) descendantPrefixes.set(key, prefix);
     }
   }
 
@@ -131,7 +148,8 @@ function canonicalizeCaseOnlyPaths(observations: ObservedCategory[]): void {
     let normalized = [...observation.pathSegments];
 
     for (let length = 1; length <= normalized.length; length += 1) {
-      const canonical = canonicalPrefixes.get(foldedPathKey(normalized.slice(0, length)));
+      const key = foldedPathKey(normalized.slice(0, length));
+      const canonical = ownExact.get(key) ?? descendantPrefixes.get(key);
       if (!canonical) continue;
       normalized = [...canonical, ...normalized.slice(length)];
     }
