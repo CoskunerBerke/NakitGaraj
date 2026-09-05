@@ -8,10 +8,15 @@
  *
  * Buradaki her senaryo, o ayrimin korunmasini bekler:
  *   - veri tasiyan sayfa   -> CATEGORY_PAGE / RESULT_PAGE
- *   - bilinen bosluk       -> LOGIN / TWO_FACTOR / ACCESS_RESTRICTION / SAVED_ASSET
+ *   - bilinen bosluk       -> LOGIN / TWO_FACTOR / ACCESS_RESTRICTION / SAVED_ASSET / NOT_FOUND_PAGE
  *   - ayristirici sorunu   -> SUSPICIOUS_EMPTY_PARSE / UNKNOWN_DATA_FORMAT / UNKNOWN_HTML
  */
-import { classifyPage, carriesVehicleData, isFailure } from './page-classification';
+import {
+  classifyPage,
+  carriesVehicleData,
+  detectSourceNotFound,
+  isFailure,
+} from './page-classification';
 import { extractNavChildren } from './nav-children';
 import { attachNavEvidence } from './hierarchy-source';
 import { ObservedCategory } from './hierarchy-tree';
@@ -211,5 +216,135 @@ describe('KANIT AYNI KATEGORININ SONRAKI DOSYASINDAN DA ALINIR', () => {
     expect(stats.withEvidence).toBe(0);
     expect(stats.unreadable).toBe(1);
     expect(stats.terminal).toBe(0);
+  });
+});
+
+// ------------------------------------------- kaynagin ACIK "bulunamadi" sayfasi
+
+/**
+ * Canli toplayicinin karantinaya aldigi GERCEK sayfadan turetilmis asgari
+ * isaretleme (kategori adi kurgusal). Kabuk ve baslik erisim engeli sayfasiyla
+ * ORTAKTIR; ayirt edici olan makine-okur "route":"error" + "errorCode":404
+ * bildirimi ile bulunamadi'ya ozgu ek isaretlerdir (errorFooter, NOT_FOUND ucu,
+ * "Aradığınız sayfaya ulaşılamadı" basligi).
+ */
+const NOT_FOUND_SHELL = `
+<title>sahibinden.com Hata Sayfası</title>
+<div class="error-page-container">
+  <a class="logo" href="https://www.sahibinden.com"></a>
+  <h1>Aradığınız sayfaya <strong>ulaşılamadı.</strong></h1>
+  <p class="description">Aşağıdaki bağlantılar aradığınız içeriğe ulaşmanızı sağlayabilir.</p>
+  <ul id="categoryList"><li class="odd category-3517"><a href="/kategori/vasita">Vasıta</a></li></ul>
+  <div id="errorFooter"><ul><li class="border"><a href="https://www.sahibinden.com/">Ana Sayfa</a></li></ul></div>
+</div>`;
+const NOT_FOUND_ENDPOINT = `
+<script>grecaptcha.enterprise.execute(k, {action: 'notFound'}).then(function (t) { $.ajax({ url: '/ajax/cs/login/info/NOT_FOUND', type: 'POST' }); });</script>`;
+const tracking = (route: string, code: string) =>
+  `<div id="gaPageViewTrackingJson" data-json="{&quot;route&quot;:&quot;${route}&quot;,&quot;errorCode&quot;:${code}}"></div>` +
+  `<script id="gaPageViewTrackingData">var pageTrackData = {"route":"${route}","errorCode":${code}};</script>`;
+const NOT_FOUND_PAGE = NOT_FOUND_SHELL + NOT_FOUND_ENDPOINT + tracking('error', '404');
+
+/** Erisim engeli (korpusta 11 ornek): AYNI kabuk, AYNI baslik; route "search", errorCode null, informUsForm. */
+const ACCESS_BLOCK_REAL =
+  `
+<title>sahibinden.com Hata Sayfası</title>
+<div class="error-page-container">
+  <h1><strong>Olağan dışı erişim tespit ettik...</strong></h1>
+  <form id="informUsForm" action="/bilgi"></form>
+</div>` + tracking('search', 'null');
+
+describe('KAYNAGIN ACIK "BULUNAMADI" SAYFASI', () => {
+  it('gercek imzali bulunamadi sayfasi NOT_FOUND_PAGE: veri tasimaz, ayristirici hatasi DEGIL', () => {
+    const page = classifyPage(NOT_FOUND_PAGE, 'zorlu-kartal-1.6.html');
+    expect(page.status).toBe('NOT_FOUND_PAGE');
+    expect(carriesVehicleData(page.status)).toBe(false);
+    expect(isFailure(page.status)).toBe(false);
+    expect(page.breadcrumb).toBeNull();
+    expect(page.navChildren).toBeNull();
+    expect(page.ownPath).toBeNull();
+    expect(page.rows).toEqual([]);
+    expect(page.detail).toContain('route:error+errorCode:404');
+    expect(detectSourceNotFound(NOT_FOUND_PAGE)).toEqual([
+      'error-page-container',
+      'route:error+errorCode:404',
+      'NOT_FOUND endpoint',
+      'errorFooter',
+      'h1 ulaşılamadı',
+    ]);
+  });
+
+  it('makine-okur bildirimi HTML-kacisli (data-json) ya da ham (script) olsa da tanir', () => {
+    const escapedOnly =
+      NOT_FOUND_SHELL +
+      '<div data-json="{&quot;route&quot;:&quot;error&quot;,&quot;errorCode&quot;:404}"></div>';
+    const rawOnly =
+      NOT_FOUND_SHELL + '<script>var pageTrackData = {"route":"error","errorCode":404};</script>';
+    expect(classifyPage(escapedOnly, 'x.html').status).toBe('NOT_FOUND_PAGE');
+    expect(classifyPage(rawOnly, 'x.html').status).toBe('NOT_FOUND_PAGE');
+  });
+
+  /** ARAC KANITI ONCE GELIR: ayni metin ve bildirim bir kategori sayfasinin icinde olsa bile. */
+  it('arac kaniti tasiyan sayfa, icinde "bulunamadı"/404 metni ve hata bildirimi olsa da KATEGORI kalir', () => {
+    const html =
+      breadcrumb() +
+      DIRECT_NAV +
+      ROW +
+      '<div class="footer">Sonuç bulunamadı. Aradığınız sayfaya ulaşılamadı.</div>' +
+      NOT_FOUND_PAGE;
+    const page = classifyPage(html, 'C:\\korpus\\Audi\\a.html');
+    expect(page.status).toBe('CATEGORY_PAGE');
+    expect(page.breadcrumb).toEqual(['Audi', 'A3', 'A3 Sedan']);
+    expect(page.navChildren!.map((c) => c.label)).toEqual(['30 TFSI', '35 TFSI']);
+  });
+
+  it('ilan satirlari tasiyan sayfa bulunamadi sayilmaz (SONUC sayfasi kalir)', () => {
+    expect(classifyPage(ROW + NOT_FOUND_PAGE, 'x.html').status).toBe('RESULT_PAGE');
+  });
+
+  it('AYNI kabugu ve basligi tasiyan erisim engeli sayfasi ERISIM ENGELI kalir', () => {
+    const page = classifyPage(ACCESS_BLOCK_REAL, 'x.html');
+    expect(page.status).toBe('ACCESS_RESTRICTION_PAGE');
+    expect(detectSourceNotFound(ACCESS_BLOCK_REAL)).toBeNull();
+  });
+
+  it('giris duvari, 2 asamali dogrulama ve engel formu bulunamadi imzalarinin yaninda da ONCE gelir', () => {
+    expect(classifyPage(`${HEADER_LOGIN}${NOT_FOUND_PAGE}`, 'x.html').status).toBe('LOGIN_PAGE');
+    expect(
+      classifyPage(
+        `<title>2 Aşamalı Doğrulama</title><form id="loginPopupForm"></form>${NOT_FOUND_PAGE}`,
+        'x.html',
+      ).status,
+    ).toBe('TWO_FACTOR_PAGE');
+    expect(classifyPage(`<form id="informUsForm"></form>${NOT_FOUND_PAGE}`, 'x.html').status).toBe(
+      'ACCESS_RESTRICTION_PAGE',
+    );
+  });
+
+  it('genel "404 / hata / bulunamadı" sozcukleri TEK BASINA imza degildir: BILINMEYEN kalir', () => {
+    const generic =
+      '<title>404 Not Found</title><h1>Hata: sayfa bulunamadı</h1><p>Aradığınız sayfaya ulaşılamadı.</p>';
+    const page = classifyPage(generic, 'x.html');
+    expect(page.status).toBe('UNKNOWN_HTML');
+    expect(isFailure(page.status)).toBe(true);
+  });
+
+  it('kabuk var ama makine-okur 404 bildirimi yoksa (orn. sunucu hatasi 500) BILINMEYEN kalir', () => {
+    expect(classifyPage(NOT_FOUND_SHELL + tracking('error', '500'), 'x.html').status).toBe('UNKNOWN_HTML');
+    expect(classifyPage(NOT_FOUND_SHELL + tracking('search', 'null'), 'x.html').status).toBe('UNKNOWN_HTML');
+    expect(classifyPage(NOT_FOUND_SHELL, 'x.html').status).toBe('UNKNOWN_HTML');
+  });
+
+  it('makine-okur 404 bildirimi kabuksuz ya da baska bulunamadi isareti olmadan yetmez', () => {
+    expect(classifyPage(tracking('error', '404'), 'x.html').status).toBe('UNKNOWN_HTML');
+    expect(
+      classifyPage('<div class="error-page-container"></div>' + tracking('error', '404'), 'x.html')
+        .status,
+    ).toBe('UNKNOWN_HTML');
+  });
+
+  it('durum sozlesmesi: UNKNOWN_HTML basarisizliktir, NOT_FOUND_PAGE degildir ve veri tasimaz', () => {
+    expect(isFailure('UNKNOWN_HTML')).toBe(true);
+    expect(isFailure('NOT_FOUND_PAGE')).toBe(false);
+    expect(carriesVehicleData('NOT_FOUND_PAGE')).toBe(false);
   });
 });

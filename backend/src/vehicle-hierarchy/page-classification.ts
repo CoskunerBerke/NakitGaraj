@@ -9,8 +9,8 @@
  *
  * Bu modul her dosyaya bir DURUM verir. Durumlarin bir bolumu KASITLI olarak
  * "veri yok" demektir (giris duvari, 2 asamali dogrulama, erisim engeli,
- * Chrome'un yan kaynak dosyalari); geri kalani ise SORUN bildirir ve dogrulama
- * kapisini dusurur:
+ * Chrome'un yan kaynak dosyalari, kaynagin ACIK "bulunamadi" sayfasi); geri
+ * kalani ise SORUN bildirir ve dogrulama kapisini dusurur:
  *
  *   SUSPICIOUS_EMPTY_PARSE  arac sayfasi isaretleri var, hicbir sey cikmadi
  *   UNKNOWN_DATA_FORMAT     kategori sayfasi ama beklenen yapi okunamadi
@@ -51,6 +51,12 @@ export type PageStatus =
   | 'ACCESS_RESTRICTION_PAGE'
   /** Chrome "Web sayfasi, tamami" kaydinin yan kaynagi (reklam cercevesi vb.). */
   | 'SAVED_ASSET'
+  /**
+   * Kaynagin ACIK "sayfa bulunamadi" ekrani — veri tasimaz. Ayristirici sayfayi
+   * ANLADI (basarisizlik DEGIL); istenen hedef kaynakta YOK. "Anlasildi" ile
+   * "hedef basarili" ayni sey degildir: toplayici bunu hedef kaybi olarak isler.
+   */
+  | 'NOT_FOUND_PAGE'
   /** Arac sayfasi gibi duruyor ama HICBIR yapi cikmadi. KAPIYI DUSURUR. */
   | 'SUSPICIOUS_EMPTY_PARSE'
   /** Kategori sayfasi ama beklenen yapi okunamadi. KAPIYI DUSURUR. */
@@ -96,6 +102,55 @@ const LOGIN_FORM = 'id="loginForm"';
 const TWO_FACTOR = /twoFactor|two-factor|loginPopupForm/i;
 const TWO_FACTOR_TITLE = /2\s*A[şs]amal[ıi]\s*Do[ğg]rulama/i;
 const ACCESS_BLOCK_FORM = 'informUsForm';
+
+/**
+ * KAYNAGIN ACIK "BULUNAMADI" SAYFASI — IMZALAR GERCEK KANITTAN OKUNDU.
+ *
+ * Canli yapi toplayicisinin karantinaya aldigi gercek sayfa (kosu
+ * structure-2026-09, kalkmis bir alt kategori) su KAYNAK-SAHIPLI isaretleri
+ * tasir:
+ *   - hata kabugu           <div class="error-page-container">
+ *   - makine-okur bildirim  gaPageViewTrackingJson / pageTrackData:
+ *                           "route":"error" + "errorCode":404
+ *   - bulunamadi ucu        /ajax/cs/login/info/NOT_FOUND (recaptcha action 'notFound')
+ *   - hata alt bilgisi      <div id="errorFooter">
+ *   - baslik                <h1>Aradığınız sayfaya <strong>ulaşılamadı.</strong></h1>
+ *
+ * DIKKAT: erisim engeli sayfasi AYNI kabugu ve AYNI <title>'i ("sahibinden.com
+ * Hata Sayfası") tasir ama "route":"search", "errorCode":null ve informUsForm
+ * ile gelir (korpusta 11 ornegi var). Bu yuzden kabuk ya da baslik TEK BASINA
+ * imza DEGILDIR: makine-okur 404 bildirimi ZORUNLUDUR ve ustune en az bir
+ * bulunamadi'ya ozgu isaret daha aranir. "404", "hata", "bulunamadı" gibi
+ * genel sozcukler hicbir zaman imza sayilmaz; oyle bir sayfa UNKNOWN_HTML
+ * kalir ve kapiyi dusurur.
+ */
+const NOT_FOUND_SHELL = 'error-page-container';
+const NOT_FOUND_ROUTE = /route(?:&quot;|"):\s*(?:&quot;|")error(?:&quot;|")/;
+const NOT_FOUND_CODE = /errorCode(?:&quot;|"):\s*404\b/;
+const NOT_FOUND_ENDPOINT =
+  /\/ajax\/cs\/login\/info\/NOT_FOUND|action:\s*['"]notFound['"]/;
+const NOT_FOUND_FOOTER = 'id="errorFooter"';
+const NOT_FOUND_HEADING =
+  /Arad[ıi]ğ[ıi]n[ıi]z sayfaya[\s\S]{0,120}?ula[şs][ıi]lamad[ıi]/i;
+
+/**
+ * Kaynagin acik bulunamadi sayfasi mi? Gorulen imzalarin listesi (teshis
+ * icin) ya da null. Kural: kabuk + makine-okur 404 bildirimi + en az bir
+ * bulunamadi'ya ozgu ek isaret. Arac kaniti tasiyan sayfalar bu isleve hic
+ * gelmez (once veri, sonra guvenlik ekranlari, en son bu).
+ */
+export function detectSourceNotFound(html: string): string[] | null {
+  const signals: string[] = [];
+  const shell = html.includes(NOT_FOUND_SHELL);
+  const declared = NOT_FOUND_ROUTE.test(html) && NOT_FOUND_CODE.test(html);
+  if (shell) signals.push('error-page-container');
+  if (declared) signals.push('route:error+errorCode:404');
+  if (NOT_FOUND_ENDPOINT.test(html)) signals.push('NOT_FOUND endpoint');
+  if (html.includes(NOT_FOUND_FOOTER)) signals.push('errorFooter');
+  if (NOT_FOUND_HEADING.test(html)) signals.push('h1 ulaşılamadı');
+  const specific = signals.length - (shell ? 1 : 0) - (declared ? 1 : 0);
+  return shell && declared && specific >= 1 ? signals : null;
+}
 
 /**
  * Bir dosyayi siniflandirir.
@@ -274,6 +329,27 @@ export function classifyPage(html: string, filePath = ''): PageClassification {
     };
   }
 
+  /**
+   * KAYNAGIN ACIK "BULUNAMADI" SAYFASI. Arac kaniti ve guvenlik ekranlari
+   * yukarida elendi; burada kalan sayfa kaynagin kendi hata kabugunu ve
+   * makine-okur 404 bildirimini tasiyorsa bu bilinen, aciklanmis bir
+   * bosluktur — ayristirici hatasi degil. Imzalarin eksigi UNKNOWN_HTML'e
+   * duser (fail-closed).
+   */
+  const notFound = detectSourceNotFound(html);
+  if (notFound) {
+    return {
+      status: 'NOT_FOUND_PAGE',
+      title,
+      breadcrumb,
+      navChildren,
+      ownPath,
+      rows,
+      markers,
+      detail: `kaynak sayfanin bulunmadigini acikca bildiriyor (${notFound.join(' + ')})`,
+    };
+  }
+
   return {
     status: 'UNKNOWN_HTML',
     title,
@@ -299,8 +375,10 @@ export function carriesVehicleData(status: PageStatus): boolean {
 /**
  * Bu durum bir SORUN mudur? Dogrulama kapisi bunlarin SIFIR olmasini bekler.
  *
- * Giris/2FA/engel/yan-kaynak sayfalari burada YOKTUR: onlar bilinen ve
- * aciklanmis bosluklardir, ayristirici hatasi degil.
+ * Giris/2FA/engel/yan-kaynak sayfalari ve kaynagin ACIK "bulunamadi" sayfasi
+ * burada YOKTUR: onlar bilinen ve aciklanmis bosluklardir, ayristirici hatasi
+ * degil. (Bulunamadi sayfasi hedef icin yine de basarisizliktir; onu toplayici
+ * ayri sayar — bkz. structure-session NOT_FOUND.)
  */
 export function isFailure(status: PageStatus): boolean {
   return (
