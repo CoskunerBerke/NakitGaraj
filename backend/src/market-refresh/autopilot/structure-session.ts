@@ -19,6 +19,9 @@
  *     yine okunur ve cocuklari kuyruga girer (kesif korpustan devam eder).
  *   - Guvenlik/giris/2FA/erisim sayfasinda ATLATMA YOK: dur, checkpoint, kullanici.
  *   - Ayristiricinin anlamadigi sayfada DUR: otomasyon ayristiriciyi gecemez.
+ *   - Kaynagin ACIK "bulunamadi" sayfasi ayristirici hatasi DEGILDIR: kanit
+ *     tutulur, hedef kaynakta-yok (FAILED/NOT_FOUND) olur, korpusa yazilmaz,
+ *     cocuk acilmaz, kosu SURER. Bilinmeyen HTML yine DURDURUR.
  *   - HER basarili sayfadan sonra checkpoint yazilir; devam idempotenttir.
  *   - Marka adi, derinlik, "A3" gibi hicbir sey sabit yazilmaz.
  */
@@ -112,6 +115,13 @@ export interface StructureTarget {
   deeperDeclared?: number | null;
   /** Breadcrumb kaniti bu hedefin beklentisini degistirdiyse onceki beklenti/hata. */
   reconciledFrom?: string | null;
+  /**
+   * Kaynagin ACIK "bulunamadi" sayfasinin kanit kopyasi (kosu kanit dizini,
+   * korpus DEGIL). Ebeveyn menusu bu hedefi ilan etti (parentKey/expectedPath
+   * kalir), canli kaynak ise sayfanin olmadigini soyledi: iki olgu birlikte
+   * yapisal kayma kanitidir. Eski checkpoint'lerde alan yoktur.
+   */
+  notFoundEvidence?: string | null;
 }
 
 interface Counters {
@@ -138,6 +148,8 @@ interface Counters {
   intermediatesRecovered: number;
   /** Devam ederken yeniden acilan eski sahte REDIRECT_MISMATCH hedefleri. */
   legacyRetried: number;
+  /** Kaynagin acikca "yok" dedigi hedefler (canli + karantinadan gocen). */
+  notFound: number;
 }
 
 export interface RebuildRecord {
@@ -226,6 +238,7 @@ export interface RunReport {
   refinedPaths: number;
   intermediatesRecovered: number;
   legacyRetried: number;
+  notFound: number;
   rebuilds: RebuildRecord[];
   pauseReason: string | null;
   lastError: string | null;
@@ -249,6 +262,7 @@ function emptyCounters(): Counters {
     refinedPaths: 0,
     intermediatesRecovered: 0,
     legacyRetried: 0,
+    notFound: 0,
   };
 }
 
@@ -363,6 +377,12 @@ export class StructureSession {
        * BLOKE (bilinmeyen bicim) hedef, kullanici ayristiriciyi duzeltip
        * devam ettiginde bir sans daha alir; deneme tavaninda kalici FAILED.
        */
+      /**
+       * ESKI KOSUDAN KALAN "BILINMEYEN BICIM" ASLINDA KAYNAGIN BULUNAMADI
+       * SAYFASIYSA: karantina kanitindan gocur, yeniden istemeden devam et.
+       * (Onceki ayristirici bu sayfayi tanimiyordu; simdiki taniyor.)
+       */
+      if (session.migrateQuarantinedNotFound(target)) continue;
       if (target.status === 'IN_PROGRESS') target.status = 'PENDING';
       if (target.status === 'BLOCKED') {
         target.status = target.attempts >= MAX_ATTEMPTS ? 'FAILED' : 'PENDING';
@@ -602,6 +622,8 @@ export class StructureSession {
           base,
           'listing rows without a category breadcrumb',
         );
+      case 'NOT_FOUND_PAGE':
+        return this.failNotFound(target, capture, page, base);
       case 'CATEGORY_PAGE':
         return this.acceptCategory(target, capture, page, base);
       default:
@@ -1093,17 +1115,140 @@ export class StructureSession {
     this.appendCaptureLog(target, capture, page, outcome, null, evidence);
     this.log(`FAIL ${outcome} at ${target.key}: ${detail}`);
 
-    if (this.counters.consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-      this.state = 'ERROR';
-      this.pauseReason =
-        `${MAX_CONSECUTIVE_FAILURES} consecutive failures (last: ${outcome} at ${target.key}). ` +
-        'The source structure may have changed; inspect the evidence files, then RESUME.';
-      this.lastError = this.pauseReason;
-      this.persist();
-      return { ...base, outcome, paused: true, pauseReason: this.pauseReason };
-    }
+    const halted = this.haltIfTooManyFailures(outcome, target);
     this.persist();
-    return { ...base, outcome };
+    return halted
+      ? { ...base, outcome, paused: true, pauseReason: halted }
+      : { ...base, outcome };
+  }
+
+  /**
+   * Ardisik BASARISIZ hedef tavani (yonlendirme, breadcrumb'siz, vitrin,
+   * kaynak "yok" dedi): tek tek olumcul degildir, ama arka arkaya gelmesi
+   * kaynak yapisinin degistigini gosterebilir — dur, kanit dosyalarina bak,
+   * sonra devam et. Devam sayaci sifirlar (resume).
+   */
+  private haltIfTooManyFailures(
+    outcome: CaptureOutcome,
+    target: StructureTarget,
+  ): string | null {
+    if (this.counters.consecutiveFailures < MAX_CONSECUTIVE_FAILURES)
+      return null;
+    this.state = 'ERROR';
+    this.pauseReason =
+      `${MAX_CONSECUTIVE_FAILURES} consecutive failures (last: ${outcome} at ${target.key}). ` +
+      'The source structure may have changed; inspect the evidence files, then RESUME.';
+    this.lastError = this.pauseReason;
+    return this.pauseReason;
+  }
+
+  /**
+   * KAYNAK ACIKCA "YOK" DEDI — HEDEF KAYBI, AYRISTIRICI HATASI DEGIL.
+   *
+   * Ebeveyn menusu bu hedefi ilan etti; canli kaynak ise bilinen bulunamadi
+   * sayfasini dondurdu. Iki olgu da KORUNUR: hedef, ebeveyn anahtari ve
+   * beklenen yol checkpoint'te kalir (ilan edildi), kanit kopyasi
+   * evidence/not-found/ altina yazilir (kaynak yok dedi). Korpusa HICBIR SEY
+   * yazilmaz; breadcrumb ya da cocuk UYDURULMAZ; ebeveyne birlestirilmez;
+   * yerine slug turetilmez; ebeveynin ilanlari hedefe sayilmaz. Ayristirici
+   * sayaci artmaz ve kosu DURMAZ: sonraki hedefe gecilir. Hedef bu kosu icin
+   * kalici FAILED/NOT_FOUND'dur (yeniden istenmez) ve kosu sonu COMPLETE
+   * degil INCOMPLETE olur — kaynagin sildigi kategori fiyatlanabilir
+   * sayilmaz. Arka arkaya cok sayida "yok" yine ardisik-basarisizlik tavanina
+   * takilir: kaynak yapisi degismis olabilir, insan baksin.
+   */
+  private failNotFound(
+    target: StructureTarget,
+    capture: PageCapture,
+    page: PageClassification,
+    base: Omit<PageCaptureResult, 'outcome'>,
+  ): PageCaptureResult {
+    const evidence = this.writeEvidence('not-found', target, capture.html);
+    this.markNotFound(target, evidence);
+    this.counters.consecutiveFailures += 1;
+    this.appendCaptureLog(target, capture, page, 'NOT_FOUND', null, evidence);
+    const declared = (target.expectedPath ?? target.expectedPrefix ?? []).join(
+      ' / ',
+    );
+    this.log(
+      `NOT_FOUND ${target.key}: source explicitly reports the page unavailable ` +
+        `(declared by ${target.parentKey ?? 'root'} as "${declared}"; ${page.detail ?? page.title}). ` +
+        `Evidence kept, nothing saved, no child expansion; queue ${this.pendingCount()}`,
+    );
+    const halted = this.haltIfTooManyFailures('NOT_FOUND', target);
+    this.persist();
+    return halted
+      ? { ...base, outcome: 'NOT_FOUND', paused: true, pauseReason: halted }
+      : { ...base, outcome: 'NOT_FOUND' };
+  }
+
+  /** Canli yakalama ve eski karantina gocu icin ORTAK isaretleme. */
+  private markNotFound(target: StructureTarget, evidence: string): void {
+    target.status = 'FAILED';
+    target.outcome = 'NOT_FOUND';
+    target.lastError = notFoundDetail(target.key);
+    target.notFoundEvidence = evidence;
+    target.updatedAt = this.stamp();
+    this.counters.notFound += 1;
+  }
+
+  /**
+   * ESKI CHECKPOINT GOCU — KARANTINADAKI KANIT ARTIK TANINIYOR MU.
+   *
+   * Eski ayristirici bulunamadi sayfasini UNKNOWN_HTML sayip hedefi BLOKE
+   * etmisti. Devam ederken hedefin karantina kopyasi (dosya adi kaynagin kendi
+   * kuralindan: <zaman>-<sira>-<slug>.html, en yenisi) bugunku ayristiriciyla
+   * yeniden okunur. NOT_FOUND_PAGE cikarsa hedef yeniden ISTENMEDEN kalici
+   * NOT_FOUND olur ve kosu surer. Baska bir sey cikarsa (gercekten bilinmeyen
+   * bicim) eski yol degismez: deneme tavanina kadar bir sans daha. Goc
+   * belirleyici ve idempotenttir: ikinci devamda hedef artik UNKNOWN_FORMAT
+   * degildir, sayac tekrar artmaz. Karantina dosyasi yerinde kalir (tarihce);
+   * checkpoint elle duzenlenmez, surum numarasi degismez.
+   */
+  private migrateQuarantinedNotFound(target: StructureTarget): boolean {
+    if (target.outcome !== 'UNKNOWN_FORMAT') return false;
+    if (target.status !== 'BLOCKED' && target.status !== 'FAILED') return false;
+    const evidence = this.latestEvidenceFor('quarantine', target);
+    if (!evidence) return false;
+    let html: string;
+    try {
+      html = fs.readFileSync(evidence, 'utf-8');
+    } catch (err) {
+      this.log(
+        `quarantine evidence unreadable for ${target.key}: ${describeError(err)}`,
+      );
+      return false;
+    }
+    const page = classifyPage(html, `${target.slug}.html`);
+    if (page.status !== 'NOT_FOUND_PAGE') return false;
+    target.reconciledFrom = target.lastError;
+    this.markNotFound(target, evidence);
+    this.log(
+      `MIGRATED ${target.key}: quarantined copy is the source's explicit not-found page ` +
+        `(${page.detail ?? page.title}); marked NOT_FOUND without another fetch. Evidence: ${evidence}`,
+    );
+    return true;
+  }
+
+  /** Bu hedefe ait EN YENI kanit dosyasi — ad kurali tam eslesir, onek/sonek karismaz. */
+  private latestEvidenceFor(
+    kind: string,
+    target: StructureTarget,
+  ): string | null {
+    const dir = path.join(this.opts.runDir, 'evidence', kind);
+    let names: string[];
+    try {
+      names = fs.readdirSync(dir);
+    } catch {
+      return null;
+    }
+    const pattern = new RegExp(
+      `^\\d{4}-\\d{2}-\\d{2}T\\d{2}-\\d{2}-\\d{2}-\\d{3}Z-\\d{4}-${escapeRegExp(evidenceSlug(target))}\\.html$`,
+    );
+    const matches = names.filter((n) => pattern.test(n)).sort();
+    return matches.length > 0
+      ? path.join(dir, matches[matches.length - 1])
+      : null;
   }
 
   // ------------------------------------------------------------------ rebuild
@@ -1279,6 +1424,7 @@ export class StructureSession {
       refinedPaths: this.counters.refinedPaths,
       intermediatesRecovered: this.counters.intermediatesRecovered,
       legacyRetried: this.counters.legacyRetried,
+      notFound: this.counters.notFound,
       currentKey: current ? current.key : null,
       currentPath: current ? current.expectedPath : null,
       currentMake: current ? current.make : null,
@@ -1363,6 +1509,7 @@ export class StructureSession {
       refinedPaths: c.refinedPaths,
       intermediatesRecovered: c.intermediatesRecovered,
       legacyRetried: c.legacyRetried,
+      notFound: c.notFound,
       rebuilds: [...this.rebuilds],
       pauseReason: this.pauseReason,
       lastError: this.lastError,
@@ -1459,7 +1606,7 @@ export class StructureSession {
     fs.mkdirSync(dir, { recursive: true });
     this.evidenceSeq += 1;
     const stamp = new Date(this.now()).toISOString().replace(/[:.]/g, '-');
-    const safeSlug = target.slug.replace(/[^a-z0-9._-]+/gi, '-').slice(0, 80);
+    const safeSlug = evidenceSlug(target);
     const file = path.join(
       dir,
       `${stamp}-${String(this.evidenceSeq).padStart(4, '0')}-${safeSlug}.html`,
@@ -1705,6 +1852,20 @@ export function isRetryableLegacyBreadcrumbMismatch(
   const m = LEGACY_BREADCRUMB_DIFF.exec(String(target.lastError ?? ''));
   if (!m) return false;
   return isSafeRefinement(m[2].split(' / '), m[1].split(' / '));
+}
+
+/** Kanit dosyasi adi icin guvenli slug — yazma ve arama AYNI kurali kullanir. */
+function evidenceSlug(target: Pick<StructureTarget, 'slug'>): string {
+  return target.slug.replace(/[^a-z0-9._-]+/gi, '-').slice(0, 80);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Kaynagin acikca "yok" dedigi hedefin denetlenebilir aciklamasi (tam istenen anahtar). */
+export function notFoundDetail(key: string): string {
+  return `NOT_FOUND: source explicitly reports ${key} unavailable`;
 }
 
 function describeError(err: unknown): string {

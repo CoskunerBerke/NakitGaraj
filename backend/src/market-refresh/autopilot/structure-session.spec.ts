@@ -22,6 +22,7 @@ import {
   loginPage,
   twoFactorPage,
   accessBlockPage,
+  notFoundPage,
   unknownPage,
 } from '../__fixtures__/structure-page';
 import {
@@ -40,6 +41,7 @@ import {
   StructureSessionOptions,
   isRetryableLegacyBreadcrumbMismatch,
   isSafeRefinement,
+  notFoundDetail,
 } from './structure-session';
 import {
   buildHierarchy,
@@ -1552,5 +1554,356 @@ describe('LEGACY CHECKPOINT MIGRATION', () => {
       categoryPage({ chain: [ZORLU, KARTAL], nav: [] }),
     );
     expect(shallow.outcome).toBe('REDIRECT_MISMATCH');
+  });
+});
+
+// ------------------------------------------------ kaynak acikca "yok" dedi
+
+describe('KNOWN SOURCE NOT-FOUND IS NONFATAL (structural drift, not a parser failure)', () => {
+  /** Marka sayfasi BES dogrudan cocuk ilan eder: ardisik tavan (5) test edilebilsin. */
+  const fiveChildrenMakePage = () =>
+    categoryPage({
+      chain: [ZORLU],
+      nav: [
+        { label: 'Kartal', slug: 'zorlu-kartal', count: 5 },
+        { label: 'Şahin', slug: 'zorlu-sahin', count: 5 },
+        { label: 'Doğan', slug: 'zorlu-dogan', count: 5 },
+        { label: 'Serçe', slug: 'zorlu-serce', count: 5 },
+        { label: 'Toros', slug: 'zorlu-toros', count: 5 },
+      ],
+    });
+
+  it('marks the target unavailable, keeps evidence outside the corpus, expands nothing, and moves on', () => {
+    const opts = options();
+    const session = StructureSession.start(opts, ['/zorlu']);
+    submit(session, expectCapture(session, '/zorlu'), makePage());
+    const before = session.targetsView().length;
+    const d = expectCapture(session, '/zorlu-kartal');
+    const result = submit(session, d, notFoundPage());
+
+    expect(result.outcome).toBe('NOT_FOUND');
+    expect(result.pageStatus).toBe('NOT_FOUND_PAGE');
+    expect(result.paused).toBe(false);
+    expect(result.savedFile).toBeNull();
+    expect(result.childrenDeclared).toBe(0);
+    expect(result.childrenEnqueued).toBe(0);
+
+    const target = session
+      .targetsView()
+      .find((t) => t.key === '/zorlu-kartal')!;
+    expect(target).toMatchObject({
+      status: 'FAILED',
+      outcome: 'NOT_FOUND',
+      parentKey: '/zorlu', // ebeveynin ilani KORUNUR (yapisal kayma kaniti)
+      expectedPath: ['Zorlu', 'Kartal'],
+      breadcrumb: null, // uydurulmaz
+      childrenDeclared: null, // cocuk acilmaz
+      savedFile: null,
+    });
+    expect(target.lastError).toBe(
+      'NOT_FOUND: source explicitly reports /zorlu-kartal unavailable',
+    );
+    expect(target.lastError).toBe(notFoundDetail('/zorlu-kartal'));
+    expect(target.notFoundEvidence).toMatch(
+      /[\\/]evidence[\\/]not-found[\\/].*-zorlu-kartal\.html$/,
+    );
+    expect(fs.existsSync(target.notFoundEvidence!)).toBe(true);
+    expect(fs.readFileSync(target.notFoundEvidence!, 'utf-8')).toBe(
+      notFoundPage(),
+    );
+
+    // Korpusa hicbir sey yazilmadi; karantina yok (ayristirici hatasi degil).
+    expect(fs.readdirSync(path.join(corpusDir, 'Zorlu'))).toHaveLength(1);
+    expect(fs.existsSync(path.join(runDir, 'evidence', 'quarantine'))).toBe(
+      false,
+    );
+    expect(
+      fs.readdirSync(path.join(runDir, 'evidence', 'not-found')),
+    ).toHaveLength(1);
+
+    // Cocuk acilmadi, sayaclar dogru, kosu SURUYOR.
+    expect(session.targetsView()).toHaveLength(before);
+    const status = session.status();
+    expect(status.state).toBe('RUNNING');
+    expect(status.parseFailures).toBe(0);
+    expect(status.notFound).toBe(1);
+    expect(status.redirectMismatch).toBe(0);
+    expect(status.failed).toBe(1);
+    expect(status.blocked).toBe(0);
+    expect(session.report().notFound).toBe(1);
+    expect(session.report().parseFailures).toBe(0);
+
+    // Sonraki kuyruk hedefine kendiliginden gecer.
+    expectCapture(session, '/zorlu-sahin');
+
+    // Yakalama gunlugu denetlenebilir: tam istenen anahtar + kanit dosyasi.
+    const lines = fs
+      .readFileSync(path.join(runDir, 'captures.jsonl'), 'utf-8')
+      .trim()
+      .split('\n')
+      .map((l) => JSON.parse(l));
+    const line = lines[lines.length - 1];
+    expect(line).toMatchObject({
+      key: '/zorlu-kartal',
+      outcome: 'NOT_FOUND',
+      pageStatus: 'NOT_FOUND_PAGE',
+      savedFile: null,
+      childrenDeclared: null,
+    });
+    expect(line.evidenceFile).toBe(target.notFoundEvidence);
+
+    // Checkpoint ayni durumu tasir (devam guvenli), surum degismez.
+    const payload = opts.checkpointFile.load();
+    expect(payload.version).toBe('structure-v1');
+    expect(
+      payload.targets.find((t) => t.key === '/zorlu-kartal'),
+    ).toMatchObject({ status: 'FAILED', outcome: 'NOT_FOUND' });
+    expect(payload.counters.notFound).toBe(1);
+    expect(payload.counters.parseFailures).toBe(0);
+  });
+
+  it('never re-fetches an unavailable target after resume; the run ends INCOMPLETE, never COMPLETE', () => {
+    const session = StructureSession.start(options(), ['/zorlu']);
+    submit(session, expectCapture(session, '/zorlu'), makePage());
+    submit(session, expectCapture(session, '/zorlu-kartal'), notFoundPage());
+    const resumed = StructureSession.resume(options());
+    expect(
+      resumed.targetsView().find((t) => t.key === '/zorlu-kartal'),
+    ).toMatchObject({ status: 'FAILED', outcome: 'NOT_FOUND' });
+    expect(resumed.status().notFound).toBe(1);
+    // Kalan hedefler normal toplanir.
+    submit(resumed, expectCapture(resumed, '/zorlu-sahin'), sahinPage());
+    submit(
+      resumed,
+      expectCapture(resumed, '/zorlu-dogan'),
+      categoryPage({ chain: [ZORLU, DOGAN], nav: [] }),
+    );
+    submit(
+      resumed,
+      expectCapture(resumed, '/zorlu-ticari-kamyonet'),
+      categoryPage({
+        chain: [ZORLU, { label: 'Zorlu Ticari', slug: 'zorlu-ticari-kamyonet' }],
+        nav: [],
+      }),
+    );
+    const end = resumed.nextDirective() as any;
+    expect(end.type).toBe('HALT');
+    expect(end.state).toBe('INCOMPLETE');
+    expect(end.reason).toContain('NOT_FOUND');
+    expect(resumed.isRunComplete()).toBe(false);
+  });
+
+  it('does not weaken the parser gate: an unknown page right after a not-found still stops the run', () => {
+    const session = StructureSession.start(options(), ['/zorlu']);
+    submit(session, expectCapture(session, '/zorlu'), makePage());
+    submit(session, expectCapture(session, '/zorlu-kartal'), notFoundPage());
+    const result = submit(
+      session,
+      expectCapture(session, '/zorlu-sahin'),
+      unknownPage(),
+    );
+    expect(result.outcome).toBe('UNKNOWN_FORMAT');
+    expect(result.pageStatus).toBe('UNKNOWN_HTML');
+    expect(result.paused).toBe(true);
+    expect(session.currentState).toBe('ERROR');
+    expect(session.status().parseFailures).toBe(1);
+    expect(session.status().notFound).toBe(1);
+    expect(
+      fs.readdirSync(path.join(runDir, 'evidence', 'quarantine')),
+    ).toHaveLength(1);
+  });
+
+  it('a true own-URL redirect right after a not-found is still REDIRECT_MISMATCH, never NOT_FOUND', () => {
+    const session = StructureSession.start(options(), ['/zorlu']);
+    submit(session, expectCapture(session, '/zorlu'), makePage());
+    submit(session, expectCapture(session, '/zorlu-kartal'), notFoundPage());
+    const result = submit(
+      session,
+      expectCapture(session, '/zorlu-sahin'),
+      makePage(),
+      'https://www.sahibinden.com/zorlu',
+    );
+    expect(result.outcome).toBe('REDIRECT_MISMATCH');
+    expect(session.status().notFound).toBe(1);
+    expect(session.status().redirectMismatch).toBe(1);
+  });
+
+  it('five consecutive unavailable targets still trip the consecutive-failure stop; resume continues without re-fetching them', () => {
+    const session = StructureSession.start(options(), ['/zorlu']);
+    submit(session, expectCapture(session, '/zorlu'), fiveChildrenMakePage());
+    const keys = [
+      '/zorlu-kartal',
+      '/zorlu-sahin',
+      '/zorlu-dogan',
+      '/zorlu-serce',
+      '/zorlu-toros',
+    ];
+    expect(keys).toHaveLength(MAX_CONSECUTIVE_FAILURES);
+    let last: any = null;
+    for (const key of keys) {
+      last = submit(session, expectCapture(session, key), notFoundPage());
+    }
+    expect(last.outcome).toBe('NOT_FOUND');
+    expect(last.paused).toBe(true);
+    expect(session.currentState).toBe('ERROR');
+    expect(session.status().pauseReason).toContain(
+      `${MAX_CONSECUTIVE_FAILURES} consecutive failures (last: NOT_FOUND at /zorlu-toros)`,
+    );
+    expect(session.status().notFound).toBe(5);
+    expect(session.status().parseFailures).toBe(0);
+    expect(
+      fs.readdirSync(path.join(runDir, 'evidence', 'not-found')),
+    ).toHaveLength(5);
+
+    const resumed = StructureSession.resume(options());
+    expect(resumed.currentState).toBe('RUNNING');
+    expect(resumed.status().notFound).toBe(5);
+    expect(
+      resumed
+        .targetsView()
+        .filter((t) => t.outcome === 'NOT_FOUND')
+        .map((t) => t.status),
+    ).toEqual(['FAILED', 'FAILED', 'FAILED', 'FAILED', 'FAILED']);
+    expect((resumed.nextDirective() as any).state).toBe('INCOMPLETE');
+  });
+});
+
+// --------------------------- eski checkpoint: karantinadaki bulunamadi kaniti
+
+describe('LEGACY CHECKPOINT: QUARANTINED NOT-FOUND EVIDENCE MIGRATES WITHOUT A FETCH', () => {
+  /**
+   * Eski kosuyu taklit et: eski ayristirici bulunamadi sayfasini UNKNOWN_HTML
+   * sayip hedefi iki denemede BLOKE etti ve kopyalarini karantinaya yazdi
+   * (gercek kosudaki gibi: attempts=2, parseFailures artmis, state ERROR).
+   * Ayni yol GERCEK kodla uretilir; sonra karantinadaki son kopyanin icerigi
+   * kaynagin bulunamadi sayfasiyla degistirilir — checkpoint elle DUZENLENMEZ.
+   */
+  function legacyQuarantinedNotFound(quarantineHtml = notFoundPage()): {
+    opts: StructureSessionOptions;
+    quarantine: string;
+  } {
+    const opts = options();
+    const session = StructureSession.start(opts, ['/zorlu']);
+    submit(session, expectCapture(session, '/zorlu'), makePage());
+    submit(session, expectCapture(session, '/zorlu-kartal'), unknownPage());
+    clock += 20_000; // ikinci karantina kopyasi farkli zaman damgasi tasir
+    const again = StructureSession.resume(opts);
+    submit(again, expectCapture(again, '/zorlu-kartal'), unknownPage());
+    expect(again.currentState).toBe('ERROR');
+    const dir = path.join(runDir, 'evidence', 'quarantine');
+    const files = fs.readdirSync(dir).sort();
+    expect(files).toHaveLength(2);
+    const quarantine = path.join(dir, files[files.length - 1]);
+    fs.writeFileSync(quarantine, quarantineHtml, 'utf-8');
+    const payload = opts.checkpointFile.load();
+    expect(
+      payload.targets.find((t) => t.key === '/zorlu-kartal'),
+    ).toMatchObject({ status: 'BLOCKED', outcome: 'UNKNOWN_FORMAT', attempts: 2 });
+    expect(payload.counters.parseFailures).toBe(2);
+    return { opts, quarantine };
+  }
+
+  it('18) a BLOCKED target whose quarantined copy is the source not-found page becomes NOT_FOUND on resume, without another fetch', () => {
+    const { opts, quarantine } = legacyQuarantinedNotFound();
+    const resumed = StructureSession.resume(options());
+    expect(resumed.currentState).toBe('RUNNING');
+    const kartal = resumed
+      .targetsView()
+      .find((t) => t.key === '/zorlu-kartal')!;
+    expect(kartal).toMatchObject({
+      status: 'FAILED',
+      outcome: 'NOT_FOUND',
+      attempts: 2,
+      lastError: notFoundDetail('/zorlu-kartal'),
+      notFoundEvidence: quarantine,
+      parentKey: '/zorlu',
+      expectedPath: ['Zorlu', 'Kartal'],
+      breadcrumb: null,
+      savedFile: null,
+    });
+    expect(kartal.reconciledFrom).toBe(
+      'UNKNOWN_FORMAT (UNKNOWN_HTML): bilinen hicbir imza yok',
+    );
+    expect(fs.existsSync(quarantine)).toBe(true); // tarihce yerinde kalir
+    const status = resumed.status();
+    expect(status.notFound).toBe(1);
+    expect(status.parseFailures).toBe(2); // tarihce silinmez
+    expect(status.blocked).toBe(0);
+    expect(status.failed).toBe(1);
+    expect(status.completed).toBe(1); // ilerleme korunur
+    // Yeniden ISTENMEZ: siradaki hedef Kartal degil.
+    expectCapture(resumed, '/zorlu-sahin');
+    expect(
+      opts.checkpointFile
+        .load()
+        .targets.find((t) => t.key === '/zorlu-kartal'),
+    ).toMatchObject({ status: 'FAILED', outcome: 'NOT_FOUND' });
+    expect(fs.existsSync(path.join(corpusDir, 'Zorlu', 'Zorlu Kartal Fiyatları & Modelleri sahibinden.com\'da.html'))).toBe(false);
+  });
+
+  it('19) repeated resume is idempotent: same target count, notFound counted once, still FAILED/NOT_FOUND', () => {
+    legacyQuarantinedNotFound();
+    const first = StructureSession.resume(options());
+    const count = first.targetsView().length;
+    StructureSession.resume(options());
+    const third = StructureSession.resume(options());
+    expect(third.targetsView()).toHaveLength(count);
+    expect(third.status().notFound).toBe(1);
+    expect(third.status().parseFailures).toBe(2);
+    expect(
+      third.targetsView().filter((t) => t.key === '/zorlu-kartal'),
+    ).toHaveLength(1);
+    expect(
+      third.targetsView().find((t) => t.key === '/zorlu-kartal'),
+    ).toMatchObject({ status: 'FAILED', outcome: 'NOT_FOUND', attempts: 2 });
+    expectCapture(third, '/zorlu-sahin');
+  });
+
+  it('20) checkpoint progress is preserved across the migration (completed pages, counters, version, seen keys)', () => {
+    const { opts } = legacyQuarantinedNotFound();
+    const before = opts.checkpointFile.load();
+    StructureSession.resume(options());
+    const after = opts.checkpointFile.load();
+    expect(after.version).toBe(before.version);
+    expect(after.runId).toBe(before.runId);
+    expect(after.targets).toHaveLength(before.targets.length);
+    expect(
+      after.targets.filter((t) => t.status === 'COMPLETE').map((t) => t.key),
+    ).toEqual(
+      before.targets.filter((t) => t.status === 'COMPLETE').map((t) => t.key),
+    );
+    expect(after.counters.saved).toBe(before.counters.saved);
+    expect(after.counters.attempted).toBe(before.counters.attempted);
+    expect(after.counters.parseFailures).toBe(before.counters.parseFailures);
+    expect(after.counters.notFound).toBe(1);
+    expect(after.seenKeys).toEqual(before.seenKeys);
+    expect(after.state).toBe('RUNNING');
+  });
+
+  it('quarantined evidence that is still genuinely unknown keeps the old retry path (PENDING until the attempt ceiling)', () => {
+    legacyQuarantinedNotFound(unknownPage());
+    const resumed = StructureSession.resume(options());
+    expect(
+      resumed.targetsView().find((t) => t.key === '/zorlu-kartal'),
+    ).toMatchObject({ status: 'PENDING', outcome: 'UNKNOWN_FORMAT', attempts: 2 });
+    expect(resumed.status().notFound).toBe(0);
+    expectCapture(resumed, '/zorlu-kartal');
+  });
+
+  it("only the target's own quarantine copy counts: a longer slug ending the same way is not confused", () => {
+    legacyQuarantinedNotFound(unknownPage());
+    const dir = path.join(runDir, 'evidence', 'quarantine');
+    // Baska hedefin (torun) bulunamadi kopyasi ve ad kuralina uymayan bir dosya: Kartal'a sayilmaz.
+    fs.writeFileSync(
+      path.join(dir, '2026-09-04T02-00-30-000Z-0009-zorlu-kartal-1.6.html'),
+      notFoundPage(),
+      'utf-8',
+    );
+    fs.writeFileSync(path.join(dir, 'stray-zorlu-kartal.html'), notFoundPage(), 'utf-8');
+    const resumed = StructureSession.resume(options());
+    expect(
+      resumed.targetsView().find((t) => t.key === '/zorlu-kartal'),
+    ).toMatchObject({ status: 'PENDING', outcome: 'UNKNOWN_FORMAT' });
+    expect(resumed.status().notFound).toBe(0);
   });
 });

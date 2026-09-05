@@ -152,6 +152,47 @@ export function accessBlockPage(): string {
 </body></html>`;
 }
 
+/**
+ * Kaynagin ACIK "sayfa bulunamadi" ekrani — canli kosunun karantinaya aldigi
+ * gercek kanittan (2026-09-05) turetilmis asgari isaretleme: hata kabugu,
+ * baslik, hata alt bilgisi, recaptcha NOT_FOUND ucu ve makine-okur
+ * "route":"error" + "errorCode":404 bildirimi. Erisim engeli sayfasiyla
+ * ORTAK olan kabuk/baslik tek basina yetmez (bkz. page-classification).
+ */
+export function notFoundPage(): string {
+  return `<!DOCTYPE html>
+<html lang="tr"><head><meta charset="utf-8"><title>sahibinden.com Hata Sayfası</title>
+<link href="https://s0.shbdn.com/assets/errors:5cb7c39d217030b9fcab9f9082f6d72d.css" media="screen, print" rel="stylesheet" type="text/css">
+</head>
+<body class="no-width">
+<div class="error-page-container">
+  <a class="logo" href="https://www.sahibinden.com"></a>
+  <h1>Aradığınız sayfaya <strong>ulaşılamadı.</strong></h1>
+  <p class="description">Aşağıdaki bağlantılar aradığınız içeriğe ulaşmanızı sağlayabilir.</p>
+  <form action="https://www.sahibinden.com/kelime-ile-arama" method="get">
+    <input id="queryText" name="query_text" type="text" placeholder="Ne aramıştınız?">
+    <button id="searchButton" type="submit" value="ARA"></button>
+  </form>
+  <ul id="categoryList">
+    <li class="odd category-3517"><a href="/kategori/vasita" title="Vasita">Vasıta</a></li>
+  </ul>
+  <div id="errorFooter"><ul><li class="border"><a href="https://www.sahibinden.com/">Ana Sayfa</a></li></ul></div>
+  <div id="copyright">Copyright © 2000-2026 sahibinden.com</div>
+</div>
+<script type="text/javascript">
+  function validateRecaptcha() {
+    grecaptcha.enterprise.execute(enterpriseSitekey.value, {action: 'notFound'}).then(function (token) {
+      $.ajax({ url: '/ajax/cs/login/info/NOT_FOUND', type: 'POST', dataType: 'json', data: { captchaValueEnterprise: token } });
+    });
+  }
+</script>
+<div id="gaPageViewTrackingJson" data-json="{&quot;trackPageview&quot;:[],&quot;route&quot;:&quot;error&quot;,&quot;view&quot;:&quot;&quot;,&quot;categories&quot;:[],&quot;classified&quot;:null,&quot;searchResult&quot;:null,&quot;errorCode&quot;:404}"></div>
+<script id="gaPageViewTrackingData" type="text/javascript">
+  var pageTrackData = {"trackPageview":[],"route":"error","view":"","categories":[],"classified":null,"searchResult":null,"errorCode":404};
+</script>
+</body></html>`;
+}
+
 /** Hicbir bilinen imza tasimayan sayfa. */
 export function unknownPage(): string {
   return `<!DOCTYPE html><html><head><title>Bakım</title></head><body><p>Sitemiz bakımdadır.</p></body></html>`;

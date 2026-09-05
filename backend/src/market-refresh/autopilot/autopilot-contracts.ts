@@ -90,6 +90,8 @@ export interface PageCapture {
  *   REDIRECT_MISMATCH     kaynak baska bir kategoriye yonlendirdi; sayfa korpusa YAZILMADI
  *   NO_BREADCRUMB         sayfa kimligini soylemiyor; kanit sayilmaz
  *   NON_CATEGORY_PAGE     kok vitrin gibi arac kategorisi olmayan sayfa (kok hedef haric)
+ *   NOT_FOUND             kaynak hedefin VAR OLMADIGINI acikca bildirdi (bilinen bulunamadi
+ *                         sayfasi): kanit tutuldu, korpusa YAZILMADI, cocuk acilmadi, kosu SURER
  *   LOGIN_REQUIRED / TWO_FACTOR_REQUIRED / ACCESS_RESTRICTED
  *                         guvenlik/erisim duvari: kosu DURUR, kullanici elle duzeltir
  *   UNKNOWN_FORMAT        ayristirici sayfayi anlamadi: kosu DURUR, once ayristirici duzeltilir
@@ -101,6 +103,7 @@ export type CaptureOutcome =
   | 'REDIRECT_MISMATCH'
   | 'NO_BREADCRUMB'
   | 'NON_CATEGORY_PAGE'
+  | 'NOT_FOUND'
   | 'LOGIN_REQUIRED'
   | 'TWO_FACTOR_REQUIRED'
   | 'ACCESS_RESTRICTED'
@@ -152,6 +155,8 @@ export interface StructureStatus {
   intermediatesRecovered?: number;
   /** Devam ederken yeniden acilan eski sahte REDIRECT_MISMATCH hedefleri. */
   legacyRetried?: number;
+  /** Kaynagin acikca "yok" dedigi hedefler: kanit tutuldu, korpusa yazilmadi. */
+  notFound?: number;
   currentKey: string | null;
   currentPath: string[] | null;
   currentMake: string | null;
