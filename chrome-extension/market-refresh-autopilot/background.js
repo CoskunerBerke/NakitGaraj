@@ -178,6 +178,52 @@ async function setState(state, error = null) {
 }
 
 /**
+ * GECICI TESHIS — "PARSE_ERROR page reported N row failure(s)".
+ *
+ * Kopru, kimliksiz satir sayaci sifirdan buyukse sayfayi REDDEDER (fail
+ * closed; filigran ilerlemez). Hangi satirin neye benzedigi bugune kadar
+ * gorunmuyordu: icerik betigi artik o satirlari `ignoredOrFailedRows`
+ * icinde tasiyor ve burada SERVIS CALISANI KONSOLUNA basiliyor.
+ *
+ * Bu yalnizca gunluktur: hata BASTIRILMAZ, yeniden denenmez, sayac
+ * semantigi degistirilmez. Kayit gorulup satirin ne oldugu kanitlanana
+ * kadar kural aynen kalir.
+ */
+function logIgnoredOrFailedRows(directive, observation, err) {
+  const failures = Number(observation && observation.parseFailures) || 0;
+  if (failures <= 0) return;
+
+  const rows =
+    observation && Array.isArray(observation.ignoredOrFailedRows)
+      ? observation.ignoredOrFailedRows
+      : [];
+  console.error(
+    `[autopilot] DIAGNOSTIC page-batch rejected: parseFailures=${failures} ` +
+      `target=${directive.targetId || directive.nodePath || '?'} page=${directive.page} ` +
+      `url=${(observation && observation.url) || '?'} -> ${String((err && err.message) || err)}`,
+  );
+  if (rows.length === 0) {
+    console.error(
+      '[autopilot] DIAGNOSTIC no row records in the observation. ' +
+        'content-script.js is the OLD build: reload the extension in chrome://extensions and rerun.',
+    );
+    return;
+  }
+  for (const row of rows) {
+    console.error(`[autopilot] DIAGNOSTIC ignored row #${row.index}`, {
+      className: row.className,
+      classifiedTitleText: row.classifiedTitleText,
+      classifiedTitleHref: row.classifiedTitleHref,
+      priceText: row.priceText,
+      listingDateText: row.listingDateText,
+      innerTextSample: row.innerTextSample,
+    });
+  }
+  // Kopya-yapistir icin tek satirlik JSON (panel/gunluk disina tasinabilir).
+  console.error(`[autopilot] DIAGNOSTIC json ${JSON.stringify(rows)}`);
+}
+
+/**
  * Koprunun bir gonderim sonrasi bildirdigi durum kosuyu durdurdu mu.
  * Durdurduysa dongu biter; sebep panelde gorunur. Sessiz yeniden deneme YOK.
  */
@@ -263,21 +309,27 @@ async function runLoop() {
           },
         });
       } else {
-        payload = await bridgeFetch(config, '/autopilot/page-batch', {
-          method: 'POST',
-          body: {
-            runId: directive.runId,
-            nodePath: directive.nodePath,
-            page: directive.page,
-            categoryText: observation.categoryText,
-            pageUrl: observation.url,
-            cards: observation.cards,
-            hasNextPage: observation.hasNextPage,
-            parseFailures: observation.parseFailures,
-            rawHtml: observation.rawHtml,
-            pageTitle: observation.pageTitle,
-          },
-        });
+        try {
+          payload = await bridgeFetch(config, '/autopilot/page-batch', {
+            method: 'POST',
+            body: {
+              runId: directive.runId,
+              nodePath: directive.nodePath,
+              page: directive.page,
+              categoryText: observation.categoryText,
+              pageUrl: observation.url,
+              cards: observation.cards,
+              hasNextPage: observation.hasNextPage,
+              parseFailures: observation.parseFailures,
+              rawHtml: observation.rawHtml,
+              pageTitle: observation.pageTitle,
+            },
+          });
+        } catch (err) {
+          // GECICI TESHIS: once kanit basilir, sonra hata AYNEN yukselir.
+          logIgnoredOrFailedRows(directive, observation, err);
+          throw err;
+        }
       }
 
       if (await stopIfHalted(payload)) return;

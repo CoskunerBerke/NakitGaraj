@@ -206,15 +206,59 @@
    *   konum    .searchResultsLocationValue
    *   sonraki  a.prevNextBut[title="Sonraki"]
    */
+  /**
+   * GECICI TESHIS — KIMLIKSIZ SATIR NEYDI?
+   *
+   * Canli haftalik duman kosusunda kopru "PARSE_ERROR page reported 1 row
+   * failure(s)" ile 400 dondu: sayfada `tr.searchResultsItem` sinifini tasiyan
+   * ama `data-id` TASIMAYAN bir satir var. Korpusu okuyan sertlestirilmis
+   * ayristirici `[data-id]` olmayan satiri zaten gormez, bu yuzden kimlik
+   * karsilastirmasi degil YALNIZCA bu sayac dusuyor.
+   *
+   * Burada satirin ne oldugu (reklam/vitrin/promosyon mu, yoksa gercek bir
+   * ilan mi) KAYIT EDILIR — hicbir sey bastirilmaz, sayac semantigi
+   * degismez, karar verilmez. Kayit teshis icindir; kural ancak kanit
+   * gorulduikten sonra degisecektir.
+   */
+  const DIAGNOSTIC_TEXT_LIMIT = 500;
+
+  function describeIgnoredRow(row, index) {
+    const link = row.querySelector('a.classifiedTitle');
+    /**
+     * `innerText` YALNIZCA gorunen metni verir; gizli bir promosyon satirinda
+     * bos donebilir. Teshiste icerigi kaybetmemek icin bos ise `textContent`e
+     * dusulur (test ortaminda `innerText` hic tanimli olmayabilir).
+     */
+    const raw =
+      (typeof row.innerText === 'string' && row.innerText) || row.textContent || '';
+    return {
+      index,
+      className: row.className || '',
+      classifiedTitleText: text(link),
+      classifiedTitleHref: link ? link.getAttribute('href') || '' : '',
+      priceText: text(row.querySelector('.searchResultsPriceValue')),
+      listingDateText: text(
+        row.querySelector('td.searchResultsDateValue, .searchResultsDateValue'),
+      ),
+      innerTextSample: raw.replace(/\s+/g, ' ').trim().slice(0, DIAGNOSTIC_TEXT_LIMIT),
+    };
+  }
+
   function readCards() {
     const rows = document.querySelectorAll('tr.searchResultsItem');
     const cards = [];
+    /** GECICI TESHIS ciktisi; gozlem yukunde `ignoredOrFailedRows` olarak gider. */
+    const ignoredOrFailedRows = [];
     let parseFailures = 0;
+    let index = -1;
 
     for (const row of rows) {
+      index += 1;
       const sourceListingId = (row.getAttribute('data-id') || '').trim();
       if (!sourceListingId) {
         // Kimliksiz satir (reklam/promosyon) gozlem sayilmaz.
+        // GECICI TESHIS: sayaci artirmadan ONCE satirin kimligini kaydet.
+        ignoredOrFailedRows.push(describeIgnoredRow(row, index));
         parseFailures += 1;
         continue;
       }
@@ -238,7 +282,7 @@
       });
     }
 
-    return { cards, parseFailures };
+    return { cards, parseFailures, ignoredOrFailedRows };
   }
 
   function hasNextPage() {
@@ -298,13 +342,15 @@
       };
     }
 
-    const { cards, parseFailures } = readCards();
+    const { cards, parseFailures, ignoredOrFailedRows } = readCards();
     return {
       ok: true,
       url: location.href,
       categoryText: text(document.querySelector('h1')),
       cards,
       parseFailures,
+      /** GECICI TESHIS: kopruye GITMEZ, uzanti gunlugunde basilir. */
+      ignoredOrFailedRows,
       hasNextPage: hasNextPage(),
       ...(op && op.captureRawHtml
         ? {
