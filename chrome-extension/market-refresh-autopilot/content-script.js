@@ -207,20 +207,81 @@
    *   sonraki  a.prevNextBut[title="Sonraki"]
    */
   /**
-   * GECICI TESHIS — KIMLIKSIZ SATIR NEYDI?
+   * KIMLIKSIZ SATIR SINIFLANDIRMASI — KANITA DAYALI, FAIL CLOSED.
    *
-   * Canli haftalik duman kosusunda kopru "PARSE_ERROR page reported 1 row
-   * failure(s)" ile 400 dondu: sayfada `tr.searchResultsItem` sinifini tasiyan
-   * ama `data-id` TASIMAYAN bir satir var. Korpusu okuyan sertlestirilmis
-   * ayristirici `[data-id]` olmayan satiri zaten gormez, bu yuzden kimlik
-   * karsilastirmasi degil YALNIZCA bu sayac dusuyor.
+   * Kaynak her sonuc sayfasina, ilan satirlarinin arasina KENDI reklam
+   * yuvasini koyuyor. O satir `tr.searchResultsItem` sinifini tasir ama
+   * `data-id` TASIMAZ; korpusu okuyan sertlestirilmis ayristirici de
+   * (`extractListingRows`, `<tr data-id="` ile boler) onu zaten gormez.
+   * Uzanti ise bunu "ayristirma hatasi" sayiyordu ve kopru sayfayi
+   * PARSE_ERROR ile reddediyordu — yani neredeyse HER piyasa sayfasi.
    *
-   * Burada satirin ne oldugu (reklam/vitrin/promosyon mu, yoksa gercek bir
-   * ilan mi) KAYIT EDILIR — hicbir sey bastirilmaz, sayac semantigi
-   * degismez, karar verilmez. Kayit teshis icindir; kural ancak kanit
-   * gorulduikten sonra degisecektir.
+   * OLCUM (2026-09-07, korpusun TAMAMI): 13.654 dosya, sonuc satiri tasiyan
+   * 13.411 sayfa, 13.411 kimliksiz satir — sayfa basina tam olarak bir tane.
+   * Sinif imzasi TEK: "searchResultsItem nativeAd classicNativeAd".
+   * Bu satirlarin HICBIRINDE baslik, /ilan/ baglantisi, rakamli fiyat,
+   * tarih, nitelik ya da herhangi bir metin YOK (hepsi 0/13.411).
+   *
+   * Bu yuzden kural DAR tutulur ve iki kosula birden baglanir:
+   *
+   *   A) kaynak-kanitli reklam imzasi VAR *ve* ilan kaniti YOK
+   *      -> ilan degildir, ayristirma hatasi da degildir: sayilir, atlanir
+   *   B) ilan kaniti VAR (baslik+/ilan/ baglantisi, rakamli fiyat, tarih,
+   *      rakamli nitelik) -> gercek bir ilani sessizce dusurme riski:
+   *      FAIL CLOSED (parseFailures++)
+   *   C) ne imza ne de kanit (bilinmeyen kimliksiz satir) -> FAIL CLOSED
+   *
+   * "Kimliksiz her satiri yok say" YAPILMAZ: o, kaynak bir gun kimligi
+   * baska bir alana tasidiginda tum sayfayi sessizce bosaltirdi.
    */
   const DIAGNOSTIC_TEXT_LIMIT = 500;
+
+  /** Kaynak-kanitli reklam yuvasi sinif isaretleri (yukaridaki olcum). */
+  const NATIVE_AD_CLASS_MARKERS = ['nativeAd', 'classicNativeAd'];
+
+  /** Gercek ilan baglantisi: kaynagin ilan yolu. */
+  const LISTING_HREF = /\/ilan\//i;
+
+  /** Kaynagin gorece tarih etiketleri; rakam tasimasalar da tarihtir. */
+  const RELATIVE_DATE = /\b(bugün|dün)\b/i;
+
+  function classNamesOf(row) {
+    return String(row.className || '')
+      .split(/\s+/)
+      .filter(Boolean);
+  }
+
+  /** Satirin tasidigi KANITLI reklam isaretleri (yoksa bos dizi). */
+  function nativeAdMarkers(row) {
+    const names = classNamesOf(row);
+    return NATIVE_AD_CLASS_MARKERS.filter((marker) => names.indexOf(marker) >= 0);
+  }
+
+  /**
+   * GERCEK ILAN KANITI. Herhangi biri varsa satir ilan OLABILIR ve reklam
+   * imzasi tasisa bile atlanmaz — fail closed. Serbest metin (promosyon
+   * yazisi, model hucresi) KANIT DEGILDIR: reklam da metin tasiyabilir.
+   */
+  function listingEvidence(row) {
+    const reasons = [];
+    const link = row.querySelector('a.classifiedTitle');
+    const href = link ? link.getAttribute('href') || '' : '';
+    if (link && LISTING_HREF.test(href)) reasons.push('CLASSIFIED_TITLE_HREF');
+    if (/\d/.test(text(row.querySelector('.searchResultsPriceValue')))) {
+      reasons.push('PRICE_WITH_DIGITS');
+    }
+    const date = text(
+      row.querySelector('td.searchResultsDateValue, .searchResultsDateValue'),
+    );
+    if (/\d/.test(date) || RELATIVE_DATE.test(date)) reasons.push('LISTING_DATE');
+    for (const cell of row.querySelectorAll('td.searchResultsAttributeValue')) {
+      if (/\d/.test(text(cell))) {
+        reasons.push('ATTRIBUTE_WITH_DIGITS');
+        break;
+      }
+    }
+    return reasons;
+  }
 
   function describeIgnoredRow(row, index) {
     const link = row.querySelector('a.classifiedTitle');
@@ -247,18 +308,30 @@
   function readCards() {
     const rows = document.querySelectorAll('tr.searchResultsItem');
     const cards = [];
-    /** GECICI TESHIS ciktisi; gozlem yukunde `ignoredOrFailedRows` olarak gider. */
+    /** FAIL CLOSED olan satirlar (B ve C): kopru sayfayi reddedecek. */
     const ignoredOrFailedRows = [];
+    /** Kanitli reklam yuvalari (A): denetlenebilir kayit, hata DEGIL. */
+    const ignoredNonListingRows = [];
     let parseFailures = 0;
+    let ignoredNativeAds = 0;
     let index = -1;
 
     for (const row of rows) {
       index += 1;
       const sourceListingId = (row.getAttribute('data-id') || '').trim();
       if (!sourceListingId) {
-        // Kimliksiz satir (reklam/promosyon) gozlem sayilmaz.
-        // GECICI TESHIS: sayaci artirmadan ONCE satirin kimligini kaydet.
-        ignoredOrFailedRows.push(describeIgnoredRow(row, index));
+        const record = describeIgnoredRow(row, index);
+        record.nativeAdMarkers = nativeAdMarkers(row);
+        record.listingEvidence = listingEvidence(row);
+
+        // A) KANITLI REKLAM YUVASI: ilan degil, ayristirma hatasi da degil.
+        if (record.nativeAdMarkers.length > 0 && record.listingEvidence.length === 0) {
+          ignoredNativeAds += 1;
+          ignoredNonListingRows.push(record);
+          continue;
+        }
+        // B) ilan kaniti var, C) bilinmeyen satir: ikisi de FAIL CLOSED.
+        ignoredOrFailedRows.push(record);
         parseFailures += 1;
         continue;
       }
@@ -282,7 +355,13 @@
       });
     }
 
-    return { cards, parseFailures, ignoredOrFailedRows };
+    return {
+      cards,
+      parseFailures,
+      ignoredOrFailedRows,
+      ignoredNonListingRows,
+      ignoredNativeAds,
+    };
   }
 
   function hasNextPage() {
@@ -342,15 +421,27 @@
       };
     }
 
-    const { cards, parseFailures, ignoredOrFailedRows } = readCards();
+    const {
+      cards,
+      parseFailures,
+      ignoredOrFailedRows,
+      ignoredNonListingRows,
+      ignoredNativeAds,
+    } = readCards();
     return {
       ok: true,
       url: location.href,
       categoryText: text(document.querySelector('h1')),
       cards,
       parseFailures,
-      /** GECICI TESHIS: kopruye GITMEZ, uzanti gunlugunde basilir. */
+      /**
+       * TESHIS ALANLARI: kopruye GITMEZ (yuk sozlesmesi degismedi), uzanti
+       * gunlugunde basilir. Ilan sayimi, yeni-ilan sayaci, kesin atama,
+       * sinir karari, filigran ve tekillestirme bunlardan ETKILENMEZ.
+       */
       ignoredOrFailedRows,
+      ignoredNonListingRows,
+      ignoredNativeAds,
       hasNextPage: hasNextPage(),
       ...(op && op.captureRawHtml
         ? {

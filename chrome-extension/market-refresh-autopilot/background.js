@@ -217,6 +217,9 @@ function logIgnoredOrFailedRows(directive, observation, err) {
       priceText: row.priceText,
       listingDateText: row.listingDateText,
       innerTextSample: row.innerTextSample,
+      /** Reklam imzasi ve ilan kaniti: satirin neden FAIL CLOSED oldugu. */
+      nativeAdMarkers: row.nativeAdMarkers,
+      listingEvidence: row.listingEvidence,
     });
   }
   // Kopya-yapistir icin tek satirlik JSON (panel/gunluk disina tasinabilir).
@@ -309,6 +312,18 @@ async function runLoop() {
           },
         });
       } else {
+        /**
+         * Kaynagin kendi reklam yuvasi: ilan degildir, ayristirma hatasi da
+         * degildir. Gorunur kilinir ama sayfayi REDDETTIRMEZ; kart sayisi,
+         * yeni-ilan sayaci ve sinir karari bundan etkilenmez.
+         */
+        const ignoredAds = Number(observation.ignoredNativeAds) || 0;
+        if (ignoredAds > 0) {
+          console.log(
+            `[autopilot] ignored ${ignoredAds} non-listing native-ad row(s) on page ${directive.page}: ` +
+              `cards=${observation.cards.length} parseFailures=${observation.parseFailures}`,
+          );
+        }
         try {
           payload = await bridgeFetch(config, '/autopilot/page-batch', {
             method: 'POST',
