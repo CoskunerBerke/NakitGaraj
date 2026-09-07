@@ -36,11 +36,17 @@ import {
   PageCapture,
   PageCaptureResult,
   StructureStatus,
+  StructureTiming,
 } from './autopilot-contracts';
 import { AtomicChecksummedFile } from '../checkpoint-store';
 import { buildCategoryUrl, normalizeNodePath } from './source-url';
 import { CorpusEvidence, CorpusStore } from './corpus-store';
 import { RebuildResult, RebuildRunner } from './rebuild-runner';
+import {
+  LightGateFinding,
+  LightGateReport,
+  runLightStructureGate,
+} from './structure-light-gate';
 import {
   PageClassification,
   classifyPage,
@@ -66,6 +72,56 @@ export const MAX_ATTEMPTS = 3;
 export const MAX_CONSECUTIVE_FAILURES = 5;
 const REBUILD_POLL_MS = 10_000;
 const SCAN_POLL_MS = 750;
+
+/**
+ * KAPI KADANSI — OLCUME DAYALI VARSAYILANLAR (structure-2026-09).
+ *
+ *   131 tam yeniden kurma x ort. 192 s = 7.0 saat = aktif surenin %37'si.
+ *   Sayfa basina alim dongusu (5000 ms tempo ile) ort. 6.4 s.
+ *
+ * Hafif kapi 50 sayfada bir kosar (bellek ici, ~100 ms / 8.5k hedef).
+ * Tam kapi 400 sayfada bir YA DA 40 dakikada bir (hangisi once). Uzlastirici
+ * duzeltmesi sonrasi tam kurma ~2 dk; 6500 kaydedilmis sayfada ~17 tam kapi
+ * ~35 dk eder (%7). 250'de %11, 500'de %6 — 400, "en fazla ~25 dk dogrulanmamis
+ * ilerleme" ile "kapi maliyeti" arasindaki secimdir; CLI'dan degistirilebilir.
+ * Kosu sonu tam kapisi ZORUNLUDUR ve kapatilamaz.
+ */
+export const DEFAULT_LIGHT_CHECK_EVERY = 50;
+export const DEFAULT_FULL_REBUILD_EVERY = 400;
+export const DEFAULT_FULL_REBUILD_INTERVAL_MS = 40 * 60_000;
+/** Checkpoint'te tutulan hafif kapi kaydi sayisi (dosya buyumesin). */
+const LIGHT_GATE_HISTORY = 100;
+/** ETA icin son N kaydedilmis sayfa dongusu. */
+const CYCLE_WINDOW = 200;
+/** Bir dongu bundan uzunsa kesinti sayilir ve ortalamaya girmez. */
+const CYCLE_IDLE_MS = 15 * 60_000;
+/** Rapor dosyasi en fazla bu siklikta yazilir (checkpoint HER basarida). */
+const REPORT_THROTTLE_MS = 5_000;
+
+export type PaceMode = 'SAFE' | 'OVERNIGHT';
+export type StructureMode = 'FULL' | 'INCREMENTAL';
+
+/**
+ * TEMPO ON AYARLARI. Mevcut sert alt sinir (1000 ms) korunur; OVERNIGHT bunu
+ * asagi cekmez, yalnizca temel araligi olcume dayali olarak kisaltir:
+ * 6565 yakalama x (5000 ms tempo) = 11.7 saat alim; 2200 ms ile ~6.6 saat.
+ * Kaynak bozulunca (yonlendirme/yok/yavaslama) geri cekilme carpani devreye girer.
+ */
+export const PACE_PRESETS: Record<PaceMode, { paceMs: number; jitter: number }> = {
+  SAFE: { paceMs: 5000, jitter: 0.4 },
+  OVERNIGHT: { paceMs: 2200, jitter: 0.3 },
+};
+
+/** Geri cekilme: basarisizlikta x1.5 (en fazla x4), 10 ardisik basaridan sonra x0.8 ile toparlanir. */
+export const BACKOFF = {
+  factor: 1.5,
+  maxMultiplier: 4,
+  recoverAfter: 10,
+  recoverFactor: 0.8,
+  /** Yakalama gidis-donusu, son 20'nin medyaninin bu kati VE en az 5 s ise "yavas" sayilir. */
+  slowFactor: 2,
+  slowFloorMs: 5000,
+};
 
 export type TargetStatus =
   'PENDING' | 'IN_PROGRESS' | 'COMPLETE' | 'FAILED' | 'BLOCKED';
@@ -122,6 +178,52 @@ export interface StructureTarget {
    * yapisal kayma kanitidir. Eski checkpoint'lerde alan yoktur.
    */
   notFoundEvidence?: string | null;
+  /**
+   * Sayfanin KENDI kategori yolu (breadcrumb'in son href'i) — cekilen ve
+   * korpustan karsilanan hedefte ayni sekilde kaydedilir; hafif kapi bunu
+   * anahtarla karsilastirir. Eski checkpoint'lerde alan yoktur.
+   */
+  ownPath?: string | null;
+  /**
+   * INCREMENTAL: korpusta var ama bayat sayildi; yeniden cekilip korpus
+   * kanitiyla KARSILASTIRILACAK (kopya yazilmaz). Karsilastirma tabani asagida.
+   */
+  reverify?: {
+    evidenceFile: string;
+    breadcrumb: string[];
+    /** Korpus kanitinin dogrudan cocuk slug'lari (sirali). */
+    childSlugs: string[];
+  } | null;
+  /** DRIFT sonucu: neyin degistigi. */
+  driftKind?: DriftKind | null;
+}
+
+export type DriftKind =
+  | 'CHILDREN_CHANGED'
+  | 'BREADCRUMB_CHANGED'
+  | 'REDIRECT_MISMATCH'
+  | 'NOT_FOUND';
+
+/** Kaynak kaymasi kaydi — drift-registry.json satiri. Tarihce SILINMEZ. */
+export interface DriftRecord {
+  key: string;
+  kind: DriftKind;
+  expectedPath: string[] | null;
+  observedPath: string[] | null;
+  before: string[] | null;
+  after: string[] | null;
+  evidenceFile: string | null;
+  at: string;
+  detail: string | null;
+}
+
+export interface LightGateRecord {
+  at: string;
+  ok: boolean;
+  targetsChecked: number;
+  waveSize: number;
+  durationMs: number;
+  findings: LightGateFinding[];
 }
 
 interface Counters {
@@ -150,6 +252,10 @@ interface Counters {
   legacyRetried: number;
   /** Kaynagin acikca "yok" dedigi hedefler (canli + karantinadan gocen). */
   notFound: number;
+  /** INCREMENTAL: yeniden cekilip korpusla AYNI cikan bayat sayfalar. */
+  reverified: number;
+  /** INCREMENTAL: yeniden cekilip korpustan FARKLI cikan sayfalar (kayma). */
+  driftDetected: number;
 }
 
 export interface RebuildRecord {
@@ -184,6 +290,17 @@ export interface StructureCheckpointPayload {
   sinceRebuild: number;
   deadlineAtMs: number | null;
   corpusRoot: string | null;
+  // ---- V2 (eski checkpoint'lerde yoktur; devam ederken varsayilanla dolar) ----
+  structureMode?: StructureMode;
+  lightChecks?: LightGateRecord[];
+  lightGateCount?: number;
+  sinceLightCheck?: number;
+  lastFullRebuildAtMs?: number | null;
+  timing?: StructureTiming;
+  recentCycleMs?: number[];
+  paceMultiplier?: number;
+  successStreak?: number;
+  drift?: DriftRecord[];
 }
 
 export interface StructureSessionOptions {
@@ -196,12 +313,27 @@ export interface StructureSessionOptions {
   runDir: string;
   /** Bu kosuda gonderilecek azami yakalama (duman testi). null = sinirsiz. */
   maxPages?: number | null;
-  /** Bu kadar sayfa kaydedildikten sonra yeniden kur + dogrula. 0 = hic. */
+  /**
+   * TAM KAPI: bu kadar sayfa kaydedildikten sonra yeniden kur + dogrula.
+   * 0 = hic (yalnizca test/kuru kosu; kosu sonu kapisi da kapanir, YAYIN YOK).
+   */
   rebuildEvery?: number;
+  /** TAM KAPI sure esigi (ms): son tam kapidan bu kadar gecti VE yeni sayfa var. null = kapali. */
+  fullRebuildIntervalMs?: number | null;
   rebuild?: RebuildRunner | null;
-  /** Adimlar arasi temel bekleme ve jitter orani (0..1). */
+  /** HAFIF KAPI: bu kadar kabul edilmis sayfada bir bellek ici denetim. 0 = kapali. */
+  lightCheckEvery?: number;
+  /** Adimlar arasi temel bekleme ve jitter orani (0..1). Verilmezse paceMode on ayari. */
   paceMs?: number;
   jitter?: number;
+  paceMode?: PaceMode;
+  /**
+   * INCREMENTAL: korpusta bulunan ama bu kadar gunden eski VE cocuklu (terminal
+   * olmayan) sayfalar yeniden cekilip karsilastirilir. null = hicbir mevcut
+   * sayfa yeniden cekilmez (FULL ile ayni yerel davranis).
+   */
+  structureMode?: StructureMode;
+  staleDays?: number | null;
   deadlineAtMs?: number | null;
   now?: () => number;
   random?: () => number;
@@ -243,6 +375,20 @@ export interface RunReport {
   pauseReason: string | null;
   lastError: string | null;
   runComplete: boolean;
+  // ---- V2 ----
+  structureMode: StructureMode;
+  paceMode: PaceMode;
+  paceMs: number;
+  lightCheckEvery: number;
+  lightGates: number;
+  lightGateFailures: number;
+  fullRebuildEvery: number;
+  fullRebuildIntervalMs: number | null;
+  reverified: number;
+  driftDetected: number;
+  driftRecords: number;
+  timing: StructureTiming;
+  estimatedRemainingMs: number | null;
 }
 
 function emptyCounters(): Counters {
@@ -263,6 +409,22 @@ function emptyCounters(): Counters {
     intermediatesRecovered: 0,
     legacyRetried: 0,
     notFound: 0,
+    reverified: 0,
+    driftDetected: 0,
+  };
+}
+
+function emptyTiming(): StructureTiming {
+  return {
+    captureRoundTripMs: 0,
+    captures: 0,
+    corpusScanMs: 0,
+    corpusScans: 0,
+    lightGateMs: 0,
+    fullGateMs: 0,
+    persistMs: 0,
+    persists: 0,
+    avgCycleMs: null,
   };
 }
 
@@ -290,18 +452,59 @@ export class StructureSession {
   private readonly log: (line: string) => void;
   private readonly maxPages: number | null;
   private readonly rebuildEvery: number;
+  private readonly fullRebuildIntervalMs: number | null;
+  private readonly lightCheckEvery: number;
+  private readonly paceMode: PaceMode;
   private readonly paceMs: number;
   private readonly jitter: number;
+  private readonly structureMode: StructureMode;
+  private readonly staleDays: number | null;
+  // ---- V2 durumu ----
+  private lightChecks: LightGateRecord[] = [];
+  private lightGateCount = 0;
+  private lightGateFailures = 0;
+  private sinceLightCheck = 0;
+  private lastFullRebuildAtMs: number | null = null;
+  private timing: StructureTiming = emptyTiming();
+  private recentCycleMs: number[] = [];
+  private lastSavedAtMs: number | null = null;
+  private paceMultiplier = 1;
+  private successStreak = 0;
+  private drift: DriftRecord[] = [];
+  /** Yonerge verilen hedef -> verildigi an (gidis-donus olcumu; devamda sifirlanir). */
+  private issuedAtMs = new Map<string, number>();
+  private recentRoundTrips: number[] = [];
+  private lastReportAtMs = 0;
+  private lastDriftWritten = 0;
 
   private constructor(private readonly opts: StructureSessionOptions) {
     this.now = opts.now || (() => Date.now());
     this.random = opts.random || Math.random;
     this.log = opts.log || (() => undefined);
+    // Kosu saati tek kaynaktan: sure esikleri createdAt'e gore olculur.
+    this.createdAt = new Date(this.now()).toISOString();
+    this.updatedAt = this.createdAt;
     this.deadlineAtMs = opts.deadlineAtMs ?? null;
     this.maxPages = opts.maxPages ?? null;
     this.rebuildEvery = Math.max(0, Math.floor(opts.rebuildEvery ?? 0));
-    this.paceMs = Math.max(1000, Math.floor(opts.paceMs ?? 5000));
-    this.jitter = Math.min(0.9, Math.max(0, opts.jitter ?? 0.4));
+    this.fullRebuildIntervalMs =
+      opts.fullRebuildIntervalMs === undefined || opts.fullRebuildIntervalMs === null
+        ? null
+        : Math.max(60_000, Math.floor(opts.fullRebuildIntervalMs));
+    this.lightCheckEvery = Math.max(0, Math.floor(opts.lightCheckEvery ?? DEFAULT_LIGHT_CHECK_EVERY));
+    this.paceMode = opts.paceMode ?? 'SAFE';
+    const preset = PACE_PRESETS[this.paceMode];
+    // Sert alt sinir 1000 ms hicbir modda asagi cekilmez.
+    this.paceMs = Math.max(1000, Math.floor(opts.paceMs ?? preset.paceMs));
+    this.jitter = Math.min(0.9, Math.max(0, opts.jitter ?? preset.jitter));
+    this.structureMode = opts.structureMode ?? 'FULL';
+    this.staleDays =
+      this.structureMode === 'INCREMENTAL' &&
+      opts.staleDays !== undefined &&
+      opts.staleDays !== null &&
+      opts.staleDays >= 0
+        ? Math.floor(opts.staleDays)
+        : null;
   }
 
   // ---------------------------------------------------------------- lifecycle
@@ -366,6 +569,17 @@ export class StructureSession {
     session.rebuilds = [...(payload.rebuilds || [])];
     session.sinceRebuild = payload.sinceRebuild || 0;
     session.deadlineAtMs = opts.deadlineAtMs ?? payload.deadlineAtMs;
+    // V2 alanlari: eski checkpoint'te yoksa sifirdan baslar (davranis degismez).
+    session.lightChecks = [...(payload.lightChecks || [])];
+    session.lightGateCount = payload.lightGateCount || 0;
+    session.lightGateFailures = session.lightChecks.filter((g) => !g.ok).length;
+    session.sinceLightCheck = payload.sinceLightCheck || 0;
+    session.lastFullRebuildAtMs = payload.lastFullRebuildAtMs ?? null;
+    session.timing = { ...emptyTiming(), ...(payload.timing || {}) };
+    session.recentCycleMs = [...(payload.recentCycleMs || [])];
+    session.paceMultiplier = payload.paceMultiplier || 1;
+    session.successStreak = payload.successStreak || 0;
+    session.drift = [...(payload.drift || [])];
 
     for (const target of session.targets) {
       // Bu kosuda yazilan sayfalar, artefakt yeniden kurulana kadar da mevcuttur.
@@ -471,6 +685,14 @@ export class StructureSession {
       this.persist();
       return this.halt('DEADLINE_REACHED', this.pauseReason);
     }
+    /**
+     * HAFIF KAPI ONCE: ucuz ve bellek ici; dusen dalga tam kurmaya gitmeden
+     * durur. Sonra (gerekiyorsa) tam kapi.
+     */
+    if (this.lightCheckDue()) {
+      const halted = this.runLightGate(false);
+      if (halted) return halted;
+    }
     if (this.rebuildDue()) {
       this.startRebuild(false);
       return this.wait(
@@ -496,8 +718,11 @@ export class StructureSession {
        * GONDERILMEZ; ama menusu yine okunur ve cocuklari kuyruga girer —
        * kesif, mevcut kanittan devam eder.
        */
+      const scanStarted = this.now();
       const evidence = this.opts.corpus.present(target);
-      if (evidence) {
+      this.timing.corpusScanMs += Math.max(0, this.now() - scanStarted);
+      this.timing.corpusScans += 1;
+      if (evidence && !this.wantsReverify(target, evidence)) {
         this.satisfyFromCorpus(target, evidence);
         expansions += 1;
         if (expansions >= MAX_CORPUS_EXPANSIONS_PER_CALL) {
@@ -509,13 +734,108 @@ export class StructureSession {
         }
         continue;
       }
-      if (target.origin === 'NAV') this.counters.discoveredMissing += 1;
+      if (evidence) this.markForReverify(target, evidence);
+      else if (target.origin === 'NAV') this.counters.discoveredMissing += 1;
       target.status = 'IN_PROGRESS';
       target.attempts += 1;
       target.updatedAt = this.stamp();
       this.persist();
       return this.capture(target);
     }
+  }
+
+  // ------------------------------------------------------------ light gate
+
+  private lightCheckDue(): boolean {
+    return this.lightCheckEvery > 0 && this.sinceLightCheck >= this.lightCheckEvery;
+  }
+
+  /**
+   * Bellek ici yapi denetimi. Dusuyorsa kosu ERROR ile durur ve HALT doner;
+   * geciyorsa null doner ve toplama surer. Kapi hicbir sey YAYINLAMAZ.
+   */
+  private runLightGate(final: boolean): AutopilotDirective | null {
+    const report: LightGateReport = runLightStructureGate({
+      targets: this.targets,
+      siteRootKey: SITE_ROOT,
+      waveSize: this.sinceLightCheck,
+      now: this.now,
+    });
+    this.timing.lightGateMs += report.durationMs;
+    this.lightGateCount += 1;
+    this.lightChecks.push({
+      at: report.checkedAt,
+      ok: report.ok,
+      targetsChecked: report.targetsChecked,
+      waveSize: report.waveSize,
+      durationMs: report.durationMs,
+      findings: report.findings.slice(0, 50),
+    });
+    if (this.lightChecks.length > LIGHT_GATE_HISTORY) {
+      this.lightChecks.splice(0, this.lightChecks.length - LIGHT_GATE_HISTORY);
+    }
+    this.sinceLightCheck = 0;
+    if (report.ok) {
+      this.log(
+        `LIGHT GATE ${final ? '(final) ' : ''}PASS: ${report.targetsChecked} target(s), ` +
+          `wave ${report.waveSize}, ${report.durationMs} ms`,
+      );
+      this.persist();
+      return null;
+    }
+    this.lightGateFailures += 1;
+    const summary = report.findings
+      .slice(0, 5)
+      .map((f) => `${f.kind} ${f.key}: ${f.detail}`)
+      .join(' | ');
+    this.state = 'ERROR';
+    this.pauseReason =
+      `LIGHT_GATE_FAIL (${report.findings.length} finding(s) over ${report.targetsChecked} target(s)): ${summary}. ` +
+      'Collection stopped before the wave could spread; inspect the checkpoint/evidence, fix, then RESUME.';
+    this.lastError = this.pauseReason;
+    this.log(`LIGHT GATE FAIL: ${summary}`);
+    this.persist();
+    return this.halt('ERROR', this.pauseReason);
+  }
+
+  // ----------------------------------------------------- incremental refresh
+
+  /**
+   * INCREMENTAL + staleDays: korpustaki sayfa cocuklu (terminal degil) VE
+   * dosyasi bayatsa yeniden cekilir. Terminal sayfalar yeniden cekilmez
+   * (menuleri bos; degisim ancak ebeveynden gorulur). Site koku her zaman
+   * yerelden karsilanir.
+   */
+  private wantsReverify(target: StructureTarget, evidence: CorpusEvidence): boolean {
+    if (this.staleDays === null || target.key === SITE_ROOT) return false;
+    const page = evidence.page;
+    const own = page.ownPath ? page.ownPath.slice(1) : null;
+    if (!own || !page.breadcrumb) return false;
+    const split = splitNavChildren(page.navChildren ?? [], own, page.breadcrumb.length);
+    if (split.direct.length === 0 && split.deeper.length === 0) return false;
+    let mtimeMs: number;
+    try {
+      mtimeMs = fs.statSync(evidence.file).mtimeMs;
+    } catch {
+      return false;
+    }
+    return this.now() - mtimeMs >= this.staleDays * 86_400_000;
+  }
+
+  private markForReverify(target: StructureTarget, evidence: CorpusEvidence): void {
+    const page = evidence.page;
+    const chain = page.breadcrumb ?? [];
+    const own = page.ownPath ? page.ownPath.slice(1) : '';
+    const split = splitNavChildren(page.navChildren ?? [], own, chain.length);
+    target.reverify = {
+      evidenceFile: evidence.file,
+      breadcrumb: [...chain],
+      childSlugs: [...split.direct, ...split.deeper].map((c) => c.slug).sort(),
+    };
+    target.expectedPath = [...chain];
+    target.expectedPrefix = null;
+    target.evidenceFile = evidence.file;
+    this.log(`REVERIFY ${target.key}: corpus evidence older than ${this.staleDays} day(s); refetching to compare`);
   }
 
   /**
@@ -549,6 +869,7 @@ export class StructureSession {
     this.counters.attempted += 1;
     this.counters.budgetUsed += 1;
     target.updatedAt = this.stamp();
+    this.recordRoundTrip(target);
 
     const html = String(capture.html || '');
     const page = classifyPage(html, `${target.slug}.html`);
@@ -700,6 +1021,10 @@ export class StructureSession {
     }
     target.expectedPath = [...chain];
     target.expectedPrefix = null;
+    target.ownPath = own;
+
+    // INCREMENTAL yeniden dogrulama: korpus ezilmez, fark kayma olarak kaydedilir.
+    if (target.reverify) return this.acceptReverified(target, capture, page, base, chain, own, html);
 
     const savedFile = this.opts.corpus.save(chain, html);
     target.status = 'COMPLETE';
@@ -718,8 +1043,9 @@ export class StructureSession {
 
     const expansion = this.expandChildren(target, page, own.slice(1));
     this.counters.saved += 1;
-    this.counters.consecutiveFailures = 0;
+    this.noteSuccess();
     this.sinceRebuild += 1;
+    this.sinceLightCheck += 1;
     this.lastSuccessKey = target.key;
     this.lastSuccessAt = target.updatedAt;
     this.lastSavedFile = savedFile;
@@ -742,6 +1068,93 @@ export class StructureSession {
       childrenAlreadyKnown: expansion.known,
       terminal: target.terminal === true,
     };
+  }
+
+  /**
+   * YENIDEN DOGRULAMA SONUCU (INCREMENTAL).
+   *
+   * Ayni breadcrumb + ayni dogrudan cocuk kumesi -> REVERIFIED: korpusa kopya
+   * yazilmaz, kesif taze menuden surer, hedef COMPLETE. Cocuk kumesi degisti
+   * -> DRIFT (CHILDREN_CHANGED): kanit kosu dizinine yazilir, kayit deftere
+   * girer, hedef yine COMPLETE ve cocuklar TAZE menuden acilir (yeni cocuklar
+   * korpusta yoksa cekilir). Breadcrumb degisti -> DRIFT (BREADCRUMB_CHANGED):
+   * ebeveyn yolu artik bilinmiyor; cocuk ACILMAZ, hedef FAILED — insan baksin.
+   * Hicbir durumda korpus dosyasi silinmez ya da ezilmez.
+   */
+  private acceptReverified(
+    target: StructureTarget,
+    capture: PageCapture,
+    page: PageClassification,
+    base: Omit<PageCaptureResult, 'outcome'>,
+    chain: string[],
+    own: string,
+    html: string,
+  ): PageCaptureResult {
+    const basis = target.reverify!;
+    const split = splitNavChildren(page.navChildren ?? [], own.slice(1), chain.length);
+    const freshSlugs = [...split.direct, ...split.deeper].map((c) => c.slug).sort();
+    const sameChain = samePath(chain, basis.breadcrumb);
+    const sameChildren = freshSlugs.join('\n') === basis.childSlugs.join('\n');
+    target.breadcrumb = [...chain];
+    target.make = chain[0];
+    target.depth = chain.length;
+    target.updatedAt = this.stamp();
+    target.reverify = null;
+
+    if (sameChain && sameChildren) {
+      target.status = 'COMPLETE';
+      target.outcome = 'REVERIFIED';
+      target.lastError = null;
+      const expansion = this.expandChildren(target, page, own.slice(1));
+      this.counters.reverified += 1;
+      this.noteSuccess();
+      this.appendCaptureLog(target, capture, page, 'REVERIFIED', expansion);
+      this.log(`REVERIFIED ${chain.join(' / ')} (unchanged; +${expansion.enqueued} children, queue ${this.pendingCount()})`);
+      this.persist();
+      return { ...base, outcome: 'REVERIFIED', childrenDeclared: expansion.declared, childrenEnqueued: expansion.enqueued, childrenAlreadyKnown: expansion.known, terminal: target.terminal === true };
+    }
+
+    const evidence = this.writeEvidence('drift', target, html);
+    const kind: DriftKind = sameChain ? 'CHILDREN_CHANGED' : 'BREADCRUMB_CHANGED';
+    target.outcome = 'DRIFT';
+    target.driftKind = kind;
+    this.counters.driftDetected += 1;
+    this.drift.push({
+      key: target.key,
+      kind,
+      expectedPath: [...basis.breadcrumb],
+      observedPath: [...chain],
+      before: [...basis.childSlugs],
+      after: freshSlugs,
+      evidenceFile: evidence,
+      at: target.updatedAt,
+      detail: sameChain
+        ? `direct children changed (${basis.childSlugs.length} -> ${freshSlugs.length}); corpus copy ${basis.evidenceFile}`
+        : `breadcrumb changed from "${basis.breadcrumb.join(' / ')}" to "${chain.join(' / ')}"; corpus copy ${basis.evidenceFile}`,
+    });
+
+    if (sameChain) {
+      target.status = 'COMPLETE';
+      target.lastError = `DRIFT ${kind}`;
+      const expansion = this.expandChildren(target, page, own.slice(1));
+      this.noteSuccess();
+      this.appendCaptureLog(target, capture, page, 'DRIFT', expansion, evidence);
+      this.log(`DRIFT ${kind} ${target.key}: children ${basis.childSlugs.length} -> ${freshSlugs.length}; evidence ${evidence}; +${expansion.enqueued} children queued`);
+      this.persist();
+      return { ...base, outcome: 'DRIFT', childrenDeclared: expansion.declared, childrenEnqueued: expansion.enqueued, childrenAlreadyKnown: expansion.known, terminal: target.terminal === true };
+    }
+
+    target.status = 'FAILED';
+    target.lastError = `DRIFT ${kind}: "${basis.breadcrumb.join(' / ')}" -> "${chain.join(' / ')}"`;
+    this.counters.consecutiveFailures += 1;
+    this.bumpBackoff('drift');
+    this.appendCaptureLog(target, capture, page, 'DRIFT', null, evidence);
+    this.log(`DRIFT ${kind} ${target.key}: ${target.lastError}; evidence ${evidence}; no children expanded`);
+    const halted = this.haltIfTooManyFailures('DRIFT', target);
+    this.persist();
+    return halted
+      ? { ...base, outcome: 'DRIFT', paused: true, pauseReason: halted }
+      : { ...base, outcome: 'DRIFT' };
   }
 
   /** Site koku: kategori degil, ama cocuklari (markalar) buradan ogrenilir. */
@@ -802,6 +1215,12 @@ export class StructureSession {
     // Site koku (vitrin) breadcrumb zinciri tasimaz: zinciri bos, cocuklari markalar.
     const isSiteRoot = target.key === SITE_ROOT;
     const chain = isSiteRoot ? [] : (page.breadcrumb ?? []);
+    // Torun beklentisi (kesin yol yok, ata oneki var): kesin yol diskteki sayfadan gelir.
+    if (!isSiteRoot && !target.expectedPath && target.expectedPrefix && !samePath(chain, target.expectedPrefix)) {
+      target.reconciledFrom = target.expectedPrefix.join(' / ');
+      target.expectedPath = [...chain];
+      target.expectedPrefix = null;
+    }
     target.status = 'COMPLETE';
     target.outcome = 'ALREADY_PRESENT';
     target.evidenceFile = evidence.file;
@@ -810,6 +1229,7 @@ export class StructureSession {
     target.depth = chain.length;
     target.updatedAt = this.stamp();
     const own = page.ownPath;
+    target.ownPath = isSiteRoot ? SITE_ROOT : (own ?? null);
     const expansion = this.expandChildren(
       target,
       page,
@@ -1109,9 +1529,22 @@ export class StructureSession {
     target.outcome = outcome;
     target.lastError = `${outcome}: ${detail}`;
     target.updatedAt = this.stamp();
-    if (outcome === 'REDIRECT_MISMATCH') this.counters.redirectMismatch += 1;
-    else this.counters.noBreadcrumb += 1;
+    if (outcome === 'REDIRECT_MISMATCH') {
+      this.counters.redirectMismatch += 1;
+      this.drift.push({
+        key: target.key,
+        kind: 'REDIRECT_MISMATCH',
+        expectedPath: target.expectedPath ?? target.expectedPrefix ?? null,
+        observedPath: page.breadcrumb,
+        before: null,
+        after: null,
+        evidenceFile: evidence,
+        at: target.updatedAt,
+        detail,
+      });
+    } else this.counters.noBreadcrumb += 1;
     this.counters.consecutiveFailures += 1;
+    this.bumpBackoff(outcome);
     this.appendCaptureLog(target, capture, page, outcome, null, evidence);
     this.log(`FAIL ${outcome} at ${target.key}: ${detail}`);
 
@@ -1166,6 +1599,7 @@ export class StructureSession {
     const evidence = this.writeEvidence('not-found', target, capture.html);
     this.markNotFound(target, evidence);
     this.counters.consecutiveFailures += 1;
+    this.bumpBackoff('NOT_FOUND');
     this.appendCaptureLog(target, capture, page, 'NOT_FOUND', null, evidence);
     const declared = (target.expectedPath ?? target.expectedPrefix ?? []).join(
       ' / ',
@@ -1190,6 +1624,17 @@ export class StructureSession {
     target.notFoundEvidence = evidence;
     target.updatedAt = this.stamp();
     this.counters.notFound += 1;
+    this.drift.push({
+      key: target.key,
+      kind: 'NOT_FOUND',
+      expectedPath: target.expectedPath ?? target.expectedPrefix ?? null,
+      observedPath: null,
+      before: null,
+      after: null,
+      evidenceFile: evidence,
+      at: target.updatedAt,
+      detail: `declared by ${target.parentKey ?? 'root'}; source reports the page unavailable`,
+    });
   }
 
   /**
@@ -1253,13 +1698,16 @@ export class StructureSession {
 
   // ------------------------------------------------------------------ rebuild
 
+  /**
+   * TAM KAPI ZAMANI: sayfa esigi YA DA sure esigi (hangisi once). Sure esigi
+   * yalnizca yeni kaydedilmis sayfa varken sayilir; bos bekleyis kapi acmaz.
+   */
   private rebuildDue(): boolean {
-    return (
-      this.rebuildEvery > 0 &&
-      Boolean(this.opts.rebuild) &&
-      !this.rebuildInFlight &&
-      this.sinceRebuild >= this.rebuildEvery
-    );
+    if (this.rebuildEvery <= 0 || !this.opts.rebuild || this.rebuildInFlight) return false;
+    if (this.sinceRebuild >= this.rebuildEvery) return true;
+    if (this.fullRebuildIntervalMs === null || this.sinceRebuild <= 0) return false;
+    const since = this.lastFullRebuildAtMs ?? Date.parse(this.createdAt);
+    return this.now() - since >= this.fullRebuildIntervalMs;
   }
 
   private startRebuild(finishAfter: boolean): void {
@@ -1290,6 +1738,11 @@ export class StructureSession {
 
   private onRebuildDone(result: RebuildResult, pages: number): void {
     this.rebuildInFlight = false;
+    this.lastFullRebuildAtMs = this.now();
+    this.timing.fullGateMs += Math.max(
+      0,
+      Date.parse(result.finishedAt) - Date.parse(result.startedAt) || 0,
+    );
     this.rebuilds.push({
       startedAt: result.startedAt,
       finishedAt: result.finishedAt,
@@ -1330,8 +1783,16 @@ export class StructureSession {
     this.persist();
   }
 
-  /** Kuyruk bitti ya da sayfa butcesi doldu: once (gerekliyse) son yeniden kurma. */
+  /**
+   * Kuyruk bitti ya da sayfa butcesi doldu: once son hafif kapi (varsa yeni
+   * sayfa), sonra (gerekliyse) ZORUNLU son tam kapi. Son hafif kapi gecmisse
+   * bile yayin tam kapidan gecer; hafif kapi tek basina hicbir kosuyu kapatmaz.
+   */
   private finish(): AutopilotDirective {
+    if (this.lightCheckEvery > 0 && this.sinceLightCheck > 0) {
+      const halted = this.runLightGate(true);
+      if (halted) return halted;
+    }
     if (
       this.opts.rebuild &&
       this.rebuildEvery > 0 &&
@@ -1455,7 +1916,111 @@ export class StructureSession {
       scopeLimited: this.maxPages !== null,
       scope:
         this.maxPages !== null ? `max ${this.maxPages} page(s) this run` : null,
+      // ---- V2 ----
+      structureMode: this.structureMode,
+      paceMode: this.paceMode,
+      paceMs: this.paceMs,
+      paceMsCurrent: Math.round(this.paceMs * this.paceMultiplier),
+      lightCheckEvery: this.lightCheckEvery,
+      sinceLightCheck: this.sinceLightCheck,
+      lightGates: this.lightGateCount,
+      lastLightGate: this.lightChecks.length
+        ? this.lightChecks[this.lightChecks.length - 1].ok
+          ? 'PASS'
+          : 'FAIL'
+        : null,
+      fullRebuildEvery: this.rebuildEvery,
+      fullRebuildIntervalMs: this.fullRebuildIntervalMs,
+      fullGates: this.rebuilds.length,
+      reverified: this.counters.reverified,
+      driftDetected: this.counters.driftDetected,
+      timing: { ...this.timing, avgCycleMs: this.avgCycleMs() },
+      estimatedRemainingMs: this.estimateRemainingMs(queued),
     };
+  }
+
+  // ------------------------------------------------------- pacing + timing
+
+  /** Basari serisi: geri cekilme carpanini kademeli toparlar. */
+  private noteSuccess(): void {
+    this.counters.consecutiveFailures = 0;
+    this.successStreak += 1;
+    if (this.paceMultiplier > 1 && this.successStreak >= BACKOFF.recoverAfter) {
+      this.paceMultiplier = Math.max(1, this.paceMultiplier * BACKOFF.recoverFactor);
+      this.successStreak = 0;
+      this.log(`PACE recover -> x${this.paceMultiplier.toFixed(2)} (${Math.round(this.paceMs * this.paceMultiplier)} ms)`);
+    }
+    this.recordCycle();
+  }
+
+  /**
+   * Kaynak bozulma sinyali (yonlendirme, yok, breadcrumb'siz, kayma, yavas
+   * yanit): tempo carpani buyur, sinirli. Guvenlik duvari burada DEGIL:
+   * o, mevcut politika geregi kosuyu durdurur.
+   */
+  private bumpBackoff(reason: string): void {
+    this.successStreak = 0;
+    const next = Math.min(BACKOFF.maxMultiplier, this.paceMultiplier * BACKOFF.factor);
+    if (next !== this.paceMultiplier) {
+      this.paceMultiplier = next;
+      this.log(`PACE backoff (${reason}) -> x${next.toFixed(2)} (${Math.round(this.paceMs * next)} ms)`);
+    }
+  }
+
+  /** Yonerge -> yakalama gidis-donusu; medyanin cok ustunde ise yavaslama sinyali. */
+  private recordRoundTrip(target: StructureTarget): void {
+    const issued = this.issuedAtMs.get(target.key);
+    this.issuedAtMs.delete(target.key);
+    if (issued === undefined) return;
+    const roundTrip = Math.max(0, this.now() - issued);
+    this.timing.captureRoundTripMs += roundTrip;
+    this.timing.captures += 1;
+    const window = this.recentRoundTrips;
+    if (window.length >= 20) {
+      const sorted = [...window].sort((a, b) => a - b);
+      const median = sorted[Math.floor(sorted.length / 2)];
+      if (roundTrip >= BACKOFF.slowFloorMs && roundTrip > median * BACKOFF.slowFactor) {
+        this.bumpBackoff(`slow response ${roundTrip} ms vs median ${median} ms`);
+      }
+    }
+    window.push(roundTrip);
+    if (window.length > 20) window.shift();
+  }
+
+  /** Ardisik kaydedilmis sayfalar arasindaki dongu; kesinti ve kapi pencereleri disarida. */
+  private recordCycle(): void {
+    const at = this.now();
+    if (this.lastSavedAtMs !== null) {
+      const cycle = at - this.lastSavedAtMs;
+      if (cycle > 0 && cycle < CYCLE_IDLE_MS) {
+        this.recentCycleMs.push(cycle);
+        if (this.recentCycleMs.length > CYCLE_WINDOW) this.recentCycleMs.shift();
+      }
+    }
+    this.lastSavedAtMs = at;
+  }
+
+  private avgCycleMs(): number | null {
+    if (this.recentCycleMs.length === 0) return null;
+    return Math.round(this.recentCycleMs.reduce((a, b) => a + b, 0) / this.recentCycleMs.length);
+  }
+
+  /**
+   * KABA TAHMIN: kuyruktaki her hedef cekilecek varsayilir (korpustan
+   * karsilananlar tahmini kisaltir) + kalan tam kapilarin ortalama suresi.
+   */
+  private estimateRemainingMs(queued: number): number | null {
+    const cycle = this.avgCycleMs();
+    if (cycle === null || queued <= 0) return queued <= 0 ? 0 : null;
+    let gates = 0;
+    if (this.rebuildEvery > 0 && this.rebuilds.length > 0) {
+      const avgGate = this.rebuilds.reduce(
+        (sum, r) => sum + Math.max(0, Date.parse(r.finishedAt) - Date.parse(r.startedAt)),
+        0,
+      ) / this.rebuilds.length;
+      gates = Math.ceil(queued / this.rebuildEvery) * avgGate;
+    }
+    return Math.round(queued * cycle + gates);
   }
 
   /** Tam: her hedef COMPLETE (kaydedildi ya da zaten vardi), kuyruk bos, hata yok. */
@@ -1514,7 +2079,25 @@ export class StructureSession {
       pauseReason: this.pauseReason,
       lastError: this.lastError,
       runComplete: this.isRunComplete(),
+      structureMode: this.structureMode,
+      paceMode: this.paceMode,
+      paceMs: this.paceMs,
+      lightCheckEvery: this.lightCheckEvery,
+      lightGates: this.lightGateCount,
+      lightGateFailures: this.lightGateFailures,
+      fullRebuildEvery: this.rebuildEvery,
+      fullRebuildIntervalMs: this.fullRebuildIntervalMs,
+      reverified: c.reverified,
+      driftDetected: c.driftDetected,
+      driftRecords: this.drift.length,
+      timing: { ...this.timing, avgCycleMs: this.avgCycleMs() },
+      estimatedRemainingMs: this.estimateRemainingMs(this.pendingCount()),
     };
+  }
+
+  /** Kaynak kaymasi defteri (yonlendirme, yok, cocuk/breadcrumb degisimi). */
+  driftRegistry(): DriftRecord[] {
+    return this.drift.map((record) => ({ ...record }));
   }
 
   // ------------------------------------------------------------------ private
@@ -1550,6 +2133,7 @@ export class StructureSession {
   }
 
   private capture(target: StructureTarget): AutopilotDirective {
+    this.issuedAtMs.set(target.key, this.now());
     return {
       type: 'CAPTURE_PAGE',
       runId: this.opts.runId,
@@ -1561,10 +2145,13 @@ export class StructureSession {
     };
   }
 
-  /** Muhafazakar tempo: temel sure +- jitter. Rastgele "insan taklidi" degil, sadece duzensiz aralik. */
+  /**
+   * Tempo: temel sure x geri cekilme carpani +- jitter. Rastgele "insan
+   * taklidi" degil, sadece duzensiz aralik; sert alt sinir 1000 ms.
+   */
   private nextDelay(): number {
     const spread = (this.random() * 2 - 1) * this.jitter;
-    return Math.max(1000, Math.round(this.paceMs * (1 + spread)));
+    return Math.max(1000, Math.round(this.paceMs * this.paceMultiplier * (1 + spread)));
   }
 
   private wait(delayMs: number, reason: string): AutopilotDirective {
@@ -1659,6 +2246,7 @@ export class StructureSession {
 
   private persist(): void {
     this.stamp();
+    const started = this.now();
     const payload: StructureCheckpointPayload = {
       version: STRUCTURE_VERSION,
       mode: 'STRUCTURE',
@@ -1681,18 +2269,52 @@ export class StructureSession {
       sinceRebuild: this.sinceRebuild,
       deadlineAtMs: this.deadlineAtMs,
       corpusRoot: this.opts.corpus.root,
+      structureMode: this.structureMode,
+      lightChecks: this.lightChecks,
+      lightGateCount: this.lightGateCount,
+      sinceLightCheck: this.sinceLightCheck,
+      lastFullRebuildAtMs: this.lastFullRebuildAtMs,
+      timing: this.timing,
+      recentCycleMs: this.recentCycleMs,
+      paceMultiplier: this.paceMultiplier,
+      successStreak: this.successStreak,
+      drift: this.drift,
     };
     this.opts.checkpointFile.save(payload);
-    try {
-      fs.mkdirSync(this.opts.runDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(this.opts.runDir, 'report.json'),
-        JSON.stringify(this.report(), null, 2),
-        'utf-8',
-      );
-    } catch (err) {
-      this.log(`report write failed: ${describeError(err)}`);
+    /**
+     * Rapor + kayma defteri insan icindir: durum degistiginde ya da en fazla
+     * birkac saniyede bir yazilir (checkpoint ise HER basarida). Olculdu:
+     * 8 MB'lik iki dosyayi her sayfada yazmak yalnizca G/C harcar.
+     */
+    const throttled =
+      this.state === 'RUNNING' &&
+      started - this.lastReportAtMs < REPORT_THROTTLE_MS &&
+      this.drift.length === this.lastDriftWritten;
+    if (!throttled) {
+      this.lastReportAtMs = started;
+      this.lastDriftWritten = this.drift.length;
+      try {
+        fs.mkdirSync(this.opts.runDir, { recursive: true });
+        fs.writeFileSync(
+          path.join(this.opts.runDir, 'report.json'),
+          JSON.stringify(this.report(), null, 2),
+          'utf-8',
+        );
+        fs.writeFileSync(
+          path.join(this.opts.runDir, 'drift-registry.json'),
+          JSON.stringify(
+            { runId: this.opts.runId, updatedAt: this.updatedAt, records: this.drift },
+            null,
+            2,
+          ),
+          'utf-8',
+        );
+      } catch (err) {
+        this.log(`report write failed: ${describeError(err)}`);
+      }
     }
+    this.timing.persistMs += Math.max(0, this.now() - started);
+    this.timing.persists += 1;
   }
 }
 

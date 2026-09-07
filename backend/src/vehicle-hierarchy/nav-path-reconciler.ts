@@ -44,8 +44,30 @@ export class HierarchyEvidenceConflict extends Error {
   }
 }
 
+/**
+ * KIMLIK ANAHTARI — `sameIdentity` ile BIREBIR ayni esitlik sinifi.
+ *
+ *   exact gozlem -> categoryString + katlanmis exact yol
+ *   flat gozlem  -> categoryString
+ *
+ * Neden bir dizin: olculdu (structure-2026-09, 8705 gozlem) — dogrusal
+ * `reconciled.find(...)` taramalari her yeniden kurmada ~120 s tutuyor ve
+ * korpusla KARESEL buyuyordu; iki cagri (kesif oncesi/sonrasi) hierarchy:build
+ * suresinin %85'iydi. Dizin ayni sonucu O(n) ile verir; birlestirme, terfi ve
+ * celiski kurallari DEGISMEDI (esdegerlik testi eski algoritmayla karsilastirir).
+ */
+function identityKey(o: ObservedCategory): string {
+  const exact = Boolean(o.pathSegments && o.pathSegments.length > 0);
+  return exact
+    ? `${o.categoryString}\u0000E:${foldedPathKey(o.pathSegments as string[])}`
+    : `${o.categoryString}\u0000F`;
+}
+
 export function reconcileDirectNavPaths(observations: ObservedCategory[]): ObservedCategory[] {
   const reconciled: ObservedCategory[] = [];
+  const byIdentity = new Map<string, ObservedCategory>();
+  /** Kaynak dosya -> o dosyayi tasiyan exact gozlemin katlanmis yolu. */
+  const fileOwner = new Map<string, ObservedCategory>();
 
   /**
    * Ayni DUZ dizeyi degil, ayni KANIT KIMLIGINI birlestir:
@@ -56,11 +78,21 @@ export function reconcileDirectNavPaths(observations: ObservedCategory[]): Obser
    */
   for (const raw of observations) {
     const current = cloneObservation(raw);
-    assertNoSourcePathConflict(reconciled, current);
+    assertNoSourcePathConflict(fileOwner, current);
 
-    const existing = reconciled.find((candidate) => sameIdentity(candidate, current));
+    const key = identityKey(current);
+    const existing = byIdentity.get(key);
     if (existing) mergeSameIdentity(existing, current);
-    else reconciled.push(current);
+    else {
+      reconciled.push(current);
+      byIdentity.set(key, current);
+    }
+    const owner = existing ?? current;
+    if (owner.pathSegments && owner.pathSegments.length > 0) {
+      for (const file of current.sourceFiles) {
+        if (!fileOwner.has(file)) fileOwner.set(file, owner);
+      }
+    }
   }
 
   /**
@@ -77,34 +109,32 @@ export function reconcileDirectNavPaths(observations: ObservedCategory[]): Obser
 
       const categoryString = `${parent.categoryString} ${label}`.replace(/\s+/g, ' ').trim();
       const exactPath = [...parent.pathSegments, label];
+      const exactKey = `${categoryString}\u0000E:${foldedPathKey(exactPath)}`;
 
       // Exact path zaten varsa kanit tamamdir. Ayni duz dizeyle baska exact
       // yollarin bulunmasi celiski degildir; categoryString lossy bir alias'tir.
-      const exact = reconciled.find(
-        (o) =>
-          o.categoryString === categoryString &&
-          o.pathSegments &&
-          samePathFolded(o.pathSegments, exactPath),
-      );
-      if (exact) continue;
+      if (byIdentity.has(exactKey)) continue;
 
       // Yolu olmayan gozlemi, parent direct-nav kanitiyla exact yola tasiriz.
-      const flat = reconciled.find(
-        (o) => o.categoryString === categoryString && (!o.pathSegments || o.pathSegments.length === 0),
-      );
+      const flatKey = `${categoryString}\u0000F`;
+      const flat = byIdentity.get(flatKey);
       if (flat) {
         flat.pathSegments = exactPath;
+        byIdentity.delete(flatKey);
+        byIdentity.set(exactKey, flat);
         continue;
       }
 
       // Cocuk sayfasi hic yoksa bile parent menu onun varligini ve TAM yolunu
       // kanitlar. Secilebilir olur ama listingCount=0 oldugu icin fiyatlanmaz.
-      reconciled.push({
+      const declared: ObservedCategory = {
         categoryString,
         listingCount: 0,
         sourceFiles: [],
         pathSegments: exactPath,
-      });
+      };
+      reconciled.push(declared);
+      byIdentity.set(exactKey, declared);
     }
   }
 
@@ -210,18 +240,24 @@ function mergeSameIdentity(target: ObservedCategory, incoming: ObservedCategory)
   target.sourceFiles = [...new Set([...target.sourceFiles, ...incoming.sourceFiles])];
 }
 
-function assertNoSourcePathConflict(existing: ObservedCategory[], incoming: ObservedCategory): void {
+/**
+ * Ayni kaynak dosyasi iki FARKLI exact yol iddia edemez. `fileOwner`, o ana
+ * kadar birlesmis exact gozlemlerin dosyalarini tasir; flat gozlemler dosya
+ * sahibi olmaz (yolu yoktur), tipki dogrusal taramadaki gibi.
+ */
+function assertNoSourcePathConflict(
+  fileOwner: Map<string, ObservedCategory>,
+  incoming: ObservedCategory,
+): void {
   if (!incoming.pathSegments || incoming.pathSegments.length === 0 || incoming.sourceFiles.length === 0) return;
-  const incomingFiles = new Set(incoming.sourceFiles);
 
-  for (const candidate of existing) {
-    if (!candidate.pathSegments || candidate.pathSegments.length === 0) continue;
+  for (const file of incoming.sourceFiles) {
+    const candidate = fileOwner.get(file);
+    if (!candidate || !candidate.pathSegments || candidate.pathSegments.length === 0) continue;
     if (samePathFolded(candidate.pathSegments, incoming.pathSegments)) continue;
-    const shared = candidate.sourceFiles.find((file) => incomingFiles.has(file));
-    if (!shared) continue;
 
     throw new HierarchyEvidenceConflict(
-      `PATH_CONFLICT for source "${shared}": ` +
+      `PATH_CONFLICT for source "${file}": ` +
         `"${candidate.pathSegments.join(' / ')}" vs "${incoming.pathSegments.join(' / ')}"`,
     );
   }

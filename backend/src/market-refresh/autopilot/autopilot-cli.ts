@@ -22,6 +22,20 @@
  *   # tam yapisal kosu (site kokunden, tum markalar, sinirsiz; devam edilebilir)
  *   npm run market:autopilot:bridge -- --mode structure --run-id structure-2026-09
  *
+ *   # V2 gece kosusu: hafif kapi 50 sayfada, tam kapi 400 sayfada / 40 dk, tempo OVERNIGHT
+ *   npm run market:autopilot:bridge -- --mode structure --run-id structure-2026-10 \
+ *     --pace-mode overnight --light-check-every 50 --full-rebuild-every 400 --full-rebuild-minutes 40 \
+ *     --deadline 08:00
+ *
+ *   # V2 artimli yapi tazelemesi: mevcut korpus yerelden karsilanir, 30 gunden eski cocuklu
+ *   # sayfalar yeniden cekilip karsilastirilir (kayma defteri), yeni/eksik sayfalar cekilir
+ *   npm run market:autopilot:bridge -- --mode structure --run-id structure-inc-2026-10 \
+ *     --structure-mode incremental --stale-days 30 --pace-mode overnight
+ *
+ *   Tempo ayarlari: --pace-mode safe|overnight, --pace-ms, --jitter (0..0.9), --concurrency 1
+ *   Kapilar: --light-check-every N (0 = kapali), --full-rebuild-every N, --full-rebuild-minutes N
+ *   Zorunlu son tam kapi hicbir bayrakla kapatilamaz; --no-rebuild yalnizca --dry-run / --max-pages ile.
+ *
  * PIYASA MODU (degismedi):
  *   npm run market:autopilot:bridge -- --port 8791
  *   npm run market:autopilot:bridge -- --port 8791 --window 02:00-10:00
@@ -67,8 +81,14 @@ import { resolveSnapshotPath } from '../snapshot-reference';
 import { CorpusIndex } from './corpus-store';
 import { NpmRebuildRunner } from './rebuild-runner';
 import {
+  DEFAULT_FULL_REBUILD_EVERY,
+  DEFAULT_FULL_REBUILD_INTERVAL_MS,
+  DEFAULT_LIGHT_CHECK_EVERY,
+  PACE_PRESETS,
+  PaceMode,
   SITE_ROOT,
   StructureCheckpointPayload,
+  StructureMode,
   StructureSession,
   StructureSessionOptions,
 } from './structure-session';
@@ -77,9 +97,12 @@ import { TargetStateStore } from '../weekly/target-state-store';
 import { WeeklyEvidenceStore } from '../weekly/evidence-store';
 import { AtomicWeeklyMarketPublisher } from '../weekly/artifact-publisher';
 import {
+  DEFAULT_WEEKLY_JITTER,
+  DEFAULT_WEEKLY_PACE_MS,
   WeeklyCheckpointPayload,
   WeeklyMarketSession,
 } from '../weekly/weekly-session';
+import { DEFAULT_BOUNDARY_POLICY } from '../weekly/boundary-rule';
 
 const DEFAULT_SOURCE = 'sahibinden';
 const DEFAULT_BASE_URL = 'https://www.sahibinden.com/';
@@ -87,11 +110,11 @@ const DEFAULT_BASE_URL = 'https://www.sahibinden.com/';
 const DEFAULT_SNAPSHOT_SOURCE = 'SAHIBINDEN_HTML';
 
 /**
- * Yapisal dalga boyu. Olculdu (7143 dosya): hierarchy 34s + listings 32s +
- * coverage 12s + validate 143s ~= 3.7 dk. 50 sayfa ~5 dk toplama demek; yeni
- * kanit binlerce sayfa beklemeden agaca girer, kapi da o siklikta kosar.
+ * Yapisal kapi kadansi V2 — olcume dayali (structure-2026-09, 131 tam kurma,
+ * 7.0 saat = aktif surenin %37'si). Varsayilanlar structure-session'da tek
+ * yerde durur: hafif kapi 50 sayfa, tam kapi 400 sayfa / 40 dk, son tam kapi
+ * zorunlu. Piyasa modunun tempo varsayilanlari degismedi.
  */
-const DEFAULT_REBUILD_EVERY = 50;
 const DEFAULT_PACE_MS = 5000;
 const DEFAULT_JITTER = 0.4;
 
@@ -115,11 +138,28 @@ interface CliArgs {
   roots: string[];
   maxPages: number | null;
   rebuildEvery: number;
-  paceMs: number;
-  jitter: number;
+  /** null = yalnizca sayfa esigi. */
+  fullRebuildIntervalMs: number | null;
+  lightCheckEvery: number;
+  paceMode: PaceMode;
+  /** null = tempo on ayarindan. */
+  paceMs: number | null;
+  jitter: number | null;
+  structureMode: StructureMode;
+  staleDays: number | null;
+  /** "HH:MM" — bugunun/yarinin o saati; --window ile birlikte verilemez. */
+  deadline: string | null;
+  concurrency: number;
   dryRun: boolean;
-  /** Weekly mode is deliberately bounded to one explicit exact target. */
+  /** Weekly mode: one explicit exact target, or every validated target with --all-targets. */
   targetId: string | null;
+  allTargets: boolean;
+  /** Weekly boundary policy (see weekly-session). null = engine default. */
+  initialBaselinePages: number | null;
+  initialBaselineDays: number | null;
+  anchorSize: number | null;
+  minAnchorMatches: number | null;
+  overlapDays: number | null;
 }
 
 function parseArgs(argv: string[]): CliArgs {
@@ -189,9 +229,37 @@ function parseArgs(argv: string[]): CliArgs {
   };
 
   const jitterRaw = get('jitter');
-  const jitter = jitterRaw === null ? DEFAULT_JITTER : Number(jitterRaw);
-  if (!Number.isFinite(jitter) || jitter < 0 || jitter > 0.9) {
+  const jitter = jitterRaw === null ? null : Number(jitterRaw);
+  if (jitter !== null && (!Number.isFinite(jitter) || jitter < 0 || jitter > 0.9)) {
     throw new Error('--jitter must be a number between 0 and 0.9');
+  }
+
+  const paceModeRaw = (get('pace-mode') || 'safe').toUpperCase();
+  if (paceModeRaw !== 'SAFE' && paceModeRaw !== 'OVERNIGHT') {
+    throw new Error(`--pace-mode must be "safe" or "overnight", got "${get('pace-mode')}"`);
+  }
+  const paceMode = paceModeRaw as PaceMode;
+
+  const structureModeRaw = (get('structure-mode') || 'full').toUpperCase();
+  if (structureModeRaw !== 'FULL' && structureModeRaw !== 'INCREMENTAL') {
+    throw new Error(`--structure-mode must be "full" or "incremental", got "${get('structure-mode')}"`);
+  }
+  const structureMode = structureModeRaw as StructureMode;
+
+  const concurrency = Number(get('concurrency') || 1);
+  if (concurrency !== 1) {
+    throw new Error(
+      '--concurrency: only 1 is supported. Two-worker mode needs the shared limiter/lease design ' +
+        '(see docs/overnight-collection-v2.md) and is intentionally not enabled.',
+    );
+  }
+
+  const deadline = get('deadline');
+  if (deadline !== null && !/^\d{1,2}:\d{2}$/.test(deadline.trim())) {
+    throw new Error(`Invalid --deadline "${deadline}"; expected HH:MM`);
+  }
+  if (deadline !== null && get('window') !== null) {
+    throw new Error('--deadline and --window are alternatives; give one');
   }
 
   const roots = (get('roots') || SITE_ROOT)
@@ -203,22 +271,34 @@ function parseArgs(argv: string[]): CliArgs {
   if (mode === 'structure' && (scope || get('coverage-manifest'))) {
     throw new Error(
       '--scope-* and --coverage-* flags belong to --mode market. ' +
-        'Structure mode takes --roots, --max-pages, --rebuild-every, --pace-ms, --jitter, --dry-run.',
+        'Structure mode takes --roots, --max-pages, --structure-mode, --stale-days, --light-check-every, ' +
+        '--full-rebuild-every, --full-rebuild-minutes, --pace-mode, --pace-ms, --jitter, --deadline, --dry-run.',
     );
   }
-  if (mode === 'weekly' && !get('target-id')) {
+  const maxPages = positiveInt('max-pages', null);
+  const noRebuild = has('no-rebuild');
+  if (mode === 'structure' && noRebuild && !has('dry-run') && maxPages === null) {
     throw new Error(
-      '--mode weekly requires exactly one --target-id. Full-market execution is intentionally unavailable.',
+      '--no-rebuild disables the mandatory final validation gate and is only allowed with --dry-run or a bounded --max-pages smoke run.',
     );
+  }
+  if (mode === 'weekly' && !get('target-id') && !has('all-targets')) {
+    throw new Error(
+      '--mode weekly requires one --target-id, or --all-targets for the broad baseline/refresh (start it deliberately).',
+    );
+  }
+  if (mode === 'weekly' && get('target-id') && has('all-targets')) {
+    throw new Error('--target-id and --all-targets are alternatives; give one');
   }
   if (
     mode === 'weekly' &&
     (scope || get('coverage-manifest') || has('dry-run'))
   ) {
     throw new Error(
-      '--mode weekly accepts --target-id, --max-pages, --run-id, --port and pacing flags only',
+      '--mode weekly accepts --target-id | --all-targets, --max-pages, --run-id, --port, pacing and boundary-policy flags only',
     );
   }
+  const optionalInt = (name: string): number | null => positiveInt(name, null);
 
   return {
     mode,
@@ -241,15 +321,44 @@ function parseArgs(argv: string[]): CliArgs {
     >,
     coverageLimit: get('coverage-limit') ? Number(get('coverage-limit')) : null,
     roots,
-    maxPages: positiveInt('max-pages', null),
-    rebuildEvery: has('no-rebuild')
+    maxPages,
+    rebuildEvery: noRebuild
       ? 0
-      : (positiveInt('rebuild-every', DEFAULT_REBUILD_EVERY) as number),
-    paceMs: positiveInt('pace-ms', DEFAULT_PACE_MS) as number,
+      : (positiveInt(
+          'full-rebuild-every',
+          positiveInt('rebuild-every', DEFAULT_FULL_REBUILD_EVERY),
+        ) as number),
+    fullRebuildIntervalMs: noRebuild
+      ? null
+      : (() => {
+          const minutes = positiveInt(
+            'full-rebuild-minutes',
+            Math.round(DEFAULT_FULL_REBUILD_INTERVAL_MS / 60_000),
+          ) as number;
+          return minutes > 0 ? minutes * 60_000 : null;
+        })(),
+    lightCheckEvery: positiveInt('light-check-every', DEFAULT_LIGHT_CHECK_EVERY) as number,
+    paceMode,
+    paceMs: optionalInt('pace-ms'),
     jitter,
+    structureMode,
+    staleDays: optionalInt('stale-days'),
+    deadline: deadline ? deadline.trim() : null,
+    concurrency,
     dryRun: has('dry-run'),
     targetId: get('target-id'),
+    allTargets: has('all-targets'),
+    initialBaselinePages: optionalInt('initial-baseline-pages'),
+    initialBaselineDays: optionalInt('initial-baseline-days'),
+    anchorSize: optionalInt('anchor-size'),
+    minAnchorMatches: optionalInt('min-anchor-matches'),
+    overlapDays: optionalInt('overlap-days'),
   };
+}
+
+/** "08:00" -> bugunun (gectiyse yarinin) o saati, epoch ms. */
+export function resolveDeadline(spec: string, now: Date = new Date()): number {
+  return resolveWindowDeadline(`00:00-${spec}`, now);
 }
 
 /**
@@ -515,6 +624,9 @@ async function runStructure(args: CliArgs): Promise<void> {
         })
       : null;
 
+  const preset = PACE_PRESETS[args.paceMode];
+  const paceMs = Math.max(1000, args.paceMs ?? preset.paceMs);
+  const jitter = args.jitter ?? preset.jitter;
   const baseOptions: Omit<StructureSessionOptions, 'deadlineAtMs'> = {
     runId: args.runId,
     source: args.source,
@@ -524,14 +636,23 @@ async function runStructure(args: CliArgs): Promise<void> {
     runDir,
     maxPages: args.maxPages,
     rebuildEvery: args.rebuildEvery,
+    fullRebuildIntervalMs: args.fullRebuildIntervalMs,
+    lightCheckEvery: args.lightCheckEvery,
     rebuild,
-    paceMs: args.paceMs,
-    jitter: args.jitter,
+    paceMode: args.paceMode,
+    paceMs,
+    jitter,
+    structureMode: args.structureMode,
+    staleDays: args.staleDays,
     log,
   };
 
   const deadlineFromWindow = () =>
-    args.windowSpec ? resolveWindowDeadline(args.windowSpec) : null;
+    args.deadline
+      ? resolveDeadline(args.deadline)
+      : args.windowSpec
+        ? resolveWindowDeadline(args.windowSpec)
+        : null;
 
   if (args.dryRun) {
     const session = StructureSession.start(
@@ -570,16 +691,25 @@ async function runStructure(args: CliArgs): Promise<void> {
     args,
     provider,
     [
-      `mode        structure (recursive category pages -> raw HTML -> corpus)`,
+      `mode        structure ${args.structureMode} (recursive category pages -> raw HTML -> corpus)`,
       `run id      ${args.runId}${resumable ? '   (checkpoint found: START resumes it)' : ''}`,
       `source      ${args.source} (${args.baseUrl})`,
       `run dir     ${runDir}`,
       `corpus      ${corpus.root}  (${corpus.nodeCount} known nodes)`,
       `roots       ${args.roots.join(', ')}`,
       `budget      ${args.maxPages === null ? 'unbounded' : `max ${args.maxPages} page(s) this run`}`,
-      `rebuild     ${args.rebuildEvery > 0 ? `every ${args.rebuildEvery} saved page(s) + final` : 'off'}`,
-      `pacing      ${args.paceMs} ms ± ${Math.round(args.jitter * 100)}%`,
-      `window      ${args.windowSpec || 'unbounded'}`,
+      `light gate  ${args.lightCheckEvery > 0 ? `every ${args.lightCheckEvery} accepted page(s) (in-memory, no publish)` : 'off'}`,
+      `full gate   ${
+        args.rebuildEvery > 0
+          ? `every ${args.rebuildEvery} saved page(s)` +
+            `${args.fullRebuildIntervalMs ? ` or ${Math.round(args.fullRebuildIntervalMs / 60_000)} min` : ''}` +
+            ' + mandatory final'
+          : 'OFF (bounded smoke / dry run only)'
+      }`,
+      `pacing      ${args.paceMode}: ${paceMs} ms ± ${Math.round(jitter * 100)}% · backoff x1.5 (max x4) on redirect/not-found/slow response · floor 1000 ms`,
+      `stale       ${args.structureMode === 'INCREMENTAL' && args.staleDays !== null ? `refetch nonterminal pages older than ${args.staleDays} day(s), drift -> drift-registry.json` : 'no refetch of present pages'}`,
+      `deadline    ${args.deadline ? `today/tomorrow ${args.deadline}` : args.windowSpec || 'unbounded'}`,
+      `workers     ${args.concurrency}`,
     ],
     () => Promise.resolve(),
   );
@@ -637,21 +767,46 @@ async function runWeekly(args: CliArgs): Promise<void> {
     );
   }
 
-  const targetId = args.targetId as string;
-  const target = snapshot.targets.find(
-    (candidate) => candidate.targetId === targetId,
-  );
-  if (!target) {
-    throw new Error(
-      `--target-id "${targetId}" is not a validated terminal target in hierarchy ${snapshot.hierarchyVersion}`,
-    );
+  /**
+   * HEDEF SECIMI: tek --target-id ya da --all-targets. Her secilen hedefin
+   * sayfasi diskte VE terminal kaniti tam olmali; genis kosuda eksik kanitli
+   * hedefler ATLANIR ve raporlanir (kosu onlar yuzunden durmaz, ama onlar
+   * fiyatlanabilir de olmaz).
+   */
+  const coverageById = new Map(coverage.map((node) => [node.nodeId, node]));
+  const eligible = (targetId: string): { ok: true } | { ok: false; reason: string } => {
+    const node = coverageById.get(targetId);
+    if (!node?.pageSavedOnDisk) return { ok: false, reason: 'page not saved on disk' };
+    if (!node.terminalConfirmed) return { ok: false, reason: 'terminal not confirmed' };
+    return { ok: true };
+  };
+  let selectedTargetIds: string[];
+  let skippedTargets: Array<{ targetId: string; reason: string }> = [];
+  if (args.allTargets) {
+    selectedTargetIds = [];
+    for (const candidate of snapshot.targets) {
+      const verdict = eligible(candidate.targetId);
+      if (verdict.ok) selectedTargetIds.push(candidate.targetId);
+      else skippedTargets.push({ targetId: candidate.targetId, reason: verdict.reason });
+    }
+    if (selectedTargetIds.length === 0) throw new Error('Weekly refresh refused: no eligible exact target');
+  } else {
+    const targetId = args.targetId as string;
+    const target = snapshot.targets.find((candidate) => candidate.targetId === targetId);
+    if (!target) {
+      throw new Error(
+        `--target-id "${targetId}" is not a validated terminal target in hierarchy ${snapshot.hierarchyVersion}`,
+      );
+    }
+    const verdict = eligible(targetId);
+    if (!verdict.ok) {
+      throw new Error(
+        `Weekly refresh refused: exact target page/terminal evidence is incomplete for ${target.fullPath} (${verdict.reason})`,
+      );
+    }
+    selectedTargetIds = [targetId];
   }
-  const targetCoverage = coverage.find((node) => node.nodeId === targetId);
-  if (!targetCoverage?.pageSavedOnDisk || !targetCoverage.terminalConfirmed) {
-    throw new Error(
-      `Weekly refresh refused: exact target page/terminal evidence is incomplete for ${target.fullPath}`,
-    );
-  }
+  const firstTarget = snapshot.targets.find((candidate) => candidate.targetId === selectedTargetIds[0])!;
 
   const weeklyRoot = path.join(root, 'data', 'market-refresh', 'weekly');
   const runDir = path.join(weeklyRoot, 'runs', args.runId);
@@ -672,13 +827,21 @@ async function runWeekly(args: CliArgs): Promise<void> {
   const knownListingIds = new Set(
     Object.keys(baselineAssignments?.assignments ?? {}),
   );
+  const boundaryPolicy = {
+    ...(args.overlapDays !== null ? { overlapDays: args.overlapDays } : {}),
+    ...(args.minAnchorMatches !== null ? { minAnchorMatches: args.minAnchorMatches } : {}),
+    ...(args.initialBaselinePages !== null ? { initialBaselinePages: args.initialBaselinePages } : {}),
+    ...(args.initialBaselineDays !== null ? { initialBaselineDays: args.initialBaselineDays } : {}),
+    ...(args.maxPages !== null ? { maxPagesPerTarget: args.maxPages } : {}),
+  };
+  const weeklyPreset = PACE_PRESETS[args.paceMode];
   const baseOptions = {
     runId: args.runId,
     source: args.source,
     baseUrl: args.baseUrl,
     tree,
     snapshot,
-    selectedTargetIds: [targetId],
+    selectedTargetIds,
     checkpointFile,
     evidence,
     rawPageDir: path.join(runDir, 'raw-pages'),
@@ -686,9 +849,12 @@ async function runWeekly(args: CliArgs): Promise<void> {
     publisher,
     knownListingIds,
     baselineAssignments: baselineAssignments?.assignments,
-    overlapDays: 1,
-    maxPagesPerTarget: args.maxPages ?? 20,
+    boundaryPolicy,
+    anchorSize: args.anchorSize ?? undefined,
+    paceMs: args.paceMs ?? (args.paceMode === 'OVERNIGHT' ? weeklyPreset.paceMs : undefined),
+    jitter: args.jitter ?? undefined,
   };
+  const effectivePolicy = { ...DEFAULT_BOUNDARY_POLICY, ...boundaryPolicy };
 
   let session: WeeklyMarketSession | null = null;
   const provider: BridgeSessionProvider = {
@@ -708,13 +874,18 @@ async function runWeekly(args: CliArgs): Promise<void> {
     args,
     provider,
     [
-      'mode        weekly (one frozen exact target; raw HTML -> canonical placement)',
+      `mode        weekly (${args.allTargets ? 'ALL eligible exact targets' : 'one frozen exact target'}; raw HTML -> canonical placement)`,
       `run id      ${args.runId}${checkpointFile.exists() ? '   (checkpoint found: START resumes it)' : ''}`,
       `hierarchy   ${snapshot.hierarchyVersion} (PASS ${receipt.validatedAt})`,
-      `target id   ${target.targetId}`,
-      `exact path  ${target.fullPath}`,
-      `source path ${target.categoryPath}`,
-      `boundary    previous date + IDs + 1-day overlap; max ${args.maxPages ?? 20} page(s)`,
+      `targets     ${selectedTargetIds.length} selected` +
+        (skippedTargets.length ? `, ${skippedTargets.length} skipped (page/terminal evidence incomplete)` : ''),
+      `first       ${firstTarget.targetId}  (${firstTarget.fullPath})  ${firstTarget.categoryPath}`,
+      `boundary    date re-entry + anchor ids (min ${effectivePolicy.minAnchorMatches}) or ${effectivePolicy.overlapDays}-day window; ` +
+        `max ${effectivePolicy.maxPagesPerTarget} page(s)/target`,
+      `baseline    fresh targets read ${effectivePolicy.initialBaselinePages} page(s)` +
+        (effectivePolicy.initialBaselineDays ? ` or ${effectivePolicy.initialBaselineDays} day(s)` : '') +
+        ' (explicit policy; no hidden depth)',
+      `pacing      ${baseOptions.paceMs ?? DEFAULT_WEEKLY_PACE_MS} ms ± ${Math.round((baseOptions.jitter ?? DEFAULT_WEEKLY_JITTER) * 100)}%`,
       `run dir     ${runDir}`,
     ],
     () => Promise.resolve(),

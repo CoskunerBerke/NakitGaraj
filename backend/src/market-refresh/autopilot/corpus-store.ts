@@ -251,7 +251,7 @@ export class CorpusIndex implements CorpusStore {
           saved.page = html === null ? null : classifyPage(html, saved.file);
         }
         if (saved.page && saved.page.status === 'CATEGORY_PAGE') {
-          return { file: saved.file, page: saved.page };
+          return this.sameOwnPath(query, { file: saved.file, page: saved.page });
         }
       }
     }
@@ -268,7 +268,30 @@ export class CorpusIndex implements CorpusStore {
     ) {
       return null;
     }
-    return this.evidenceFor(node);
+    return this.sameOwnPath(query, this.evidenceFor(node));
+  }
+
+  /**
+   * KIMLIK SAYFANIN KENDI URL'IDIR — KORPUSTAN KARSILANAN HEDEFTE DE.
+   *
+   * Olculdu (structure-2026-09): Audi TTS menusu `/audi-tts-2.0-tfsi-2.0-tfsi`
+   * cocugunu "2.0 TFSI" etiketiyle ilan etti; beklenen breadcrumb korpustaki
+   * "Audi / TTS / 2.0 TFSI" sayfasiyla eslesti ve hedef hic istenmeden
+   * "mevcut" sayildi. Oysa o dosyanin KENDI yolu `/audi-tts-2.0-tfsi`dir:
+   * kaynagin ilan ettigi sayfa baskadir ve hic toplanmadi. Cekilen sayfaya
+   * uygulanan "kendi yolu == istenen anahtar" kurali burada da uygulanir;
+   * aksi halde ayni breadcrumb'i tasiyan iki kaynak URL'inden biri sessizce
+   * atlanir. Eski kayit bicimlerinde kendi yol okunamiyorsa (null) yol
+   * eslesmesi yeterli sayilir — daha once oldugu gibi.
+   */
+  private sameOwnPath(
+    query: PresenceQuery,
+    evidence: CorpusEvidence | null,
+  ): CorpusEvidence | null {
+    if (!evidence) return null;
+    const own = evidence.page.ownPath;
+    if (!own) return evidence;
+    return own.replace(/^\//, '') === query.slug ? evidence : null;
   }
 
   /**

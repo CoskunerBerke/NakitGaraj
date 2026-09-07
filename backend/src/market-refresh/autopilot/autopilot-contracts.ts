@@ -100,6 +100,18 @@ export interface PageCapture {
 export type CaptureOutcome =
   | 'SAVED'
   | 'ALREADY_PRESENT'
+  /**
+   * Artimli yapi tazelemesi: bayat sayilan mevcut sayfa yeniden cekildi ve
+   * breadcrumb + dogrudan cocuk kumesi korpustaki kanitla AYNI cikti. Korpusa
+   * kopya yazilmaz; kesif taze menuden surer.
+   */
+  | 'REVERIFIED'
+  /**
+   * Artimli yapi tazelemesi: yeniden cekilen sayfa korpustaki kanittan FARKLI
+   * (cocuk kumesi ya da breadcrumb degisti). Kaynak kaymasi kaydedilir
+   * (kosu kanit dizini + drift-registry.json); korpus ezilmez, tarihce silinmez.
+   */
+  | 'DRIFT'
   | 'REDIRECT_MISMATCH'
   | 'NO_BREADCRUMB'
   | 'NON_CATEGORY_PAGE'
@@ -182,6 +194,43 @@ export interface StructureStatus {
   blockedJobs: number;
   scopeLimited: boolean;
   scope: string | null;
+  // ---- V2 (istege bagli; eski panel bu alanlari gormezden gelir) ----
+  /** FULL: kokten tam gezinti. INCREMENTAL: mevcut korpus yerelden karsilanir, bayat/yeni sayfalar cekilir. */
+  structureMode?: 'FULL' | 'INCREMENTAL';
+  paceMode?: 'SAFE' | 'OVERNIGHT';
+  /** Temel tempo ve su anki (geri cekilmeli) tempo. */
+  paceMs?: number;
+  paceMsCurrent?: number;
+  lightCheckEvery?: number;
+  sinceLightCheck?: number;
+  lightGates?: number;
+  lastLightGate?: 'PASS' | 'FAIL' | null;
+  /** Tam kapi: sayfa esigi VE sure esigi (hangisi once). */
+  fullRebuildEvery?: number;
+  fullRebuildIntervalMs?: number | null;
+  fullGates?: number;
+  reverified?: number;
+  driftDetected?: number;
+  timing?: StructureTiming;
+  /** Kuyruktaki her hedefin cekilecegi varsayimiyla kaba tahmin (ms). Olcum yoksa null. */
+  estimatedRemainingMs?: number | null;
+}
+
+/** Faz zamanlari (ms) — hepsi bu kosunun toplamidir; devam ederken korunur. */
+export interface StructureTiming {
+  /** Yonerge verildi -> yakalama geldi (gezinti + DOM yakalama + ag). */
+  captureRoundTripMs: number;
+  captures: number;
+  /** Korpustan karsilanan hedefler icin yerel okuma/siniflandirma. */
+  corpusScanMs: number;
+  corpusScans: number;
+  lightGateMs: number;
+  fullGateMs: number;
+  /** Checkpoint + rapor yazimi. */
+  persistMs: number;
+  persists: number;
+  /** Son N kaydedilmis sayfa arasindaki ortalama dongu (tempo dahil). */
+  avgCycleMs: number | null;
 }
 
 /** Sayimi/cocuklari okunacak kaynak dugumu (henuz toplanmaz). */
@@ -207,6 +256,8 @@ export interface CollectPageDirective {
   hierarchyVersion?: string;
   /** Weekly mode asks for raw live DOM; legacy market mode leaves this unset. */
   captureRawHtml?: boolean;
+  /** Weekly mode: jittered pacing computed on the bridge (extension falls back to its own). */
+  delayMs?: number;
 }
 
 /** Durma: sebep durumda tasinir; uzanti kendiliginden yeniden denemez. */

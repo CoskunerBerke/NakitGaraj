@@ -59,11 +59,21 @@ function render(state) {
     setText('sPresent', status.alreadyPresent);
     setText('sNew', status.newNodesDiscovered);
     setText('sLast', status.lastSuccessKey);
+    // V2 alanlari istege baglidir: eski kopru gondermezse satir eskisi gibi kalir.
+    const light =
+      typeof status.lightGates === 'number'
+        ? ` · hafif ${status.lightGates} (${status.lastLightGate || '—'})`
+        : '';
+    const pace = typeof status.paceMsCurrent === 'number' ? ` · tempo ${status.paceMsCurrent} ms` : '';
+    const eta =
+      typeof status.estimatedRemainingMs === 'number' && status.estimatedRemainingMs > 0
+        ? ` · kalan ~${Math.round(status.estimatedRemainingMs / 60000)} dk`
+        : '';
     setText(
       'sRebuild',
       status.rebuildEvery > 0
-        ? `${status.rebuilds} yapıldı · ${status.sinceRebuild}/${status.rebuildEvery} sayfa · kapı ${status.lastGate || '—'}`
-        : 'kapalı',
+        ? `${status.rebuilds} yapıldı · ${status.sinceRebuild}/${status.rebuildEvery} sayfa · kapı ${status.lastGate || '—'}${light}${pace}${eta}`
+        : `kapalı${light}${pace}${eta}`,
     );
     setText('sComplete', status.runComplete === undefined ? null : status.runComplete ? 'EVET' : 'HAYIR');
     setText('sPause', status.pauseReason);
