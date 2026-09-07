@@ -29,6 +29,7 @@ import {
 import { loadAssignments } from './build-listing-assignments';
 import { isExactEvidence } from './listing-resolver';
 import {
+  extractBreadcrumb,
   extractNavChildren,
   extractOwnPath,
   ownSlugOf,
@@ -66,7 +67,8 @@ export interface NodeCoverage {
   fullPath: string;
   make: string;
   categoryUrl: string;
-  urlSource: 'NAV_HREF' | 'DERIVED_FROM_PATH';
+  /** OWN_PAGE_HREF: dugumun kendi kaydedilmis sayfasinin breadcrumb href'i (en guclu kanit). */
+  urlSource: 'OWN_PAGE_HREF' | 'NAV_HREF' | 'DERIVED_FROM_PATH';
   pageSavedOnDisk: boolean;
   pageImportedInDb: boolean;
   navDeclaredByParent: boolean;
@@ -88,12 +90,33 @@ interface NavFact {
   count: number | null;
 }
 
-/** Menuden gelen gercek href ve sayim — dugum kimligine gore. */
-function collectNavFacts(
+interface SourceFacts {
+  /** Turetilmis slug -> menu gercegi (eski arama; kayipli). */
+  bySlug: Map<string, NavFact>;
+  /** "<ebeveynin kendi slug'i>\u0000<tam etiket>" -> menu gercegi (kayipsiz). */
+  byParentLabel: Map<string, NavFact>;
+  /** Dugum kimligi -> sayfanin KENDI breadcrumb href'i (en guclu kanit). */
+  ownPathByNode: Map<string, string>;
+}
+
+/**
+ * Kaynak URL gercekleri — KAYIPSIZ anahtarlarla.
+ *
+ * Olculdu (gercek korpus): "AMG" ve "AMG+" iki ayri kaynak sayfasidir
+ * (/…-amg ve /…-amg-plus), ama etiketten turetilen slug '+'yi atar ve iki
+ * dugum AYNI menu gercegine cozulurdu; piyasa hedef anlik goruntusu bunu
+ * AMBIGUOUS_SOURCE_PATH ile reddediyordu (9 cift). Kaynak onceligi:
+ *   1) sayfanin kendi breadcrumb href'i (dugumun kaydedilmis sayfasi)
+ *   2) ebeveyn menusundeki href, ebeveyn slug + TAM etiketle
+ *   3) turetilmis slug (yalnizca yedek; tahmindir)
+ */
+function collectSourceFacts(
   tree: HierarchyTree,
   read: (file: string) => string | null,
-): Map<string, NavFact> {
+): SourceFacts {
   const bySlug = new Map<string, NavFact>();
+  const byParentLabel = new Map<string, NavFact>();
+  const ownPathByNode = new Map<string, string>();
   const seenFiles = new Set<string>();
   for (const node of tree.nodes.values()) {
     for (const file of node.sourceFiles) {
@@ -101,9 +124,26 @@ function collectNavFacts(
       seenFiles.add(file);
       const html = read(file);
       if (html === null) continue;
+      /**
+       * SAKLANAN DIZELER DUZLESTIRILIR. Ayristiricinin dondurdugu yol/etiket
+       * V8'de sayfanin TAMAMINA bagli "dilim" dize olabilir; dugum basina bir
+       * tane saklamak 8.7k x ~340 KB = 3 GB'i canli tutup yigini asirdi
+       * (olculdu: coverage:manifest OOM). Kopya, sayfadan bagimsiz kisa dizedir.
+       */
+      const ownPath = flat(extractOwnPath(html));
+      const crumbs = extractBreadcrumb(html);
+      if (
+        ownPath &&
+        crumbs &&
+        crumbs.length === node.pathSegments.length &&
+        crumbs.every((label, index) => label === node.pathSegments[index]) &&
+        !ownPathByNode.has(node.id)
+      ) {
+        ownPathByNode.set(node.id, ownPath);
+      }
       const nav = extractNavChildren(html);
       if (!nav) continue;
-      const own = ownSlugOf(extractOwnPath(html), node.pathSegments);
+      const own = flat(ownSlugOf(ownPath, node.pathSegments)) as string;
       /**
        * Href gercekleri alt soyun TAMAMINDAN alinir: kaynak bir ara seviyeyi
        * atlayip torunu listelediyse torunun href'i de gercektir. Yalnizca
@@ -112,15 +152,44 @@ function collectNavFacts(
        */
       const split = splitNavChildren(nav, own, node.pathSegments.length);
       for (const child of [...split.direct, ...split.deeper]) {
-        if (!bySlug.has(child.slug))
-          bySlug.set(child.slug, {
-            href: `/${child.slug}`,
-            count: child.count,
-          });
+        const slug = flat(child.slug) as string;
+        const fact: NavFact = { href: `/${slug}`, count: child.count };
+        if (!bySlug.has(slug)) bySlug.set(slug, fact);
+        // Ayirici NUL kacisi: etiketler bosluk icerebilir; ebeveyn slug + etiket cifti kayipsiz kalsin.
+        const key = flat(`${own}\u0000${String(child.label).trim()}`) as string;
+        if (!byParentLabel.has(key)) byParentLabel.set(key, fact);
       }
     }
   }
-  return bySlug;
+  return { bySlug, byParentLabel, ownPathByNode };
+}
+
+/** Sayfa dizesinden bagimsiz, duz kopya (V8 dilim/birlesim dizelerini kirar). */
+function flat(value: string | null | undefined): string | null {
+  if (value === null || value === undefined) return null;
+  return Buffer.from(String(value), 'utf8').toString('utf8');
+}
+
+/** Dugumun kaynak URL'i ve nereden bilindigi (yukaridaki oncelikle). */
+function resolveSourceUrl(
+  tree: HierarchyTree,
+  node: HierarchyNode,
+  facts: SourceFacts,
+): { url: string; source: NodeCoverage['urlSource']; nav: NavFact | null } {
+  const ownPath = facts.ownPathByNode.get(node.id);
+  const parent = node.parentId ? tree.nodes.get(node.parentId) : undefined;
+  const parentSlug = parent
+    ? (facts.ownPathByNode.get(parent.id)?.replace(/^\//, '') ??
+      sahibindenSlug(parent.pathSegments))
+    : null;
+  const byLabel =
+    parentSlug !== null
+      ? facts.byParentLabel.get(`${parentSlug}\u0000${node.name.trim()}`)
+      : undefined;
+  const nav = byLabel ?? facts.bySlug.get(sahibindenSlug(node.pathSegments)) ?? null;
+  if (ownPath) return { url: ownPath, source: 'OWN_PAGE_HREF', nav };
+  if (nav) return { url: nav.href, source: 'NAV_HREF', nav };
+  return { url: `/${sahibindenSlug(node.pathSegments)}`, source: 'DERIVED_FROM_PATH', nav: null };
 }
 
 export interface CoverageReport {
@@ -143,7 +212,7 @@ export function buildCoverage(
   dbFiles: Set<string>,
   read: (file: string) => string | null,
 ): CoverageReport {
-  const navFacts = collectNavFacts(tree, read);
+  const facts = collectSourceFacts(tree, read);
 
   /** Alt agac toplamlari (yapraktan koke dogru tek gecis). */
   const subtree = new Map<string, number>();
@@ -157,8 +226,8 @@ export function buildCoverage(
   const missing: MissingPage[] = [];
 
   for (const node of tree.nodes.values()) {
-    const slug = sahibindenSlug(node.pathSegments);
-    const nav = navFacts.get(slug);
+    const resolved = resolveSourceUrl(tree, node, facts);
+    const nav = resolved.nav;
     const pageSavedOnDisk = node.sourceFiles.length > 0;
     const pageImportedInDb = node.sourceFiles.some((f) => dbFiles.has(f));
     const market = exactByNode.get(node.id) ?? 0;
@@ -168,8 +237,8 @@ export function buildCoverage(
       nodeId: node.id,
       fullPath: node.fullPath,
       make: node.pathSegments[0],
-      categoryUrl: nav ? nav.href : `/${slug}`,
-      urlSource: nav ? 'NAV_HREF' : 'DERIVED_FROM_PATH',
+      categoryUrl: resolved.url,
+      urlSource: resolved.source,
       pageSavedOnDisk,
       pageImportedInDb,
       navDeclaredByParent: Boolean(nav),
@@ -211,7 +280,8 @@ export function buildCoverage(
       make: node.pathSegments[0],
       fullPath: [...node.pathSegments],
       categoryUrl: coverage.categoryUrl,
-      urlSource: coverage.urlSource,
+      // Sayfasi olmayan dugumun kendi href'i olamaz: NAV ya da turetilmis.
+      urlSource: coverage.urlSource === 'OWN_PAGE_HREF' ? 'NAV_HREF' : coverage.urlSource,
       reason: nav
         ? 'NAV_DECLARED_PAGE_MISSING'
         : 'ROW_DISCOVERED_NODE_PAGE_MISSING',
