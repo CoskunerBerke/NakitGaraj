@@ -4,6 +4,13 @@
  * This is deliberately separate from the broad legacy market collector. It
  * consumes a frozen, integrity-gated target snapshot and acquires raw rows;
  * canonical placement remains in the existing listing resolver.
+ *
+ * V2 — SAFE INCREMENTAL BOUNDARY (see boundary-rule.ts):
+ *   newest-first pages -> raw evidence -> per-target boundary decision
+ *   (date re-entry + anchor ids + bounded overlap, or explicit first-run
+ *   baseline policy) -> assignment -> staged/atomic publish -> watermark
+ *   commit as the LAST transactional step. Any failure before that leaves the
+ *   previous per-target watermark untouched.
  */
 import {
   AccessRestrictionReport,
@@ -29,13 +36,27 @@ import {
   BaselineExactAssignment,
   PublishValidationReport,
 } from './artifact-publisher';
+import {
+  BoundaryPolicy,
+  BoundaryProof,
+  DEFAULT_BOUNDARY_POLICY,
+  deriveNextBoundary,
+  evaluateBoundary,
+  validateBoundaryPolicy,
+} from './boundary-rule';
 import { WeeklyEvidenceStore, WeeklyRawObservation } from './evidence-store';
 import { MarketTarget, MarketTargetSnapshot } from './hierarchy-gate';
-import { addDays, parseListingDate } from './listing-date';
+import { parseListingDate, sourceToday } from './listing-date';
 import { TargetRefreshState, TargetStateStore } from './target-state-store';
 import { parseRawWeeklyPage, saveRawWeeklyPage } from './raw-page';
 
-export const WEEKLY_SESSION_VERSION = 'weekly-market-session-v1';
+export const WEEKLY_SESSION_VERSION = 'weekly-market-session-v2';
+
+/** Sinir altindaki kac kimlik capa olarak saklanir (bir sayfanin cogu). */
+export const DEFAULT_ANCHOR_SIZE = 20;
+/** Ardisik hedefler arasi ve sayfalar arasi tempo (ms); sert alt sinir 1000. */
+export const DEFAULT_WEEKLY_PACE_MS = 2200;
+export const DEFAULT_WEEKLY_JITTER = 0.3;
 
 type WeeklyItemStatus = 'PENDING' | 'IN_PROGRESS' | 'COMPLETE' | 'INCOMPLETE';
 
@@ -46,13 +67,25 @@ interface WeeklyWorkItem {
   pagesVisited: number;
   newListings: number;
   duplicates: number;
+  /** Onceki basarili sinir (yoksa taze hedef). */
   previousBoundaryDate: string | null;
   previousBoundaryIds: string[];
+  previousAnchorIds: string[];
+  /** Bu kosuda bu hedeften gorulen tum kimlikler (sinir kaniti icin). */
+  seenIds: string[];
   newestDate: string | null;
-  newestDateIds: string[];
   lastOldestDate: string | null;
   failure: string | null;
   boundaryReached: boolean;
+  boundaryProof: BoundaryProof | null;
+  boundaryReason: string | null;
+  /** HELD: filigran degismedi (basarisiz/eksik). ADVANCED: islem tamamlandi. */
+  watermark: 'HELD' | 'ADVANCED' | null;
+  exact: number;
+  ambiguous: number;
+  unresolved: number;
+  startedAt: string | null;
+  finishedAt: string | null;
   validation: PublishValidationReport | null;
 }
 
@@ -65,8 +98,10 @@ export interface WeeklyCheckpointPayload {
   state: AutopilotState;
   createdAt: string;
   updatedAt: string;
-  overlapDays: number;
-  maxPagesPerTarget: number;
+  boundaryPolicy: BoundaryPolicy;
+  anchorSize: number;
+  paceMs: number;
+  jitter: number;
   evidenceFile: string;
   items: WeeklyWorkItem[];
   runSeenListingIds: string[];
@@ -87,8 +122,15 @@ export interface WeeklySessionOptions {
   publisher: AtomicWeeklyMarketPublisher;
   baselineAssignments?: Record<string, BaselineExactAssignment>;
   knownListingIds?: Set<string>;
+  /** Sinir politikasi; verilmeyen alanlar DEFAULT_BOUNDARY_POLICY'den. */
+  boundaryPolicy?: Partial<BoundaryPolicy>;
+  /** Geriye uyum: boundaryPolicy.overlapDays / maxPagesPerTarget ile ayni. */
   overlapDays?: number;
   maxPagesPerTarget?: number;
+  anchorSize?: number;
+  paceMs?: number;
+  jitter?: number;
+  random?: () => number;
   now?: () => Date;
 }
 
@@ -101,7 +143,24 @@ export interface WeeklyPageResult {
   unresolved: number;
   targetComplete: boolean;
   boundaryReached: boolean;
+  boundaryProof: BoundaryProof | null;
+  boundaryReason: string;
   watermarkCommitted: boolean;
+}
+
+export interface WeeklyTargetStatus {
+  targetId: string;
+  fullPath: string;
+  status: WeeklyItemStatus;
+  pagesVisited: number;
+  newListings: number;
+  duplicates: number;
+  boundaryReached: boolean;
+  boundaryProof: BoundaryProof | null;
+  boundaryReason: string | null;
+  watermark: 'HELD' | 'ADVANCED' | null;
+  previousBoundaryDate: string | null;
+  failure: string | null;
 }
 
 export interface WeeklyStatus {
@@ -124,16 +183,30 @@ export interface WeeklyStatus {
   lastError: string | null;
   startedAt: string;
   updatedAt: string;
-  targets: Array<{
-    targetId: string;
-    fullPath: string;
-    status: WeeklyItemStatus;
-    pagesVisited: number;
-    newListings: number;
-    duplicates: number;
-    boundaryReached: boolean;
-    failure: string | null;
-  }>;
+  // ---- V2 ----
+  targetsTotal: number;
+  targetsUnchanged: number;
+  targetsChanged: number;
+  targetsFailed: number;
+  targetsFresh: number;
+  currentTargetId: string | null;
+  currentTargetExactPath: string | null;
+  currentBoundary: string | null;
+  pagesRequested: number;
+  /** Onceki sinir sayesinde okunmayan sayfalar (tavan - okunan, tamamlanan hedeflerde). */
+  pagesAvoidedByBoundary: number;
+  duplicateSightings: number;
+  exactAssignments: number;
+  ambiguousAssignments: number;
+  unresolvedAssignments: number;
+  watermarkHolds: number;
+  watermarkAdvances: number;
+  boundaryPolicy: BoundaryPolicy;
+  paceMs: number;
+  /** Tamamlanan hedeflerin ortalama suresi x bekleyen hedef. Olcum yoksa null. */
+  estimatedRemainingMs: number | null;
+  totalWallMs: number;
+  targets: WeeklyTargetStatus[];
 }
 
 function clean(value: unknown): string {
@@ -158,34 +231,44 @@ export class WeeklyMarketSession {
   private updatedAt: string;
   private lastError: string | null = null;
   private readonly knownListingIds: Set<string>;
-  private readonly overlapDays: number;
-  private readonly maxPagesPerTarget: number;
+  private readonly policy: BoundaryPolicy;
+  private readonly anchorSize: number;
+  private readonly paceMs: number;
+  private readonly jitter: number;
+  private readonly random: () => number;
   private readonly now: () => Date;
 
   private constructor(private readonly opts: WeeklySessionOptions) {
     this.now = opts.now ?? (() => new Date());
+    this.random = opts.random ?? Math.random;
     this.createdAt = this.now().toISOString();
     this.updatedAt = this.createdAt;
     this.knownListingIds = new Set(opts.knownListingIds ?? []);
     for (const id of opts.publisher.knownListingIds())
       this.knownListingIds.add(id);
-    this.overlapDays = opts.overlapDays ?? 1;
-    this.maxPagesPerTarget = opts.maxPagesPerTarget ?? 20;
-    if (!Number.isInteger(this.overlapDays) || this.overlapDays < 1) {
-      throw new Error('Weekly overlapDays must be an integer >= 1');
+    this.policy = {
+      ...DEFAULT_BOUNDARY_POLICY,
+      ...(opts.overlapDays !== undefined ? { overlapDays: opts.overlapDays } : {}),
+      ...(opts.maxPagesPerTarget !== undefined
+        ? { maxPagesPerTarget: opts.maxPagesPerTarget }
+        : {}),
+      ...(opts.boundaryPolicy ?? {}),
+    };
+    validateBoundaryPolicy(this.policy);
+    this.anchorSize = opts.anchorSize ?? DEFAULT_ANCHOR_SIZE;
+    if (!Number.isInteger(this.anchorSize) || this.anchorSize < 1) {
+      throw new Error('Weekly anchorSize must be a positive integer');
     }
-    if (
-      !Number.isInteger(this.maxPagesPerTarget) ||
-      this.maxPagesPerTarget < 1
-    ) {
-      throw new Error('Weekly maxPagesPerTarget must be a positive integer');
-    }
+    this.paceMs = Math.max(1000, Math.floor(opts.paceMs ?? DEFAULT_WEEKLY_PACE_MS));
+    this.jitter = Math.min(0.9, Math.max(0, opts.jitter ?? DEFAULT_WEEKLY_JITTER));
   }
 
   static start(opts: WeeklySessionOptions): WeeklyMarketSession {
     const session = new WeeklyMarketSession(opts);
     session.assertSnapshot();
     opts.evidence.open();
+    // Hiyerarsi mutasyonu: tum kume uzlastirilir (INVALIDATED / STALE / kesinti).
+    opts.states.reconcileSnapshot(opts.snapshot);
     const targetById = new Map(
       opts.snapshot.targets.map((target) => [target.targetId, target]),
     );
@@ -247,7 +330,8 @@ export class WeeklyMarketSession {
       ...item,
       target: { ...item.target, pathSegments: [...item.target.pathSegments] },
       previousBoundaryIds: [...item.previousBoundaryIds],
-      newestDateIds: [...item.newestDateIds],
+      previousAnchorIds: [...(item.previousAnchorIds ?? [])],
+      seenIds: [...(item.seenIds ?? [])],
       validation: item.validation ? { ...item.validation } : null,
     }));
     session.runSeenListingIds = new Set(payload.runSeenListingIds);
@@ -269,6 +353,8 @@ export class WeeklyMarketSession {
       ) {
         item.status = 'COMPLETE';
         item.boundaryReached = true;
+        item.watermark = 'ADVANCED';
+        item.finishedAt = state.lastSuccessfulRefreshAt;
       }
     }
     session.finishIfDone();
@@ -306,6 +392,7 @@ export class WeeklyMarketSession {
     if (item.status === 'PENDING') {
       this.opts.states.begin(item.target);
       item.status = 'IN_PROGRESS';
+      item.startedAt = this.now().toISOString();
       this.persist();
     }
     return {
@@ -319,10 +406,11 @@ export class WeeklyMarketSession {
         item.nextPage,
       ),
       page: item.nextPage,
-      expectedPages: this.maxPagesPerTarget,
+      expectedPages: this.policy.maxPagesPerTarget,
       targetId: item.target.targetId,
       hierarchyVersion: item.target.hierarchyVersion,
       captureRawHtml: true,
+      delayMs: this.nextDelay(),
     };
   }
 
@@ -349,15 +437,17 @@ export class WeeklyMarketSession {
               ? 'TWO_FACTOR_REQUIRED'
               : pageStatus === 'ACCESS_RESTRICTION_PAGE'
                 ? 'ACCESS_RESTRICTED'
-                : pageStatus === 'PARSE_ERROR'
-                  ? 'PARSE_ERROR'
-                  : 'UNKNOWN_DATA_FORMAT';
+                : pageStatus === 'NOT_FOUND_PAGE'
+                  ? 'TARGET_NOT_FOUND'
+                  : pageStatus === 'PARSE_ERROR'
+                    ? 'PARSE_ERROR'
+                    : 'UNKNOWN_DATA_FORMAT';
         throw new Error(`${failure} raw page classified as ${pageStatus}`);
       }
       if (
         !rawPage.classification.breadcrumb ||
-        rawPage.classification.breadcrumb.join('\u0000') !==
-          item.target.pathSegments.join('\u0000')
+        JSON.stringify(rawPage.classification.breadcrumb) !==
+          JSON.stringify(item.target.pathSegments)
       ) {
         throw new Error(
           `REDIRECT_MISMATCH breadcrumb ${JSON.stringify(rawPage.classification.breadcrumb)} ` +
@@ -368,7 +458,7 @@ export class WeeklyMarketSession {
         .map((card) => clean(card.sourceListingId))
         .sort();
       const parsedIds = rawPage.rows.map((row) => row.sourceListingId).sort();
-      if (reportedIds.join('\u0000') !== parsedIds.join('\u0000')) {
+      if (JSON.stringify(reportedIds) !== JSON.stringify(parsedIds)) {
         throw new Error(
           'PARSE_ERROR extension row IDs differ from hardened raw-HTML parser',
         );
@@ -435,6 +525,7 @@ export class WeeklyMarketSession {
 
       let newCount = 0;
       let runDuplicates = 0;
+      const seen = new Set(item.seenIds);
       for (const record of records) {
         if (this.runSeenListingIds.has(record.sourceListingId)) {
           runDuplicates += 1;
@@ -442,48 +533,53 @@ export class WeeklyMarketSession {
           this.runSeenListingIds.add(record.sourceListingId);
           if (!this.knownListingIds.has(record.sourceListingId)) newCount += 1;
         }
+        seen.add(record.sourceListingId);
       }
       const appended = this.opts.evidence.appendMany(records);
       const duplicates = Math.max(runDuplicates, appended.duplicates);
+      item.seenIds = [...seen];
       item.pagesVisited += 1;
       item.nextPage += 1;
       item.newListings += newCount;
       item.duplicates += duplicates;
       item.lastOldestDate = pageOldest ?? item.lastOldestDate;
-
-      for (const record of records) {
-        if (!item.newestDate || record.listingDate > item.newestDate) {
-          item.newestDate = record.listingDate;
-          item.newestDateIds = [record.sourceListingId];
-        } else if (record.listingDate === item.newestDate) {
-          item.newestDateIds.push(record.sourceListingId);
-        }
+      if (pageNewest && (!item.newestDate || pageNewest > item.newestDate)) {
+        item.newestDate = pageNewest;
       }
-      item.newestDateIds = [...new Set(item.newestDateIds)].sort();
 
-      const overlapStart = item.previousBoundaryDate
-        ? addDays(item.previousBoundaryDate, -this.overlapDays)
-        : null;
-      item.boundaryReached =
-        !batch.hasNextPage ||
-        Boolean(overlapStart && pageOldest && pageOldest < overlapStart);
-
-      if (
-        !item.boundaryReached &&
-        item.pagesVisited >= this.maxPagesPerTarget
-      ) {
+      /**
+       * GUVENLI SINIR: tarih + kimlik + ortusme (ya da ilk kosu politikasi).
+       * Tavan asildi ve kanit yoksa hedef BASARISIZ, filigran degismez.
+       */
+      const decision = evaluateBoundary({
+        hasNextPage: batch.hasNextPage,
+        pagesVisited: item.pagesVisited,
+        oldestDateSeen: item.lastOldestDate,
+        seenIds: seen,
+        prior: item.previousBoundaryDate
+          ? {
+              boundaryDate: item.previousBoundaryDate,
+              boundaryIds: new Set(item.previousBoundaryIds),
+              anchorIds: new Set(item.previousAnchorIds),
+            }
+          : null,
+        today: sourceToday(this.now()),
+        policy: this.policy,
+      });
+      item.boundaryReached = decision.reached;
+      item.boundaryProof = decision.proof;
+      item.boundaryReason = decision.reason;
+      if (!decision.reached && decision.exhausted) {
         throw new Error(
-          `VALIDATION_FAIL safe boundary not reached within ${this.maxPagesPerTarget} pages`,
+          `VALIDATION_FAIL safe boundary not proven within ${this.policy.maxPagesPerTarget} page(s): ${decision.reason}`,
         );
       }
 
       let assignment: WeeklyAssignmentResult | null = null;
       let watermarkCommitted = false;
       if (item.boundaryReached) {
-        assignment = assignWeeklyEvidence(
-          this.opts.tree,
-          this.opts.evidence.forTarget(item.target.targetId),
-        );
+        const observations = this.opts.evidence.forTarget(item.target.targetId);
+        assignment = assignWeeklyEvidence(this.opts.tree, observations);
         this.assertAssignmentSafe(assignment);
         const published = this.opts.publisher.publishTarget({
           hierarchyVersion: this.opts.snapshot.hierarchyVersion,
@@ -493,20 +589,32 @@ export class WeeklyMarketSession {
           baselineAssignments: this.opts.baselineAssignments,
         });
         item.validation = published.validation;
+        item.exact = assignment.stats.exact;
+        item.ambiguous = assignment.stats.ambiguous;
+        item.unresolved = assignment.stats.unresolved;
 
+        // Bir sonraki kosunun siniri: en yeni gun + o gunun kimlikleri + capalar.
+        const next = deriveNextBoundary(observations, this.anchorSize);
+        const completedAt = this.now().toISOString();
         // This is intentionally last. Any exception above leaves the old
         // per-target boundary untouched.
         this.opts.states.commit(item.target.targetId, {
-          boundaryDate: item.newestDate ?? item.previousBoundaryDate,
-          boundaryIds: item.newestDate
-            ? item.newestDateIds
-            : item.previousBoundaryIds,
+          boundaryDate: next.boundaryDate,
+          boundaryIds: next.boundaryIds,
+          anchorIds: next.anchorIds,
+          pageBoundary: item.pagesVisited,
+          proof: decision.proof,
+          baselinePolicy: item.previousBoundaryDate
+            ? null
+            : { pages: this.policy.initialBaselinePages, days: this.policy.initialBaselineDays },
           pagesVisited: item.pagesVisited,
           newListings: item.newListings,
-          completedAt: this.now().toISOString(),
+          completedAt,
         });
         watermarkCommitted = true;
         item.status = 'COMPLETE';
+        item.watermark = 'ADVANCED';
+        item.finishedAt = completedAt;
         this.finishIfDone();
       }
       this.persist();
@@ -519,6 +627,8 @@ export class WeeklyMarketSession {
         unresolved: assignment?.stats.unresolved ?? 0,
         targetComplete: item.status === 'COMPLETE',
         boundaryReached: item.boundaryReached,
+        boundaryProof: item.boundaryProof,
+        boundaryReason: decision.reason,
         watermarkCommitted,
       };
     } catch (error: any) {
@@ -566,6 +676,18 @@ export class WeeklyMarketSession {
       this.items.find((item) => item.status === 'IN_PROGRESS') ??
       this.items.find((item) => item.status === 'PENDING') ??
       null;
+    const complete = this.items.filter((item) => item.status === 'COMPLETE');
+    const pending = this.items.filter(
+      (item) => item.status === 'PENDING' || item.status === 'IN_PROGRESS',
+    );
+    const failed = this.items.filter((item) => item.status === 'INCOMPLETE');
+    const durations = complete
+      .filter((item) => item.startedAt && item.finishedAt)
+      .map((item) => Date.parse(item.finishedAt!) - Date.parse(item.startedAt!))
+      .filter((ms) => ms >= 0);
+    const avgTargetMs = durations.length
+      ? durations.reduce((a, b) => a + b, 0) / durations.length
+      : null;
     return {
       runId: this.opts.runId,
       mode: 'WEEKLY_MARKET',
@@ -576,12 +698,9 @@ export class WeeklyMarketSession {
       currentPath: current?.target.categoryPath ?? null,
       currentTrail: current ? [...current.target.pathSegments] : [],
       currentPage: current ? current.nextPage : null,
-      doneJobs: this.items.filter((item) => item.status === 'COMPLETE').length,
-      pendingJobs: this.items.filter(
-        (item) => item.status === 'PENDING' || item.status === 'IN_PROGRESS',
-      ).length,
-      blockedJobs: this.items.filter((item) => item.status === 'INCOMPLETE')
-        .length,
+      doneJobs: complete.length,
+      pendingJobs: pending.length,
+      blockedJobs: failed.length,
       listingsObserved: this.runSeenListingIds.size,
       newCount: this.items.reduce((sum, item) => sum + item.newListings, 0),
       duplicateCount: this.items.reduce(
@@ -592,6 +711,35 @@ export class WeeklyMarketSession {
       lastError: this.lastError,
       startedAt: this.createdAt,
       updatedAt: this.updatedAt,
+      targetsTotal: this.items.length,
+      targetsUnchanged: complete.filter((item) => item.newListings === 0).length,
+      targetsChanged: complete.filter((item) => item.newListings > 0).length,
+      targetsFailed: failed.length,
+      targetsFresh: this.items.filter((item) => !item.previousBoundaryDate).length,
+      currentTargetId: current?.target.targetId ?? null,
+      currentTargetExactPath: current?.target.fullPath ?? null,
+      currentBoundary: current
+        ? current.boundaryReason ??
+          (current.previousBoundaryDate
+            ? `previous boundary ${current.previousBoundaryDate} (${current.previousBoundaryIds.length} id(s), ${current.previousAnchorIds.length} anchor(s))`
+            : `fresh target: baseline ${this.policy.initialBaselinePages} page(s)` +
+              (this.policy.initialBaselineDays ? ` / ${this.policy.initialBaselineDays} day(s)` : ''))
+        : null,
+      pagesRequested: this.items.reduce((sum, item) => sum + item.pagesVisited, 0),
+      pagesAvoidedByBoundary: complete
+        .filter((item) => item.previousBoundaryDate)
+        .reduce((sum, item) => sum + Math.max(0, this.policy.maxPagesPerTarget - item.pagesVisited), 0),
+      duplicateSightings: this.opts.evidence.stats().duplicates,
+      exactAssignments: complete.reduce((sum, item) => sum + item.exact, 0),
+      ambiguousAssignments: complete.reduce((sum, item) => sum + item.ambiguous, 0),
+      unresolvedAssignments: complete.reduce((sum, item) => sum + item.unresolved, 0),
+      watermarkHolds: this.items.filter((item) => item.watermark === 'HELD').length,
+      watermarkAdvances: this.items.filter((item) => item.watermark === 'ADVANCED').length,
+      boundaryPolicy: { ...this.policy },
+      paceMs: this.paceMs,
+      estimatedRemainingMs:
+        avgTargetMs === null ? (pending.length === 0 ? 0 : null) : Math.round(avgTargetMs * pending.length),
+      totalWallMs: Math.max(0, Date.parse(this.updatedAt) - Date.parse(this.createdAt)),
       targets: this.items.map((item) => ({
         targetId: item.target.targetId,
         fullPath: item.target.fullPath,
@@ -600,6 +748,10 @@ export class WeeklyMarketSession {
         newListings: item.newListings,
         duplicates: item.duplicates,
         boundaryReached: item.boundaryReached,
+        boundaryProof: item.boundaryProof,
+        boundaryReason: item.boundaryReason,
+        watermark: item.watermark,
+        previousBoundaryDate: item.previousBoundaryDate,
         failure: item.failure,
       })),
     };
@@ -624,6 +776,8 @@ export class WeeklyMarketSession {
     target: MarketTarget,
     state: TargetRefreshState,
   ): WeeklyWorkItem {
+    // INVALIDATED / FRESH / STALE: onceki sinir KULLANILMAZ (miras yok).
+    const usable = state.status === 'COMPLETE' || state.status === 'INCOMPLETE' || state.status === 'PENDING';
     return {
       target,
       status: 'PENDING',
@@ -631,13 +785,22 @@ export class WeeklyMarketSession {
       pagesVisited: 0,
       newListings: 0,
       duplicates: 0,
-      previousBoundaryDate: state.previousBoundaryDate,
-      previousBoundaryIds: [...state.seenListingIdsAtBoundary],
+      previousBoundaryDate: usable ? state.previousBoundaryDate : null,
+      previousBoundaryIds: usable ? [...state.seenListingIdsAtBoundary] : [],
+      previousAnchorIds: usable ? [...state.overlapAnchorIds] : [],
+      seenIds: [],
       newestDate: null,
-      newestDateIds: [],
       lastOldestDate: null,
       failure: null,
       boundaryReached: false,
+      boundaryProof: null,
+      boundaryReason: null,
+      watermark: null,
+      exact: 0,
+      ambiguous: 0,
+      unresolved: 0,
+      startedAt: null,
+      finishedAt: null,
       validation: null,
     };
   }
@@ -649,6 +812,11 @@ export class WeeklyMarketSession {
     if (!item)
       throw new AutopilotProtocolError('No weekly target is awaiting a page');
     return item;
+  }
+
+  private nextDelay(): number {
+    const spread = (this.random() * 2 - 1) * this.jitter;
+    return Math.max(1000, Math.round(this.paceMs * (1 + spread)));
   }
 
   private validateBatch(item: WeeklyWorkItem, batch: PageBatch): void {
@@ -706,6 +874,8 @@ export class WeeklyMarketSession {
   private failItem(item: WeeklyWorkItem, failure: string): void {
     item.status = 'INCOMPLETE';
     item.failure = failure;
+    item.watermark = 'HELD';
+    item.finishedAt = this.now().toISOString();
     this.lastError = failure;
     this.state = 'INCOMPLETE';
     this.opts.states.fail(
@@ -737,8 +907,10 @@ export class WeeklyMarketSession {
       state: this.state,
       createdAt: this.createdAt,
       updatedAt: this.updatedAt,
-      overlapDays: this.overlapDays,
-      maxPagesPerTarget: this.maxPagesPerTarget,
+      boundaryPolicy: this.policy,
+      anchorSize: this.anchorSize,
+      paceMs: this.paceMs,
+      jitter: this.jitter,
       evidenceFile: this.opts.evidence.path,
       items: this.items,
       runSeenListingIds: [...this.runSeenListingIds].sort(),

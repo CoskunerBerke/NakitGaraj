@@ -49,6 +49,8 @@ export interface PublishResult {
   artifact: WeeklyMarketArtifact;
   validation: PublishValidationReport;
   releaseFile: string;
+  /** Birlesik icerik yayindakiyle AYNI: yeni surum dosyasi yazilmadi, isaretci degismedi. */
+  unchanged: boolean;
 }
 
 export interface BaselineExactAssignment {
@@ -149,6 +151,31 @@ function validate(
   return report;
 }
 
+/**
+ * Piyasa acisindan ANLAMLI icerik: yerlestirme + ilanin kendi verisi (fiyat,
+ * yil, km, tarih, baslik, konum). Yakalama kaynagi (kosu, sayfa, zaman,
+ * kaynak URL) degisince artefakt "degismis" sayilmaz; fiyat degisince sayilir.
+ */
+function marketFingerprint(
+  assignments: Record<string, WeeklyListingAssignment>,
+): string {
+  const rows = Object.keys(assignments)
+    .sort()
+    .map((id) => {
+      const a = assignments[id];
+      const o = a.sourceObservation;
+      return [
+        id,
+        a.status,
+        a.nodeId ?? '',
+        a.evidence ?? '',
+        [...a.requestedTargetIds].sort().join(','),
+        o ? [o.listingDate, o.price, o.year, o.mileage, o.currency, o.title, o.location, o.modelCells.join('|')].join('') : '',
+      ].join('');
+    });
+  return sha256(rows.join('\n'));
+}
+
 function mergeAssignment(
   existing: WeeklyListingAssignment | undefined,
   incoming: WeeklyListingAssignment,
@@ -196,11 +223,18 @@ export class AtomicWeeklyMarketPublisher {
     this.pointerFile = path.join(rootDir, 'current.json');
   }
 
+  /**
+   * Isaretci degismedikce yayinlanmis artefakt yeniden okunmaz/ayristirilmaz.
+   * Genis kosuda her hedef bitisi bir yayindir; onlarca MB'lik artefakti her
+   * seferinde diskten okumak G/C'yi hedef sayisiyla carpardi. Isaretci
+   * (current.json) atomik degistigi icin onun ozeti guvenli onbellek anahtaridir.
+   */
   loadCurrent(): WeeklyMarketArtifact | null {
     if (!fs.existsSync(this.pointerFile)) return null;
-    const pointer = JSON.parse(
-      fs.readFileSync(this.pointerFile, 'utf-8'),
-    ) as CurrentPointer;
+    const pointerRaw = fs.readFileSync(this.pointerFile, 'utf-8');
+    const revision = sha256(pointerRaw);
+    if (this.cache && this.cache.revision === revision) return this.cache.artifact;
+    const pointer = JSON.parse(pointerRaw) as CurrentPointer;
     if (
       pointer.version !== WEEKLY_MARKET_POINTER_VERSION ||
       !/^[a-zA-Z0-9._-]+$/.test(pointer.release)
@@ -218,8 +252,11 @@ export class AtomicWeeklyMarketPublisher {
     if (artifact.version !== WEEKLY_MARKET_ARTIFACT_VERSION) {
       throw new Error(`Unsupported weekly market artifact at ${releaseFile}`);
     }
+    this.cache = { revision, artifact };
     return artifact;
   }
+
+  private cache: { revision: string; artifact: WeeklyMarketArtifact } | null = null;
 
   /** Stable cache key; changes only when the atomic live pointer changes. */
   revision(): string | null {
@@ -359,6 +396,26 @@ export class AtomicWeeklyMarketPublisher {
       throw new Error(`VALIDATION_FAIL ${JSON.stringify(mergedValidation)}`);
     }
 
+    /**
+     * KAYNAK DEGISMEDIYSE KOPYA SURUM YOK. Tekrarlanan tazeleme (0 yeni ilan,
+     * ayni atamalar) yayin dizinini birbirinin aynisi dosyalarla doldurmamali;
+     * dogrulama yine kostu, isaretci ve son-bilinen-iyi surum yerinde kalir.
+     */
+    if (
+      current &&
+      current.hierarchyVersion === input.hierarchyVersion &&
+      marketFingerprint(current.assignments) === marketFingerprint(assignments) &&
+      JSON.stringify(current.pools) === JSON.stringify(merged.pools)
+    ) {
+      const pointer = JSON.parse(fs.readFileSync(this.pointerFile, 'utf-8')) as CurrentPointer;
+      return {
+        artifact: current,
+        validation: mergedValidation,
+        releaseFile: path.join(this.versionsDir, pointer.release),
+        unchanged: true,
+      };
+    }
+
     const publishedAt = this.now().toISOString();
     const artifact: WeeklyMarketArtifact = {
       version: WEEKLY_MARKET_ARTIFACT_VERSION,
@@ -381,6 +438,6 @@ export class AtomicWeeklyMarketPublisher {
       hierarchyVersion: input.hierarchyVersion,
     };
     atomicWrite(this.pointerFile, JSON.stringify(pointer));
-    return { artifact, validation: mergedValidation, releaseFile };
+    return { artifact, validation: mergedValidation, releaseFile, unchanged: false };
   }
 }

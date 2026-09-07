@@ -223,6 +223,10 @@ export class VehicleHierarchyService {
     return {
       selectedFullHierarchyPath: [...node.pathSegments],
       targetNodeId: node.id,
+      /** Denetim: hangi agac ve hangi yayinlanmis piyasa artefakti bu havuzu uretti. */
+      hierarchyVersion: hierarchyVersionOf(tree),
+      marketArtifactRevision: this.weeklyRevision ?? null,
+      poolSource: 'EXACT_NODE_ONLY' as const,
       marketPoolListingIds,
       poolSize: marketPoolListingIds.length,
       duplicateIdsRemoved: [],

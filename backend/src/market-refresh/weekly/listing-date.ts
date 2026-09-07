@@ -65,6 +65,11 @@ function isoDay(year: number, month: number, day: number): string | null {
   return value.toISOString().slice(0, 10);
 }
 
+/** Today's calendar day in the source's own time zone (YYYY-MM-DD). */
+export function sourceToday(now = new Date()): string {
+  return sourceDay(now).toISOString().slice(0, 10);
+}
+
 /** Parse a source listing date into YYYY-MM-DD, or return null without guessing. */
 export function parseListingDate(
   raw: string | null | undefined,
