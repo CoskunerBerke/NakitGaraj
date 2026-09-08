@@ -96,7 +96,20 @@ describe('EXTENSION CAPTURES RAW HTML FOR STRUCTURE MODE', () => {
     expect(read('popup.js')).toMatch(/status\.mode === 'STRUCTURE'/);
   });
 
-  it('asks Chrome for no new permissions', () => {
+  /**
+   * IZIN KILIDI — TAM LISTE, JOKER YOK.
+   *
+   * `secure.sahibinden.com` 2026-09-08'de EKLENDI: kaynak oturumu dogrularken
+   * sekmeyi o hosta tasiyor ve izin olmadan enjeksiyon
+   * "Cannot access contents of url ..." ile patliyordu. Korpus kaniti
+   * (13.679 kayitli sayfa) TEK oturum hostu gosteriyor: her giris adresi
+   * `secure.sahibinden.com/giris`. Diger alt alanlar (banaozel, static,
+   * yardim, otogalerim, ofisim, image*) icerik/CDN'dir; otopilot oraya
+   * GEZINMEZ, dolayisiyla izin de ISTEMEZ.
+   *
+   * Liste TAM esitlikle kilitlidir: sessiz izin genislemesi bu testi kirar.
+   */
+  it('asks Chrome for no permissions beyond the evidenced hosts', () => {
     const manifest = JSON.parse(read('manifest.json'));
     expect(manifest.permissions).toEqual([
       'storage',
@@ -106,6 +119,7 @@ describe('EXTENSION CAPTURES RAW HTML FOR STRUCTURE MODE', () => {
     ]);
     expect(manifest.host_permissions).toEqual([
       'https://www.sahibinden.com/*',
+      'https://secure.sahibinden.com/*',
       'http://127.0.0.1/*',
       'http://localhost/*',
     ]);

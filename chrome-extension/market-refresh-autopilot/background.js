@@ -135,11 +135,76 @@ async function waitForLandmark(tabId, attempts = 20, intervalMs = 400) {
   return false;
 }
 
+/**
+ * KIMLIK DOGRULAMA KESINTISI — ADRESTEN, ICERIGE DOKUNMADAN.
+ *
+ * Kaynak oturumu dogrulamak istediginde sekmeyi BASKA BIR HOSTA tasir:
+ *   https://secure.sahibinden.com/giris/iki-asamali-dogrulama?type=CHLG
+ *
+ * Bu sayfaya betik ENJEKTE EDILMEZ. Iki sebeple:
+ *   1) Bir dogrulama sayfasi ilan sayfasi DEGILDIR; icerik olarak ayristirmak
+ *      sahte kart/sayim uretme riskidir.
+ *   2) Enjeksiyon zaten "Cannot access contents of url ..." ile patlar ve
+ *      kuresel bir oturum engeli, hedefe ozgu genel bir HATA gibi gorunurdu.
+ *
+ * Karar YALNIZCA sekmenin son adresinden verilir; icerik okunmaz. Kapsam
+ * dar tutulur: bilinen giris/dogrulama yollari. Bilinmeyen bir adres burada
+ * eslesmezse eski davranis aynen surer (icerik betigi metinden tespit eder).
+ */
+const AUTH_CHALLENGE_PATTERNS = [
+  { pattern: /^\/giris\/iki-asamali-dogrulama/i, kind: 'TWO_FACTOR_REQUIRED' },
+  { pattern: /^\/giris\/(sms|dogrulama|two-factor)/i, kind: 'TWO_FACTOR_REQUIRED' },
+  { pattern: /^\/giris(\/|$|\?)/i, kind: 'LOGIN_REQUIRED' },
+  { pattern: /^\/login(\/|$|\?)/i, kind: 'LOGIN_REQUIRED' },
+];
+
+/** Oturum akisinin yasadigi hostlar. `www` normal piyasa trafigidir. */
+const AUTH_HOSTS = new Set(['secure.sahibinden.com']);
+
+/**
+ * Sekmenin son adresi bir kimlik dogrulama duvari mi?
+ * Eslesme yoksa `null` doner ve akis DEGISMEZ.
+ */
+function detectAuthChallenge(finalUrl) {
+  let url;
+  try {
+    url = new URL(String(finalUrl || ''));
+  } catch (err) {
+    return null;
+  }
+  const host = url.hostname.toLowerCase();
+  // Giris/dogrulama yollari `www` uzerinde de gorulebilir; host tek basina karar vermez.
+  const authHost = AUTH_HOSTS.has(host);
+  for (const marker of AUTH_CHALLENGE_PATTERNS) {
+    if (marker.pattern.test(url.pathname)) {
+      return { kind: marker.kind, evidence: `${host}${url.pathname}${url.search}`.slice(0, 200) };
+    }
+  }
+  /**
+   * Bilinen dogrulama hostuna savrulduk ama yol tanimli degil: yine de
+   * ilan sayfasi DEGILDIR. Ayristirmak yerine oturum engeli olarak bildir.
+   */
+  if (authHost) {
+    return { kind: 'LOGIN_REQUIRED', evidence: `${host}${url.pathname}${url.search}`.slice(0, 200) };
+  }
+  return null;
+}
+
 async function navigate(tabId, url) {
   const loaded = waitForLoad(tabId);
   await chrome.tabs.update(tabId, { url });
   await loaded;
+
+  /**
+   * ONCE ADRES, SONRA ICERIK. `waitForLandmark` da enjeksiyondur; dogrulama
+   * sayfasinda once o patlardi. Adres kontrolu enjeksiyondan ONCE yapilir.
+   */
+  const tab = await chrome.tabs.get(tabId);
+  const challenge = detectAuthChallenge(tab && tab.url);
+  if (challenge) return { finalUrl: (tab && tab.url) || url, challenge };
+
   await waitForLandmark(tabId);
+  return { finalUrl: (tab && tab.url) || url, challenge: null };
 }
 
 async function observe(tabId, directive) {
@@ -264,7 +329,34 @@ async function runLoop() {
       }
 
       const tabId = await ensureTab(config);
-      await navigate(tabId, directive.url);
+      const nav = await navigate(tabId, directive.url);
+
+      /**
+       * OTURUM DUVARI: sayfa OKUNMADAN once bildirilir ve dongu DURUR.
+       * Icerik betigi enjekte EDILMEZ; dogrulama sayfasi ilan icerigi gibi
+       * ayristirilmaz. Filigran ilerlemez, hedef IN_PROGRESS -> INCOMPLETE
+       * olarak kopruye yazilir ve ayni run-id ile RESUME edilebilir.
+       */
+      if (nav.challenge) {
+        await bridgeFetch(config, '/autopilot/access-restricted', {
+          method: 'POST',
+          body: {
+            runId: directive.runId,
+            nodePath: directive.nodePath || directive.targetKey || null,
+            kind: nav.challenge.kind,
+            evidence: `${nav.challenge.kind} at ${nav.challenge.evidence}`,
+          },
+        });
+        await writeConfig({ shouldRun: false });
+        await setState(
+          'ACCESS_RESTRICTED',
+          nav.challenge.kind === 'TWO_FACTOR_REQUIRED'
+            ? '2 Asamali Dogrulama gerekiyor: Chrome uzerinde elle tamamlayin, sonra RESUME.'
+            : 'Oturum gerekiyor: Chrome uzerinde elle giris yapin, sonra RESUME.',
+        );
+        return;
+      }
+
       const observation = await observe(tabId, directive);
 
       if (observation.accessRestricted) {

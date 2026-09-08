@@ -618,6 +618,13 @@ function parsePageCapture(body: unknown): PageCapture {
 const ACCESS_KINDS = new Set([
   'CAPTCHA',
   'AUTH_REQUIRED',
+  /**
+   * Oturum/dogrulama duvarlari AYRI kodlardir: `failure-scope.ts` bunlari
+   * KOSU-FATAL sayar. Tek bir 'AUTH_REQUIRED' altinda toplamak, 2FA'yi
+   * hedefe ozgu bir hata gibi gosterirdi.
+   */
+  'LOGIN_REQUIRED',
+  'TWO_FACTOR_REQUIRED',
   'HTTP_403',
   'HTTP_429',
 ]);

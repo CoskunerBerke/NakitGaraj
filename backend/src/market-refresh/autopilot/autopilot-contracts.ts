@@ -357,7 +357,14 @@ export interface DiscoveryReport {
 }
 
 export type AccessRestrictionKind =
-  'CAPTCHA' | 'AUTH_REQUIRED' | 'HTTP_403' | 'HTTP_429';
+  | 'CAPTCHA'
+  | 'AUTH_REQUIRED'
+  /** Oturum duvari: kaynak giris istiyor. Kosu geneli fatal. */
+  | 'LOGIN_REQUIRED'
+  /** 2 Asamali Dogrulama sayfasi. Kosu geneli fatal. */
+  | 'TWO_FACTOR_REQUIRED'
+  | 'HTTP_403'
+  | 'HTTP_429';
 
 export interface AccessRestrictionReport {
   runId: string;

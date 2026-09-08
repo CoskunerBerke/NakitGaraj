@@ -824,10 +824,19 @@ export class WeeklyMarketSession {
     const item = this.items.find(
       (candidate) => candidate.status === 'IN_PROGRESS',
     );
+    /**
+     * KOD, MESAJIN ILK SOZCUGU OLMALIDIR.
+     *
+     * `classifyFailure` ilk sozcugu kod olarak okur; iki nokta eklenmis
+     * "TWO_FACTOR_REQUIRED:" bicimi desene UYMAZ ve engel UNKNOWN_ERROR /
+     * TARGET kapsamina duserdi. Oturum duvarlari KOSU-fataldir; kayit da
+     * oyle gorunmelidir. Kosu zaten asagida ACCESS_RESTRICTED'a gecer,
+     * bu duzeltme KALICI kaydin dogrulugu icindir.
+     */
     if (item)
       this.failItem(
         item,
-        `${report.kind}: ${clean(report.evidence) || 'no detail'}`,
+        `${report.kind} ${clean(report.evidence) || 'no detail'}`,
       );
     this.state = 'ACCESS_RESTRICTED';
     this.persist();

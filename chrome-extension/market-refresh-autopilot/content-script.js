@@ -47,7 +47,43 @@
     { pattern: /oturumunuz sonlandı|güvenli çıkış yapıldı|lütfen giriş yapın|giriş yapmalısınız/i, kind: 'AUTH_REQUIRED' },
   ];
 
+  /**
+   * Adres tabanli oturum duvari — METINDEN ONCE.
+   *
+   * Arka plan calisani bu sayfalara enjekte ETMEZ; bu kontrol, gezinme
+   * ENJEKSIYONDAN SONRA gerceklesirse (yonlendirme) ikinci savunmadir.
+   * Ilan satiri kontrolunden ONCE gelir: dogrulama sayfasi ilan sayfasi
+   * degildir ve icerik olarak ayristirilmamalidir.
+   */
+  const AUTH_URL_MARKERS = [
+    { pattern: /^\/giris\/iki-asamali-dogrulama/i, kind: 'TWO_FACTOR_REQUIRED' },
+    { pattern: /^\/giris\/(sms|dogrulama|two-factor)/i, kind: 'TWO_FACTOR_REQUIRED' },
+    { pattern: /^\/giris(\/|$|\?)/i, kind: 'LOGIN_REQUIRED' },
+    { pattern: /^\/login(\/|$|\?)/i, kind: 'LOGIN_REQUIRED' },
+  ];
+
+  function detectAuthUrlRestriction() {
+    let url;
+    try {
+      url = new URL(location.href);
+    } catch (err) {
+      return null;
+    }
+    for (const marker of AUTH_URL_MARKERS) {
+      if (marker.pattern.test(url.pathname)) {
+        return { kind: marker.kind, evidence: `${url.hostname}${url.pathname}`.slice(0, EVIDENCE_LIMIT) };
+      }
+    }
+    if (url.hostname.toLowerCase() === 'secure.sahibinden.com') {
+      return { kind: 'LOGIN_REQUIRED', evidence: `${url.hostname}${url.pathname}`.slice(0, EVIDENCE_LIMIT) };
+    }
+    return null;
+  }
+
   function detectAccessRestriction() {
+    const byUrl = detectAuthUrlRestriction();
+    if (byUrl) return byUrl;
+
     if (document.querySelector('tr.searchResultsItem')) return null;
 
     const haystack = `${document.title}\n${document.body ? document.body.innerText : ''}`;
