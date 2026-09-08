@@ -718,13 +718,38 @@ export class WeeklyMarketSession {
       }
       const pageNewest = organic[0]?.listingDate ?? null;
       const pageOldest = organic[organic.length - 1]?.listingDate ?? null;
+
+      /**
+       * SAYFALAR ARASI DENETIM YALNIZCA GORULMEMIS SATIRA BAKAR.
+       *
+       * OLCULEN OLAY (`audi/a3/a3-sedan/1-6-tdi/attraction`, 2026-09-08):
+       * sayfa 4 ile sayfa 5 istekleri arasinda pencerenin USTUNDEKI 7 ilan
+       * yayindan kalkti; ofset artik KISALMIS sonuc kumesinde 7 sira geriye
+       * dustu ve sayfa 5, sayfa 4'un kuyrugunu (kart 45-51) yeniden servis
+       * etti. Sayfa 5'in en yenisi 08-28, sayfa 4'un en eskisi 08-27 idi:
+       * denetim patladi, 4 sayfalik saglam kanit cope gitti.
+       *
+       * Bu ZARARSIZ bir ortusmedir: tekrar gelen satirlar KARARLI ilan
+       * kimlikleriyle zaten gorulmustur, tekilestirme onlari yutar ve akis
+       * hemen ardindan daha ESKI ve gorulmemis satirlarla devam eder.
+       *
+       * Denetimin disi kalmaz: GORULMEMIS bir satir onceki sayfanin en
+       * eskisinden yeniyse kaynak gercekten en-yeniden-eskiye sayfalamiyor
+       * demektir ve hedef eskisi gibi KAPALI duser.
+       */
+      const seenOnEarlierPages = new Set(item.seenIds);
+      const unseenNewest = organic.find(
+        (entry) => !seenOnEarlierPages.has(clean(entry.card.sourceListingId)),
+      );
       if (
         item.lastOldestDate &&
-        pageNewest &&
-        pageNewest > item.lastOldestDate
+        unseenNewest &&
+        unseenNewest.listingDate > item.lastOldestDate
       ) {
         throw new Error(
-          'VALIDATION_FAIL pagination is not newest-first across pages',
+          'VALIDATION_FAIL pagination is not newest-first across pages ' +
+            `at card ${unseenNewest.cardIndex} ` +
+            `(${unseenNewest.listingDate} > ${item.lastOldestDate})`,
         );
       }
       if (batch.hasNextPage && parsed.length === 0) {
