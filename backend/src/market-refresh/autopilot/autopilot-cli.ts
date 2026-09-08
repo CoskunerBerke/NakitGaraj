@@ -935,6 +935,11 @@ async function runWeekly(args: CliArgs): Promise<void> {
     states,
     publisher,
     knownListingIds,
+    /**
+     * Yonlendirme esdegerlik kaniti: varis URL'sini baska bir dugum
+     * sahipleniyorsa esdeglik reddedilir (ebeveyn/cocuk cokmesi olmaz).
+     */
+    sourcePathsByNode: sourcePaths,
     baselineAssignments: baselineAssignments?.assignments,
     boundaryPolicy,
     anchorSize: args.anchorSize ?? undefined,

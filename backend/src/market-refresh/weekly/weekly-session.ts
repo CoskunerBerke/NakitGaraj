@@ -131,6 +131,13 @@ export interface WeeklySessionOptions {
   knownListingIds?: Set<string>;
   /** Sinir politikasi; verilmeyen alanlar DEFAULT_BOUNDARY_POLICY'den. */
   boundaryPolicy?: Partial<BoundaryPolicy>;
+  /**
+   * nodeId -> kaynak kategori yolu (kapsama kanitindan). Yonlendirme
+   * ESDEGERLIK kanitinda kullanilir: varis URL'sini BASKA bir dugum sahipleniyorsa
+   * esdeglik REDDEDILIR. Verilmezse yonlendirme kanitlanamaz ve muhafiz
+   * eskisi gibi kati davranir.
+   */
+  sourcePathsByNode?: ReadonlyMap<string, string>;
   /** Geriye uyum: boundaryPolicy.overlapDays / maxPagesPerTarget ile ayni. */
   overlapDays?: number;
   maxPagesPerTarget?: number;
@@ -1039,6 +1046,74 @@ export class WeeklyMarketSession {
     return Math.max(1000, Math.round(this.paceMs * (1 + spread)));
   }
 
+  /**
+   * YONLENDIRME ESDEGERLIGI — URL BENZERLIGIYLE DEGIL, KIMLIK KANITIYLA.
+   *
+   * Kaynak, bazi kategorileri kendi kanonik adresine TASIR. Gercek kanit
+   * (structure-2026-09 gezinti gunlugu, 6565 yakalama): 635 gercek yonlendirme
+   * gozlendi; bunlarin 25'i PIYASA HEDEFI. Ornek:
+   *   /alfa-romeo-156-2.5  ->  /alfa-romeo-156-2.5-2.5
+   *
+   * Yonlendirme YALNIZCA su ucu birden kanitlanirsa kabul edilir:
+   *   1. Varis sayfasi KATEGORI sayfasidir,
+   *   2. Sayfanin kirintisi (breadcrumb) hedefin TAM yoluna esittir,
+   *   3. Varis URL'sini BASKA bir hiyerarsi dugumu sahiplenmez.
+   *
+   * (3) sarttir: kirinti tek basina YETMEZ. Gercek kanitta `/abarth` ->
+   * `/abarth-500e` kirintiyi ["Abarth"] olarak korur, ama varis URL'si
+   * `abarth/500e` dugumunun kendi adresidir; kabul etmek EBEVEYN ile COCUGU
+   * ayni kimlige cokertirdi. Ayni sekilde `/dacia-jogger-1.6-hybrid` ->
+   * `/dacia-jogger-1.6-extreme` kirintiyi "1.6 Hybrid"den "1.6"ya degistirir
+   * ve (2) ile reddedilir.
+   *
+   * Kimlik ANAHTARI degismez: hedef kimligi, filigran ve yerlestirme her zaman
+   * ISTENEN hedefe aittir; yalnizca adres esdegerligi kanitlanmistir.
+   */
+  private assertProvenSameTarget(item: WeeklyWorkItem, batch: PageBatch): void {
+    const reject = (why: string): never => {
+      throw new Error(`REDIRECT_MISMATCH final URL ${batch.pageUrl} (${why})`);
+    };
+    if (!batch.rawHtml || !batch.rawHtml.trim()) {
+      return reject('no page evidence to prove identity');
+    }
+    let page: ReturnType<typeof parseRawWeeklyPage>;
+    try {
+      page = parseRawWeeklyPage(batch.rawHtml);
+    } catch {
+      return reject('page evidence unreadable');
+    }
+    if (page.classification.status !== 'CATEGORY_PAGE') {
+      return reject(`page classified as ${page.classification.status}`);
+    }
+    if (
+      JSON.stringify(page.classification.breadcrumb) !==
+      JSON.stringify(item.target.pathSegments)
+    ) {
+      return reject(
+        `breadcrumb ${JSON.stringify(page.classification.breadcrumb)} != ${JSON.stringify(item.target.pathSegments)}`,
+      );
+    }
+    const owner = this.nodeOwningUrl(batch.pageUrl);
+    if (owner && owner !== item.target.targetId) {
+      return reject(`URL belongs to node ${owner}`);
+    }
+    if (!this.opts.sourcePathsByNode) {
+      return reject('no source-path evidence to rule out another node');
+    }
+  }
+
+  /** Verilen URL'yi kendi kaynak yolu olarak sahiplenen dugum (varsa). */
+  private nodeOwningUrl(pageUrl: string): string | null {
+    const map = this.opts.sourcePathsByNode;
+    if (!map) return null;
+    for (const [nodeId, sourcePath] of map) {
+      if (!sourcePath) continue;
+      if (sameCategoryUrl(this.opts.baseUrl, sourcePath, pageUrl))
+        return nodeId;
+    }
+    return null;
+  }
+
   private validateBatch(item: WeeklyWorkItem, batch: PageBatch): void {
     if (batch.runId !== this.opts.runId) {
       // Protokol hatasi (yanlis kosuya gonderim): hedefe yazilmaz, YUKSELIR.
@@ -1065,7 +1140,7 @@ export class WeeklyMarketSession {
         batch.pageUrl,
       )
     ) {
-      throw new Error(`REDIRECT_MISMATCH final URL ${batch.pageUrl}`);
+      this.assertProvenSameTarget(item, batch);
     }
     if (batch.cards.length > MAX_CARDS_PER_PAGE) {
       throw new Error(
