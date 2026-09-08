@@ -151,6 +151,8 @@ interface CliArgs {
   deadline: string | null;
   concurrency: number;
   dryRun: boolean;
+  /** Genis kosuda deterministik ilk N hedef (kanarya). null = sinirsiz. */
+  targetLimit: number | null;
   /** Weekly mode: one explicit exact target, or every validated target with --all-targets. */
   targetId: string | null;
   allTargets: boolean;
@@ -230,21 +232,28 @@ function parseArgs(argv: string[]): CliArgs {
 
   const jitterRaw = get('jitter');
   const jitter = jitterRaw === null ? null : Number(jitterRaw);
-  if (jitter !== null && (!Number.isFinite(jitter) || jitter < 0 || jitter > 0.9)) {
+  if (
+    jitter !== null &&
+    (!Number.isFinite(jitter) || jitter < 0 || jitter > 0.9)
+  ) {
     throw new Error('--jitter must be a number between 0 and 0.9');
   }
 
   const paceModeRaw = (get('pace-mode') || 'safe').toUpperCase();
   if (paceModeRaw !== 'SAFE' && paceModeRaw !== 'OVERNIGHT') {
-    throw new Error(`--pace-mode must be "safe" or "overnight", got "${get('pace-mode')}"`);
+    throw new Error(
+      `--pace-mode must be "safe" or "overnight", got "${get('pace-mode')}"`,
+    );
   }
-  const paceMode = paceModeRaw as PaceMode;
+  const paceMode = paceModeRaw;
 
   const structureModeRaw = (get('structure-mode') || 'full').toUpperCase();
   if (structureModeRaw !== 'FULL' && structureModeRaw !== 'INCREMENTAL') {
-    throw new Error(`--structure-mode must be "full" or "incremental", got "${get('structure-mode')}"`);
+    throw new Error(
+      `--structure-mode must be "full" or "incremental", got "${get('structure-mode')}"`,
+    );
   }
-  const structureMode = structureModeRaw as StructureMode;
+  const structureMode = structureModeRaw;
 
   const concurrency = Number(get('concurrency') || 1);
   if (concurrency !== 1) {
@@ -277,7 +286,12 @@ function parseArgs(argv: string[]): CliArgs {
   }
   const maxPages = positiveInt('max-pages', null);
   const noRebuild = has('no-rebuild');
-  if (mode === 'structure' && noRebuild && !has('dry-run') && maxPages === null) {
+  if (
+    mode === 'structure' &&
+    noRebuild &&
+    !has('dry-run') &&
+    maxPages === null
+  ) {
     throw new Error(
       '--no-rebuild disables the mandatory final validation gate and is only allowed with --dry-run or a bounded --max-pages smoke run.',
     );
@@ -290,12 +304,22 @@ function parseArgs(argv: string[]): CliArgs {
   if (mode === 'weekly' && get('target-id') && has('all-targets')) {
     throw new Error('--target-id and --all-targets are alternatives; give one');
   }
+  /**
+   * `--target-limit` yalnizca genis kosuyu SINIRLAR. Tek hedefli kosuda
+   * sessizce yok saymak, kullaniciya uyguladigini sandigi bir sinir
+   * uygulamamak olurdu.
+   */
+  if (mode === 'weekly' && get('target-limit') && !has('all-targets')) {
+    throw new Error(
+      '--target-limit only bounds --all-targets; it is meaningless with --target-id',
+    );
+  }
   if (
     mode === 'weekly' &&
     (scope || get('coverage-manifest') || has('dry-run'))
   ) {
     throw new Error(
-      '--mode weekly accepts --target-id | --all-targets, --max-pages, --run-id, --port, pacing and boundary-policy flags only',
+      '--mode weekly accepts --target-id | --all-targets, --target-limit, --max-pages, --run-id, --port, pacing and boundary-policy flags only',
     );
   }
   const optionalInt = (name: string): number | null => positiveInt(name, null);
@@ -337,7 +361,10 @@ function parseArgs(argv: string[]): CliArgs {
           ) as number;
           return minutes > 0 ? minutes * 60_000 : null;
         })(),
-    lightCheckEvery: positiveInt('light-check-every', DEFAULT_LIGHT_CHECK_EVERY) as number,
+    lightCheckEvery: positiveInt(
+      'light-check-every',
+      DEFAULT_LIGHT_CHECK_EVERY,
+    ) as number,
     paceMode,
     paceMs: optionalInt('pace-ms'),
     jitter,
@@ -348,6 +375,7 @@ function parseArgs(argv: string[]): CliArgs {
     dryRun: has('dry-run'),
     targetId: get('target-id'),
     allTargets: has('all-targets'),
+    targetLimit: parseTargetLimit(get('target-limit')),
     initialBaselinePages: optionalInt('initial-baseline-pages'),
     initialBaselineDays: optionalInt('initial-baseline-days'),
     anchorSize: optionalInt('anchor-size'),
@@ -413,6 +441,27 @@ function coverageRoots(
  * "02:00-10:00" -> bir sonraki kapanis aninin epoch ms degeri.
  * Kapanis saati suanki saatten kucukse ERTESI GUNE tasinir.
  */
+/**
+ * `--target-limit` dogrulamasi.
+ *
+ * Sessizce duzeltmek TEHLIKELIDIR: "0" ya da "abc" yazan biri kucuk bir
+ * kanarya beklerken TUM hedef evrenini baslatabilir. Gecersiz deger acikca
+ * reddedilir.
+ */
+export function parseTargetLimit(raw: string | null): number | null {
+  if (raw === null || raw === undefined || String(raw).trim() === '')
+    return null;
+  const text = String(raw).trim();
+  if (!/^[0-9]+$/.test(text)) {
+    throw new Error(`--target-limit must be a positive integer, got "${raw}"`);
+  }
+  const value = Number(text);
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new Error(`--target-limit must be >= 1, got "${raw}"`);
+  }
+  return value;
+}
+
 export function resolveWindowDeadline(
   spec: string,
   now: Date = new Date(),
@@ -496,7 +545,12 @@ async function serve(
   const shutdown = async () => {
     await bridge.close();
     await onShutdown();
-    process.exit(0);
+    /**
+     * Cikis kodu MAKINE-OKUR: `onShutdown` ozeti yazip `process.exitCode`
+     * ayarlayabilir. Kosu bir hedefte basarisiz olduysa kabuk bunu 0 gorup
+     * "temiz" sanmamalidir.
+     */
+    process.exit(typeof process.exitCode === 'number' ? process.exitCode : 0);
   };
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
@@ -774,25 +828,50 @@ async function runWeekly(args: CliArgs): Promise<void> {
    * fiyatlanabilir de olmaz).
    */
   const coverageById = new Map(coverage.map((node) => [node.nodeId, node]));
-  const eligible = (targetId: string): { ok: true } | { ok: false; reason: string } => {
+  const eligible = (
+    targetId: string,
+  ): { ok: true } | { ok: false; reason: string } => {
     const node = coverageById.get(targetId);
-    if (!node?.pageSavedOnDisk) return { ok: false, reason: 'page not saved on disk' };
-    if (!node.terminalConfirmed) return { ok: false, reason: 'terminal not confirmed' };
+    if (!node?.pageSavedOnDisk)
+      return { ok: false, reason: 'page not saved on disk' };
+    if (!node.terminalConfirmed)
+      return { ok: false, reason: 'terminal not confirmed' };
     return { ok: true };
   };
   let selectedTargetIds: string[];
-  let skippedTargets: Array<{ targetId: string; reason: string }> = [];
+  const skippedTargets: Array<{ targetId: string; reason: string }> = [];
   if (args.allTargets) {
     selectedTargetIds = [];
     for (const candidate of snapshot.targets) {
       const verdict = eligible(candidate.targetId);
       if (verdict.ok) selectedTargetIds.push(candidate.targetId);
-      else skippedTargets.push({ targetId: candidate.targetId, reason: verdict.reason });
+      else
+        skippedTargets.push({
+          targetId: candidate.targetId,
+          reason: verdict.reason,
+        });
     }
-    if (selectedTargetIds.length === 0) throw new Error('Weekly refresh refused: no eligible exact target');
+    if (selectedTargetIds.length === 0)
+      throw new Error('Weekly refresh refused: no eligible exact target');
+    /**
+     * SINIR, DETERMINISTIK SIRADAN SONRA UYGULANIR.
+     *
+     * `snapshot.targets` dugum kimligine gore sirali uretilir ve uygunluk
+     * suzgeci sirayi korur; bu yuzden ayni anlik goruntu + ayni secenekler
+     * her zaman AYNI ilk N hedefi verir. Rastgele ya da kesif sirasina bagli
+     * bir secim, kanaryayi tekrarlanamaz kilardi.
+     */
+    if (
+      args.targetLimit !== null &&
+      selectedTargetIds.length > args.targetLimit
+    ) {
+      selectedTargetIds = selectedTargetIds.slice(0, args.targetLimit);
+    }
   } else {
     const targetId = args.targetId as string;
-    const target = snapshot.targets.find((candidate) => candidate.targetId === targetId);
+    const target = snapshot.targets.find(
+      (candidate) => candidate.targetId === targetId,
+    );
     if (!target) {
       throw new Error(
         `--target-id "${targetId}" is not a validated terminal target in hierarchy ${snapshot.hierarchyVersion}`,
@@ -806,7 +885,9 @@ async function runWeekly(args: CliArgs): Promise<void> {
     }
     selectedTargetIds = [targetId];
   }
-  const firstTarget = snapshot.targets.find((candidate) => candidate.targetId === selectedTargetIds[0])!;
+  const firstTarget = snapshot.targets.find(
+    (candidate) => candidate.targetId === selectedTargetIds[0],
+  )!;
 
   const weeklyRoot = path.join(root, 'data', 'market-refresh', 'weekly');
   const runDir = path.join(weeklyRoot, 'runs', args.runId);
@@ -829,9 +910,15 @@ async function runWeekly(args: CliArgs): Promise<void> {
   );
   const boundaryPolicy = {
     ...(args.overlapDays !== null ? { overlapDays: args.overlapDays } : {}),
-    ...(args.minAnchorMatches !== null ? { minAnchorMatches: args.minAnchorMatches } : {}),
-    ...(args.initialBaselinePages !== null ? { initialBaselinePages: args.initialBaselinePages } : {}),
-    ...(args.initialBaselineDays !== null ? { initialBaselineDays: args.initialBaselineDays } : {}),
+    ...(args.minAnchorMatches !== null
+      ? { minAnchorMatches: args.minAnchorMatches }
+      : {}),
+    ...(args.initialBaselinePages !== null
+      ? { initialBaselinePages: args.initialBaselinePages }
+      : {}),
+    ...(args.initialBaselineDays !== null
+      ? { initialBaselineDays: args.initialBaselineDays }
+      : {}),
     ...(args.maxPages !== null ? { maxPagesPerTarget: args.maxPages } : {}),
   };
   const weeklyPreset = PACE_PRESETS[args.paceMode];
@@ -851,7 +938,9 @@ async function runWeekly(args: CliArgs): Promise<void> {
     baselineAssignments: baselineAssignments?.assignments,
     boundaryPolicy,
     anchorSize: args.anchorSize ?? undefined,
-    paceMs: args.paceMs ?? (args.paceMode === 'OVERNIGHT' ? weeklyPreset.paceMs : undefined),
+    paceMs:
+      args.paceMs ??
+      (args.paceMode === 'OVERNIGHT' ? weeklyPreset.paceMs : undefined),
     jitter: args.jitter ?? undefined,
   };
   const effectivePolicy = { ...DEFAULT_BOUNDARY_POLICY, ...boundaryPolicy };
@@ -878,17 +967,59 @@ async function runWeekly(args: CliArgs): Promise<void> {
       `run id      ${args.runId}${checkpointFile.exists() ? '   (checkpoint found: START resumes it)' : ''}`,
       `hierarchy   ${snapshot.hierarchyVersion} (PASS ${receipt.validatedAt})`,
       `targets     ${selectedTargetIds.length} selected` +
-        (skippedTargets.length ? `, ${skippedTargets.length} skipped (page/terminal evidence incomplete)` : ''),
+        (skippedTargets.length
+          ? `, ${skippedTargets.length} skipped (page/terminal evidence incomplete)`
+          : ''),
       `first       ${firstTarget.targetId}  (${firstTarget.fullPath})  ${firstTarget.categoryPath}`,
       `boundary    date re-entry + anchor ids (min ${effectivePolicy.minAnchorMatches}) or ${effectivePolicy.overlapDays}-day window; ` +
         `max ${effectivePolicy.maxPagesPerTarget} page(s)/target`,
       `baseline    fresh targets read ${effectivePolicy.initialBaselinePages} page(s)` +
-        (effectivePolicy.initialBaselineDays ? ` or ${effectivePolicy.initialBaselineDays} day(s)` : '') +
+        (effectivePolicy.initialBaselineDays
+          ? ` or ${effectivePolicy.initialBaselineDays} day(s)`
+          : '') +
         ' (explicit policy; no hidden depth)',
       `pacing      ${baseOptions.paceMs ?? DEFAULT_WEEKLY_PACE_MS} ms ± ${Math.round((baseOptions.jitter ?? DEFAULT_WEEKLY_JITTER) * 100)}%`,
       `run dir     ${runDir}`,
     ],
-    () => Promise.resolve(),
+    async () => {
+      if (!session) return;
+      const sum = session.summary();
+      console.log('');
+      console.log('  WEEKLY RUN SUMMARY');
+      console.log(`  run/hierarchy    ${sum.runId} / ${sum.hierarchyVersion}`);
+      console.log(`  state            ${sum.state}`);
+      console.log(
+        `  targets          selected ${sum.targetsSelected}, attempted ${sum.targetsAttempted}, ` +
+          `completed ${sum.targetsCompleted}, pending ${sum.targetsPending}, ` +
+          `failed ${sum.targetsFailed}, blocked ${sum.targetsBlocked}`,
+      );
+      console.log(
+        `  listings         ${sum.pagesRead} page(s), ${sum.newListings} new, ` +
+          `${sum.duplicatesSuppressed} duplicate(s) suppressed`,
+      );
+      console.log(
+        `  placement        exact ${sum.exact}, ambiguous excluded ${sum.ambiguousExcluded}, ` +
+          `unresolved excluded ${sum.unresolvedExcluded}`,
+      );
+      console.log(
+        `  watermarks       advanced ${sum.watermarksAdvanced}, held ${sum.watermarksHeld}`,
+      );
+      if (sum.failedTargetIds.length) {
+        console.log('  failed targets:');
+        for (const detail of sum.failures) {
+          console.log(
+            `    ${detail.targetId}  ${detail.code} (${detail.scope}` +
+              `${detail.retryable ? ', retryable' : ', NOT retryable'}) after ${detail.pagesRead} page(s)`,
+          );
+        }
+      }
+      /**
+       * Bir hedef bile basarisizsa kosu TEMIZ BASARI degildir. Cikis kodu 2
+       * bunu betiklere gorunur kilar; digerlerinin ilerlemesi yine korunur.
+       */
+      process.exitCode =
+        sum.state === 'COMPLETE' && sum.targetsFailed === 0 ? 0 : 2;
+    },
   );
 }
 
