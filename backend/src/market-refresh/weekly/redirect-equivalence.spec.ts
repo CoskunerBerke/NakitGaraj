@@ -26,6 +26,7 @@ import {
 } from './hierarchy-gate';
 import { TargetStateStore } from './target-state-store';
 import {
+  RedirectEquivalence,
   WeeklyCheckpointPayload,
   WeeklyMarketSession,
   WeeklySessionOptions,
@@ -301,5 +302,100 @@ describe('kanitlanmamis yonlendirme REDDEDILIR', () => {
       batch('case-d3', 1, ROWS, false, repeatedTailUrl()),
     );
     rejects(session, 'no source-path evidence');
+  });
+});
+
+describe('esdeglik DENETIM IZI', () => {
+  /** Kontrol noktasindan ilk hedefin KALICI kaydi. */
+  const marker = (): RedirectEquivalence | null => {
+    const payload = (
+      JSON.parse(
+        fs.readFileSync(path.join(dir, 'obs', 'checkpoint.json'), 'utf-8'),
+      ) as { payload: WeeklyCheckpointPayload }
+    ).payload;
+    return payload.items[0].redirectEquivalence;
+  };
+
+  // CASE A — kanit yolu calisti: isaret kurulur ve iki adres de kaydedilir.
+  it('A: kanitlanmis yonlendirme isaretlenir; istenen ve varis adresi kaydedilir', () => {
+    const session = run('obs');
+    const result = session.submitPageBatch(
+      batch('obs', 1, ROWS, false, repeatedTailUrl()),
+    );
+    expect(result.targetComplete).toBe(true);
+
+    const found = marker();
+    expect(found).toMatchObject({
+      accepted: true,
+      requestedCategoryUrl: target().categoryPath,
+      proof: 'BREADCRUMB_IDENTITY_AND_UNIQUE_URL',
+    });
+    // Varis adresi sorgu parametreleri OLMADAN saklanir.
+    expect(found!.finalCategoryUrl).toBe(
+      `${target().categoryPath}-${target().categoryPath.split('-').slice(-1)[0]}`,
+    );
+    expect(found!.finalCategoryUrl).not.toContain('?');
+    expect(typeof found!.at).toBe('string');
+
+    const summary = session.summary();
+    expect(summary.redirectEquivalenceAccepted).toBe(1);
+    expect(summary.redirectEquivalenceTargetIds).toEqual([target().targetId]);
+
+    // Kimlik DEGISMEZ: durum anahtari hala istenen hedef.
+    const state = new TargetStateStore(path.join(dir, 'states.json')).get(
+      target().targetId,
+    )!;
+    expect(state.targetId).toBe(target().targetId);
+    expect(state.status).toBe('COMPLETE');
+  });
+
+  // CASE B — ayni URL: isaret KURULMAZ.
+  it('B: ayni adresli hedef isaretlenmez', () => {
+    const session = run('obs');
+    const result = session.submitPageBatch(batch('obs', 1, ROWS, false));
+    expect(result.targetComplete).toBe(true);
+    expect(marker()).toBeNull();
+    expect(session.summary().redirectEquivalenceAccepted).toBe(0);
+    expect(session.summary().redirectEquivalenceTargetIds).toEqual([]);
+  });
+
+  it('B2: yalnizca sayfalama/siralama farki da isaretlenmez', () => {
+    const session = run('obs');
+    const exact = target();
+    const url = `${BASE.replace(/\/$/, '')}${exact.categoryPath}?pagingSize=20&sorting=date_asc`;
+    session.submitPageBatch(batch('obs', 1, ROWS, false, url));
+    expect(marker()).toBeNull();
+    expect(session.summary().redirectEquivalenceAccepted).toBe(0);
+  });
+
+  // CASE C — reddedilen yonlendirme KABUL olarak isaretlenmez.
+  it('C: kardes/cocuk dugume yonlendirme isaretlenmez', () => {
+    const childUrl = `${target().categoryPath}-ambiente`;
+    const session = run('obs', {
+      sourcePathsByNode: nodeUrls({
+        'audi/a3/a3-sportback/35-tfsi/advanced/ambiente': childUrl,
+      }),
+    });
+    session.submitPageBatch(
+      batch(
+        'obs',
+        1,
+        ROWS,
+        false,
+        `${BASE.replace(/\/$/, '')}${childUrl}?sorting=date_desc`,
+      ),
+    );
+    expect(marker()).toBeNull();
+    expect(session.summary().redirectEquivalenceAccepted).toBe(0);
+    expect(session.summary().targetsFailed).toBe(1);
+  });
+
+  // CASE D — kanit haritasi yoksa kati kalir ve isaretlenmez.
+  it('D: kanit haritasi yokken reddedilir ve isaretlenmez', () => {
+    const session = run('obs', { sourcePathsByNode: undefined });
+    session.submitPageBatch(batch('obs', 1, ROWS, false, repeatedTailUrl()));
+    expect(marker()).toBeNull();
+    expect(session.summary().redirectEquivalenceAccepted).toBe(0);
+    expect(session.summary().targetsFailed).toBe(1);
   });
 });

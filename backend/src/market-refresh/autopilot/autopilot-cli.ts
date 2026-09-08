@@ -164,7 +164,8 @@ interface CliArgs {
   overlapDays: number | null;
 }
 
-function parseArgs(argv: string[]): CliArgs {
+/** Disari acik: bayrak dogrulamasi kopru BASLAMADAN once test edilebilsin. */
+export function parseArgs(argv: string[]): CliArgs {
   const get = (name: string): string | null => {
     const idx = argv.indexOf(`--${name}`);
     if (idx >= 0 && argv[idx + 1] && !argv[idx + 1].startsWith('--'))
@@ -320,6 +321,29 @@ function parseArgs(argv: string[]): CliArgs {
   ) {
     throw new Error(
       '--mode weekly accepts --target-id | --all-targets, --target-limit, --max-pages, --run-id, --port, pacing and boundary-policy flags only',
+    );
+  }
+  /**
+   * HAFTALIK KOSUDA ZAMAN SINIRI YOK — SESSIZCE YOK SAYMAK YERINE REDDET.
+   *
+   * `--deadline` ve `--window` yalnizca yapi (structure) kosusunda baglanmistir;
+   * `runWeekly` ikisini de OKUMAZ. Kabul edip yok saymak, operatore var olmayan
+   * bir kesme saati oldugunu dusundururdu — asil tehlike budur.
+   *
+   * Gercek bir haftalik son-tarih, hedef ORTASINDA kesme anlamina gelir: kesilen
+   * hedef INCOMPLETE kalmali, filigrani TUTULMALI, tamamlananlarin ilerlemesi
+   * korunmali ve ayni run-id ile devam deterministik olmalidir. Bu ayri ve
+   * test edilmesi gereken bir istir; o gelene kadar haftalik kosu kontrol
+   * noktasi/devam ve ELLE durdurma (Ctrl+C) ile sinirlandirilir.
+   */
+  if (mode === 'weekly' && (deadline !== null || get('window') !== null)) {
+    const flag = deadline !== null ? '--deadline' : '--window';
+    throw new Error(
+      `${flag} is not supported by --mode weekly and would be silently ignored. ` +
+        'Weekly runs are bounded by --target-limit / --max-pages and stopped manually ' +
+        '(Ctrl+C); progress is durable via the checkpoint, and rerunning the same ' +
+        '--run-id resumes without re-reading safely completed targets. ' +
+        'Only --mode structure honours --deadline / --window.',
     );
   }
   const optionalInt = (name: string): number | null => positiveInt(name, null);
@@ -1009,6 +1033,14 @@ async function runWeekly(args: CliArgs): Promise<void> {
       console.log(
         `  watermarks       advanced ${sum.watermarksAdvanced}, held ${sum.watermarksHeld}`,
       );
+      if (sum.redirectEquivalenceAccepted > 0) {
+        console.log(
+          `  redirects        ${sum.redirectEquivalenceAccepted} accepted by proven equivalence:`,
+        );
+        for (const targetId of sum.redirectEquivalenceTargetIds) {
+          console.log(`    ${targetId}`);
+        }
+      }
       if (sum.failedTargetIds.length) {
         console.log('  failed targets:');
         for (const detail of sum.failures) {

@@ -65,6 +65,23 @@ export const DEFAULT_WEEKLY_JITTER = 0.3;
 
 type WeeklyItemStatus = 'PENDING' | 'IN_PROGRESS' | 'COMPLETE' | 'INCOMPLETE';
 
+/**
+ * KANITLANMIS YONLENDIRME ESDEGERLIGI — DENETIM IZI.
+ *
+ * Kaynak istenen kategoriyi kendi kanonik adresine tasidiginda ve kimlik
+ * kaniti gectiginde yazilir. Yalnizca GERCEKTEN kanit yolu calistiginda
+ * kurulur: ayni URL'li hedefler ve REDDEDILEN yonlendirmeler isaretlenmez.
+ * Kimlik degismez; bu kayit yalnizca ADRESIN esdeger oldugunu belgeler.
+ */
+export interface RedirectEquivalence {
+  accepted: true;
+  requestedCategoryUrl: string;
+  finalCategoryUrl: string;
+  /** Kanit turu: kirinti hedefin tam yoluna esit + varis URL'si sahipsiz. */
+  proof: 'BREADCRUMB_IDENTITY_AND_UNIQUE_URL';
+  at: string;
+}
+
 interface WeeklyWorkItem {
   target: MarketTarget;
   status: WeeklyItemStatus;
@@ -94,6 +111,8 @@ interface WeeklyWorkItem {
   startedAt: string | null;
   finishedAt: string | null;
   validation: PublishValidationReport | null;
+  /** Yonlendirme kanit yolu calistiysa denetim kaydi; aksi halde null. */
+  redirectEquivalence: RedirectEquivalence | null;
 }
 
 export interface WeeklyCheckpointPayload {
@@ -168,6 +187,9 @@ export interface WeeklyRunSummary {
   watermarksHeld: number;
   failedTargetIds: string[];
   failures: TargetFailureDetail[];
+  /** Kanitlanmis yonlendirme esdegerligiyle kabul edilen hedef sayisi. */
+  redirectEquivalenceAccepted: number;
+  redirectEquivalenceTargetIds: string[];
 }
 
 export interface WeeklyPageResult {
@@ -267,6 +289,15 @@ function safeUrl(value: string, baseUrl: string): string {
     return new URL(value, baseUrl).toString();
   } catch {
     return '';
+  }
+}
+
+/** Denetim kaydi icin sade yol: sorgu/sayfalama parametreleri saklanmaz. */
+function categoryPathOf(pageUrl: string): string {
+  try {
+    return new URL(pageUrl).pathname.replace(/\/+$/, '') || '/';
+  } catch {
+    return pageUrl;
   }
 }
 
@@ -388,6 +419,9 @@ export class WeeklyMarketSession {
       previousAnchorIds: [...(item.previousAnchorIds ?? [])],
       seenIds: [...(item.seenIds ?? [])],
       validation: item.validation ? { ...item.validation } : null,
+      redirectEquivalence: item.redirectEquivalence
+        ? { ...item.redirectEquivalence }
+        : null,
     }));
     session.runSeenListingIds = new Set(payload.runSeenListingIds);
     session.createdAt = payload.createdAt;
@@ -976,6 +1010,7 @@ export class WeeklyMarketSession {
       startedAt: null,
       finishedAt: null,
       validation: null,
+      redirectEquivalence: null,
     };
   }
 
@@ -999,6 +1034,7 @@ export class WeeklyMarketSession {
     const by = (status: WeeklyItemStatus) =>
       this.items.filter((item) => item.status === status);
     const failed = by('INCOMPLETE');
+    const equivalent = this.items.filter((item) => item.redirectEquivalence);
     const complete = by('COMPLETE');
     const blocked = failed.filter(
       (item) => item.failureDetail?.scope === 'RUN',
@@ -1034,6 +1070,10 @@ export class WeeklyMarketSession {
       ).length,
       watermarksHeld: this.items.filter((item) => item.watermark === 'HELD')
         .length,
+      redirectEquivalenceAccepted: equivalent.length,
+      redirectEquivalenceTargetIds: equivalent.map(
+        (item) => item.target.targetId,
+      ),
       failedTargetIds: failed.map((item) => item.target.targetId),
       failures: failed
         .map((item) => item.failureDetail)
@@ -1100,6 +1140,18 @@ export class WeeklyMarketSession {
     if (!this.opts.sourcePathsByNode) {
       return reject('no source-path evidence to rule out another node');
     }
+    /**
+     * DENETIM IZI: kanit yolu GERCEKTEN calisti. Ayni URL'li hedeflerde bu
+     * noktaya hic gelinmez, reddedilen yonlendirmeler yukarida firlatir; yani
+     * isaret yalnizca kanitlanmis esdeglikte kurulur.
+     */
+    item.redirectEquivalence = {
+      accepted: true,
+      requestedCategoryUrl: item.target.categoryPath,
+      finalCategoryUrl: categoryPathOf(batch.pageUrl),
+      proof: 'BREADCRUMB_IDENTITY_AND_UNIQUE_URL',
+      at: this.now().toISOString(),
+    };
   }
 
   /** Verilen URL'yi kendi kaynak yolu olarak sahiplenen dugum (varsa). */
