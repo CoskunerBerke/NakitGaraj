@@ -38,6 +38,8 @@ export interface CategoryPageOptions {
     year?: string;
     mileage?: string;
     location?: string;
+    /** Kaynagin VITRIN yuvasi: tarih sirasindan bagimsiz konumlanir. */
+    promoted?: boolean;
   }>;
   nextPage?: boolean;
   /** Chrome canli-DOM bicimi: mutlak href + kucuk oznitelik + jsp sarmalayici. */
@@ -103,7 +105,7 @@ ${navItems}
   const rows = (options.rows ?? [])
     .map(
       (r) => `
-<tr data-id="${r.id}" class="searchResultsItem">
+<tr data-id="${r.id}" class="searchResultsItem${r.promoted ? ' searchResultsPromoSuper' : ''}">
   <td class="searchResultsTagAttributeValue">${r.model}</td>
   <td><a class="classifiedTitle" href="/ilan/${r.id}/detay">${r.model} ilan</a></td>
   <td class="searchResultsAttributeValue">${r.year ?? '2022'}</td>

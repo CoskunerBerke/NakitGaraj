@@ -33,6 +33,12 @@ export interface WeeklyRawObservation {
   requestedTargetId: string;
   requestedTargetPath: string[];
   page: number;
+  /**
+   * Kaynagin VITRIN yerlesimi. Ilan GERCEKTIR ve normal dogrulamayi gecerse
+   * havuza girer; yalnizca KRONOLOJI/SINIR kararlarindan disarida tutulur.
+   * Eski kanit dosyalarinda alan yoktur -> `undefined` = organik (guvenli varsayilan).
+   */
+  isPromoted?: boolean;
 }
 
 function key(record: WeeklyRawObservation): string {

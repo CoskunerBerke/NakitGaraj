@@ -543,18 +543,32 @@ export class WeeklyMarketSession {
             `UNKNOWN_DATA_FORMAT card ${index + 1}: listing date ${JSON.stringify(card.listingDateText)}`,
           );
         }
-        return { card, listingDate };
+        // `cardIndex` sayfadaki GERCEK konum: kanit ve hata mesaji izlenebilir kalir.
+        return { card, listingDate, cardIndex: index + 1 };
       });
 
-      for (let index = 1; index < parsed.length; index += 1) {
-        if (parsed[index].listingDate > parsed[index - 1].listingDate) {
+      /**
+       * KRONOLOJI YALNIZCA ORGANIK AKISTAN OKUNUR.
+       *
+       * Kaynak, VITRIN satirlarini tarih sirasindan bagimsiz bir yuvaya sabitler
+       * (gercek kanit: 24 sayfada 7 vitrin satiri, 5'i siralamayi bozdu, 2'si
+       * yalnizca komsu tarihe denk geldigi icin gecti). O satirin KONUMU zaman
+       * kaniti degildir; bu yuzden siralama, sayfa ucu tarihleri, sayfalar arasi
+       * kontrol ve SINIR kararlari organik satirlardan hesaplanir.
+       *
+       * Ilanin KENDISI atilmaz: `records` asagida TUM satirlari kapsar.
+       */
+      const organic = parsed.filter((entry) => !entry.card.isPromoted);
+
+      for (let index = 1; index < organic.length; index += 1) {
+        if (organic[index].listingDate > organic[index - 1].listingDate) {
           throw new Error(
-            `VALIDATION_FAIL page is not newest-first at card ${index + 1}`,
+            `VALIDATION_FAIL page is not newest-first at card ${organic[index].cardIndex}`,
           );
         }
       }
-      const pageNewest = parsed[0]?.listingDate ?? null;
-      const pageOldest = parsed[parsed.length - 1]?.listingDate ?? null;
+      const pageNewest = organic[0]?.listingDate ?? null;
+      const pageOldest = organic[organic.length - 1]?.listingDate ?? null;
       if (
         item.lastOldestDate &&
         pageNewest &&
@@ -587,11 +601,21 @@ export class WeeklyMarketSession {
           requestedTargetId: item.target.targetId,
           requestedTargetPath: [...item.target.pathSegments],
           page: batch.page,
+          isPromoted: card.isPromoted,
         }),
       );
 
       let newCount = 0;
       let runDuplicates = 0;
+      /**
+       * `seen` YALNIZCA sinir kanitidir (onceki sinir/capa kimlikleriyle
+       * eslesme sayilir). Sabitlenmis bir vitrin satiri her kosuda yeniden
+       * gorunur; capa sayilirsa "onceki sinira ulastik" diye YANLIS kanit
+       * uretir ve tazeleme ERKEN durur. Bu yuzden capa kumesi organiktir.
+       *
+       * Tekilestirme (dedup) AYRIDIR ve vitrin satirlarini da kapsar:
+       * ilan gercektir, iki kez sayilmamalidir.
+       */
       const seen = new Set(item.seenIds);
       for (const record of records) {
         if (this.runSeenListingIds.has(record.sourceListingId)) {
@@ -600,7 +624,7 @@ export class WeeklyMarketSession {
           this.runSeenListingIds.add(record.sourceListingId);
           if (!this.knownListingIds.has(record.sourceListingId)) newCount += 1;
         }
-        seen.add(record.sourceListingId);
+        if (!record.isPromoted) seen.add(record.sourceListingId);
       }
       const appended = this.opts.evidence.appendMany(records);
       const duplicates = Math.max(runDuplicates, appended.duplicates);
@@ -660,8 +684,16 @@ export class WeeklyMarketSession {
         item.ambiguous = assignment.stats.ambiguous;
         item.unresolved = assignment.stats.unresolved;
 
-        // Bir sonraki kosunun siniri: en yeni gun + o gunun kimlikleri + capalar.
-        const next = deriveNextBoundary(observations, this.anchorSize);
+        /**
+         * Bir sonraki kosunun siniri: en yeni gun + o gunun kimlikleri + capalar.
+         * Vitrin satirlari DISARIDA: tarihi tum organik satirlardan yeni olan
+         * sabit bir satir, siniri oldugundan YENI gostererek bir sonraki
+         * tazelemeyi erken durdururdu.
+         */
+        const next = deriveNextBoundary(
+          observations.filter((observation) => !observation.isPromoted),
+          this.anchorSize,
+        );
         const completedAt = this.now().toISOString();
         // This is intentionally last. Any exception above leaves the old
         // per-target boundary untouched.

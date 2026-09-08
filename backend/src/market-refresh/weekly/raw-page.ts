@@ -18,6 +18,11 @@ export interface ParsedWeeklyRow {
   mileageText: string | null;
   priceText: string | null;
   locationText: string | null;
+  /**
+   * Kaynagin VITRIN yerlesimi: satir tarih sirasindan BAGIMSIZ konumlanir.
+   * Ilanin kendisi gercektir; yalnizca SIRASI kronoloji kaniti degildir.
+   */
+  isPromoted: boolean;
 }
 
 export interface ParsedWeeklyPage {
@@ -30,6 +35,27 @@ function clean(value: unknown): string {
   return String(value ?? '')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+/**
+ * VITRIN (one cikarilmis) yerlesim sinifi mi?
+ *
+ * Kaynak, "Super Vitrin" satirlarini tarih sirasindan bagimsiz bir yuvaya
+ * SABITLER; bu yuzden o satirin sayfa konumu kronoloji kaniti DEGILDIR.
+ *
+ * Yalnizca `searchResultsPromoSuper` ailesi sayilir. `searchResultsPromoHighlight`,
+ * `searchResultsPromoBold` ve `premium-plus-container-for-search` satirlari
+ * kaydedilmis kanitta KENDI tarih sirasinda duruyordu (yalnizca gorsel vurgu);
+ * onlari da ayirmak organik siralama denetimini gereksiz yere zayiflatirdi.
+ *
+ * Ilan kimligi araligina (846xxxxxx) BAKILMAZ: o bir korelasyondu, siniflandirici degil.
+ */
+export function isPromotedPlacementClass(
+  classAttr: string | null | undefined,
+): boolean {
+  return String(classAttr ?? '')
+    .split(/\s+/)
+    .some((token) => token.toLowerCase().startsWith('searchresultspromosuper'));
 }
 
 export function saveRawWeeklyPage(
@@ -73,10 +99,14 @@ export function parseRawWeeklyPage(
   const classification = classifyPage(html, filePath);
   const $ = cheerio.load(html);
   const byId = new Map<string, any>();
+  /** Vitrin yuvasi, satir elemani HENUZ TIPLIYKEN okunur. */
+  const promotedIds = new Set<string>();
   $('tr.searchResultsItem[data-id], tr[data-id]').each((_index, element) => {
     const row = $(element);
     const id = clean(row.attr('data-id'));
-    if (id && !byId.has(id)) byId.set(id, row);
+    if (!id || byId.has(id)) return;
+    byId.set(id, row);
+    if (isPromotedPlacementClass(row.attr('class'))) promotedIds.add(id);
   });
 
   const rows = classification.rows.map((canonical) => {
@@ -88,6 +118,7 @@ export function parseRawWeeklyPage(
     const attributes = row.find('td.searchResultsAttributeValue');
     return {
       sourceListingId: canonical.listingId,
+      isPromoted: promotedIds.has(canonical.listingId),
       href: row.find('a.classifiedTitle').first().attr('href') || '',
       title: canonical.title,
       modelCells: [...canonical.cells],
