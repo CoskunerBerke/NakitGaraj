@@ -59,9 +59,59 @@ export const WEEKLY_SESSION_VERSION = 'weekly-market-session-v2';
 
 /** Sinir altindaki kac kimlik capa olarak saklanir (bir sayfanin cogu). */
 export const DEFAULT_ANCHOR_SIZE = 20;
-/** Ardisik hedefler arasi ve sayfalar arasi tempo (ms); sert alt sinir 1000. */
-export const DEFAULT_WEEKLY_PACE_MS = 2200;
-export const DEFAULT_WEEKLY_JITTER = 0.3;
+/**
+ * Ardisik hedefler arasi ve sayfalar arasi tempo (ms); sert alt sinir 1000.
+ *
+ * 2200 ms -> 6000 ms. Olculen sebep: 2026-09-08 canli 6205 kosusu 2200 ms
+ * ile ~1 saat 45 dakikada 185 hedef okuyup Cloudflare duvarina carpti
+ * (~1.7 istek/sn'lik sabit bir ritim). Uzun kosuda amac hiz degil BITIRMEK;
+ * duvara carpip elle mudahale beklemek her zaman daha yavastir.
+ *
+ * Jitter yukseltildi: sabit periyot, tempo yavas olsa bile makine imzasidir.
+ * 6000 ms +-%35 -> ~3.9-8.1 sn, ortalama 6 sn.
+ */
+export const DEFAULT_WEEKLY_PACE_MS = 6000;
+export const DEFAULT_WEEKLY_JITTER = 0.35;
+
+/**
+ * HAFTALIK TEMPO ON AYARLARI — yapi (structure) modundan AYRI.
+ *
+ * `PACE_PRESETS` yapi toplayicisinin olcumune gore ayarlanmistir; piyasa
+ * tazelemesi cok daha uzun surer (6205 hedef) ve ayni degerleri paylasmasi
+ * icin bir sebep yoktur. OVERNIGHT burada "daha hizli" DEGIL, "gozetimsiz
+ * uzun kosu" demektir: en muhafazakar deger odur.
+ */
+export const WEEKLY_PACE_PRESETS: Record<
+  'SAFE' | 'OVERNIGHT',
+  { paceMs: number; jitter: number }
+> = {
+  SAFE: { paceMs: 6000, jitter: 0.35 },
+  OVERNIGHT: { paceMs: 7000, jitter: 0.35 },
+};
+
+/**
+ * UYUM SAGLAYAN GERI CEKILME — yalnizca YAVASLAR, asla hizlanmaz.
+ *
+ * Kaynak zorlanma isareti verdiginde (hedefe ozel hata, yavas sayfa) tempo
+ * carpani buyur; ardisik basarilarda YAVASCA geri iner. Tavan, tek bir kotu
+ * pencerenin kosuyu sonsuza kilitlemesini onler.
+ *
+ * Bot duvarlari bu mekanizmaya GIRMEZ: onlar KOSU-fataldir, kosu durur ve
+ * elle mudahale beklenir (`failure-scope.ts`). Burada yeniden deneme dongusu
+ * YOKTUR.
+ */
+export const WEEKLY_BACKOFF = {
+  /** Her zorlanma isaretinde carpan bu kadar buyur. */
+  factor: 1.5,
+  /** Tavan: 6000 ms tabani ile en fazla ~24 sn. */
+  maxMultiplier: 4,
+  /** Bu kadar ardisik temiz hedeften sonra bir kademe toparlanir. */
+  recoverAfter: 5,
+  /** Toparlanma carpani (1'e dogru iner). */
+  recoverFactor: 0.8,
+  /** Bir sayfa bu sureden uzun surduyse "yavas" sayilir. */
+  slowPageMs: 15_000,
+};
 
 type WeeklyItemStatus = 'PENDING' | 'IN_PROGRESS' | 'COMPLETE' | 'INCOMPLETE';
 
@@ -275,7 +325,21 @@ export interface WeeklyStatus {
   /** Tamamlanan hedeflerin ortalama suresi x bekleyen hedef. Olcum yoksa null. */
   estimatedRemainingMs: number | null;
   totalWallMs: number;
-  targets: WeeklyTargetStatus[];
+  /**
+   * TAM hedef listesi — YALNIZCA acikca istendiginde.
+   *
+   * Panel `/autopilot/status`'u 2 saniyede bir ceker. 6205 hedefte bu dizi
+   * ~1.8 MB'a cikiyordu: her yoklamada serilestirme + ayristirma, hicbir
+   * tuketicisi olmayan bir yuk. Ozet alanlar (sayaclar, guncel hedef,
+   * basarisizliklar) her zaman gonderilir; ayrinti ayri istenir.
+   */
+  targets?: WeeklyTargetStatus[];
+  /** Su an islenen + dusen hedefler; her zaman gonderilir (kucuk kume). */
+  activeTargets: WeeklyTargetStatus[];
+  /** Uyum saglayan geri cekilme carpani (1 = taban tempo). */
+  paceMultiplier: number;
+  /** Carpan uygulanmis taban tempo (jitter haric), ms. */
+  effectivePaceMs: number;
 }
 
 function clean(value: unknown): string {
@@ -290,6 +354,24 @@ function safeUrl(value: string, baseUrl: string): string {
   } catch {
     return '';
   }
+}
+
+/** Hedef ozeti — hem ozet hem ayrinti yolunda AYNI bicim. */
+function describeItem(item: WeeklyWorkItem): WeeklyTargetStatus {
+  return {
+    targetId: item.target.targetId,
+    fullPath: item.target.fullPath,
+    status: item.status,
+    pagesVisited: item.pagesVisited,
+    newListings: item.newListings,
+    duplicates: item.duplicates,
+    boundaryReached: item.boundaryReached,
+    boundaryProof: item.boundaryProof,
+    boundaryReason: item.boundaryReason,
+    watermark: item.watermark,
+    previousBoundaryDate: item.previousBoundaryDate,
+    failure: item.failure,
+  };
 }
 
 /** Denetim kaydi icin sade yol: sorgu/sayfalama parametreleri saklanmaz. */
@@ -313,6 +395,10 @@ export class WeeklyMarketSession {
   private readonly anchorSize: number;
   private readonly paceMs: number;
   private readonly jitter: number;
+  /** Uyum saglayan geri cekilme carpani (>= 1). Kalici DEGILDIR: kosu icidir. */
+  private paceMultiplier = 1;
+  /** Ardisik temiz hedef sayaci — toparlanma bununla tetiklenir. */
+  private cleanStreak = 0;
   private readonly random: () => number;
   private readonly now: () => Date;
 
@@ -364,14 +450,25 @@ export class WeeklyMarketSession {
       );
     }
     const selected = [...new Set(opts.selectedTargetIds)];
+    const chosen: MarketTarget[] = [];
     for (const targetId of selected) {
       const target = targetById.get(targetId);
       if (!target)
         throw new AutopilotProtocolError(
           `Unknown/non-terminal market target ${targetId}`,
         );
-      const state = opts.states.reconcile(target);
-      session.items.push(session.itemFrom(target, state));
+      chosen.push(target);
+    }
+    /**
+     * TEK OKUMA + TEK YAZMA. Hedef basina `reconcile()` cagirmak 6205
+     * hedefte START'i ~549 saniye bloke ediyordu (olculdu); bu sure boyunca
+     * kopru hicbir istege yanit veremiyordu.
+     */
+    const states = opts.states.reconcileMany(chosen);
+    for (const target of chosen) {
+      session.items.push(
+        session.itemFrom(target, states.get(target.targetId)!),
+      );
     }
     session.state = 'RUNNING';
     session.persist();
@@ -577,6 +674,17 @@ export class WeeklyMarketSession {
         );
       }
       const capturedAt = this.now().toISOString();
+      /**
+       * YAVAS SAYFA = zorlanma isareti. Sayfanin kaynakta ne kadar surdugunu
+       * dogrudan olcemeyiz; hedefin baslangicindan bu yana gecen sure, bir
+       * sayfanin gozle gorulur sekilde uzadigini yakalamak icin yeterlidir.
+       */
+      if (item.startedAt) {
+        const elapsed =
+          new Date(capturedAt).getTime() - new Date(item.startedAt).getTime();
+        if (elapsed > WEEKLY_BACKOFF.slowPageMs * item.nextPage)
+          this.slowDown();
+      }
       const parsed = rawPage.rows.map((card, index) => {
         const listingDate = parseListingDate(card.listingDateText, this.now());
         if (!listingDate) {
@@ -755,6 +863,8 @@ export class WeeklyMarketSession {
           completedAt,
         });
         watermarkCommitted = true;
+        // Temiz tamamlama: geri cekilme kademeli olarak geri alinir.
+        this.speedUpAfterCleanRun();
         item.status = 'COMPLETE';
         item.watermark = 'ADVANCED';
         item.finishedAt = completedAt;
@@ -856,7 +966,10 @@ export class WeeklyMarketSession {
     this.persist();
   }
 
-  status(): WeeklyStatus {
+  /**
+   * Yoklama icin HAFIF ozet. `detail: true` yalnizca ayrinti ucundan gelir.
+   */
+  status(options: { detail?: boolean } = {}): WeeklyStatus {
     const current =
       this.items.find((item) => item.status === 'IN_PROGRESS') ??
       this.items.find((item) => item.status === 'PENDING') ??
@@ -953,20 +1066,20 @@ export class WeeklyMarketSession {
         0,
         Date.parse(this.updatedAt) - Date.parse(this.createdAt),
       ),
-      targets: this.items.map((item) => ({
-        targetId: item.target.targetId,
-        fullPath: item.target.fullPath,
-        status: item.status,
-        pagesVisited: item.pagesVisited,
-        newListings: item.newListings,
-        duplicates: item.duplicates,
-        boundaryReached: item.boundaryReached,
-        boundaryProof: item.boundaryProof,
-        boundaryReason: item.boundaryReason,
-        watermark: item.watermark,
-        previousBoundaryDate: item.previousBoundaryDate,
-        failure: item.failure,
-      })),
+      /** Tempo gorunur olsun: geri cekilme sessizce calismasin. */
+      paceMultiplier: Number(this.paceMultiplier.toFixed(2)),
+      effectivePaceMs: Math.round(this.paceMs * this.paceMultiplier),
+      /**
+       * ILGI CEKEN hedefler HER ZAMAN gonderilir (az sayidadir): su an
+       * islenen ve dusenler. Kalanlar sayaclarla temsil edilir.
+       */
+      activeTargets: this.items
+        .filter(
+          (item) =>
+            item.status === 'IN_PROGRESS' || item.status === 'INCOMPLETE',
+        )
+        .map(describeItem),
+      ...(options.detail ? { targets: this.items.map(describeItem) } : {}),
     };
   }
 
@@ -1090,9 +1203,34 @@ export class WeeklyMarketSession {
     };
   }
 
+  /**
+   * Bir sonraki bekleme: taban tempo x geri cekilme carpani, jitter ile
+   * dagitilmis. Jitter HER cagrida yeniden cekilir; sabit periyot olusmaz.
+   */
   private nextDelay(): number {
     const spread = (this.random() * 2 - 1) * this.jitter;
-    return Math.max(1000, Math.round(this.paceMs * (1 + spread)));
+    const base = this.paceMs * this.paceMultiplier;
+    return Math.max(1000, Math.round(base * (1 + spread)));
+  }
+
+  /** Zorlanma isareti: tempo bir kademe yavaslar (tavana kadar). */
+  private slowDown(): void {
+    this.cleanStreak = 0;
+    this.paceMultiplier = Math.min(
+      WEEKLY_BACKOFF.maxMultiplier,
+      this.paceMultiplier * WEEKLY_BACKOFF.factor,
+    );
+  }
+
+  /** Temiz hedef: yeterince ardisik basaridan sonra bir kademe toparlan. */
+  private speedUpAfterCleanRun(): void {
+    this.cleanStreak += 1;
+    if (this.cleanStreak < WEEKLY_BACKOFF.recoverAfter) return;
+    this.cleanStreak = 0;
+    this.paceMultiplier = Math.max(
+      1,
+      this.paceMultiplier * WEEKLY_BACKOFF.recoverFactor,
+    );
   }
 
   /**
@@ -1245,6 +1383,8 @@ export class WeeklyMarketSession {
     stage: TargetFailureDetail['stage'] = 'PAGE_SUBMIT',
   ): FailureScope {
     const verdict = classifyFailure(failure);
+    // Hedef dustu: kaynak zorlaniyor olabilir, tempo yavaslar.
+    this.slowDown();
     item.status = 'INCOMPLETE';
     item.failure = failure;
     item.watermark = 'HELD';

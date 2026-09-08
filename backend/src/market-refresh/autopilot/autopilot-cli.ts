@@ -99,6 +99,7 @@ import { AtomicWeeklyMarketPublisher } from '../weekly/artifact-publisher';
 import {
   DEFAULT_WEEKLY_JITTER,
   DEFAULT_WEEKLY_PACE_MS,
+  WEEKLY_PACE_PRESETS,
   WeeklyCheckpointPayload,
   WeeklyMarketSession,
 } from '../weekly/weekly-session';
@@ -945,7 +946,12 @@ async function runWeekly(args: CliArgs): Promise<void> {
       : {}),
     ...(args.maxPages !== null ? { maxPagesPerTarget: args.maxPages } : {}),
   };
-  const weeklyPreset = PACE_PRESETS[args.paceMode];
+  /**
+   * HAFTALIK TEMPO YAPI MODUNDAN AYRIDIR. `PACE_PRESETS` yapi toplayicisinin
+   * olcumune gore ayarlidir; 6205 hedefli piyasa kosusu cok daha uzun surer
+   * ve 2026-09-08'de 2200 ms ile bot duvarina carpti.
+   */
+  const weeklyPreset = WEEKLY_PACE_PRESETS[args.paceMode];
   const baseOptions = {
     runId: args.runId,
     source: args.source,
@@ -967,10 +973,9 @@ async function runWeekly(args: CliArgs): Promise<void> {
     baselineAssignments: baselineAssignments?.assignments,
     boundaryPolicy,
     anchorSize: args.anchorSize ?? undefined,
-    paceMs:
-      args.paceMs ??
-      (args.paceMode === 'OVERNIGHT' ? weeklyPreset.paceMs : undefined),
-    jitter: args.jitter ?? undefined,
+    // Her iki modda da haftalik on ayar uygulanir; --pace-ms elle ezebilir.
+    paceMs: args.paceMs ?? weeklyPreset.paceMs,
+    jitter: args.jitter ?? weeklyPreset.jitter,
   };
   const effectivePolicy = { ...DEFAULT_BOUNDARY_POLICY, ...boundaryPolicy };
 

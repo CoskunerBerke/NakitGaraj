@@ -109,7 +109,9 @@ function clone(state: TargetRefreshState): TargetRefreshState {
 }
 
 /** v1 kaydini v2 sekline getirir; kural alanlari bos, sinir korunur. */
-function migrate(raw: Partial<TargetRefreshState> & { targetId: string }): TargetRefreshState {
+function migrate(
+  raw: Partial<TargetRefreshState> & { targetId: string },
+): TargetRefreshState {
   return {
     targetId: raw.targetId,
     targetIdentityHash: raw.targetIdentityHash ?? '',
@@ -166,12 +168,18 @@ export class TargetStateStore {
     }
     const targets: Record<string, TargetRefreshState> = {};
     for (const [id, raw] of Object.entries(artifact.targets)) {
-      if (!raw || typeof raw !== 'object' || (raw as TargetRefreshState).targetId !== id) {
-        throw new Error(`Target state at ${this.path} has a corrupt entry for ${id}`);
+      if (!raw || typeof raw !== 'object' || raw.targetId !== id) {
+        throw new Error(
+          `Target state at ${this.path} has a corrupt entry for ${id}`,
+        );
       }
-      targets[id] = migrate(raw as TargetRefreshState);
+      targets[id] = migrate(raw);
     }
-    return { version: TARGET_STATE_VERSION, updatedAt: artifact.updatedAt, targets };
+    return {
+      version: TARGET_STATE_VERSION,
+      updatedAt: artifact.updatedAt,
+      targets,
+    };
   }
 
   get(targetId: string): TargetRefreshState | null {
@@ -193,6 +201,33 @@ export class TargetStateStore {
   }
 
   /**
+   * COK HEDEF, TEK OKUMA + TEK YAZMA.
+   *
+   * OLCULEN SEBEP: `start()` 6205 hedefin her biri icin `reconcile()`
+   * cagiriyordu; her cagri 5.2 MB'lik durum dosyasini yeniden OKUYOR,
+   * checksum'liyor, iki kez serilestiriyor, fsync'liyor ve rename ediyordu.
+   * Canli kosuda olculen bedel: START ile ilk hedef arasinda 548.8 saniye
+   * (14:56:27 -> 15:05:36). Node tek is parcacikli oldugu icin bu sure
+   * boyunca `/autopilot/status` da yanit veremiyor, kopru "donmus"
+   * gorunuyordu.
+   *
+   * ANLAM DEGISMEZ: ayni `reconcileInto`, ayni sirayla, ayni sonuc. Yalnizca
+   * dosya G/C sayisi 2N'den 2'ye iner.
+   */
+  reconcileMany(
+    targets: readonly MarketTarget[],
+  ): Map<string, TargetRefreshState> {
+    const artifact = this.read();
+    const result = new Map<string, TargetRefreshState>();
+    for (const target of targets) {
+      result.set(target.targetId, clone(this.reconcileInto(artifact, target)));
+    }
+    // Hic hedef yoksa dosyaya dokunma: bos bir kosu durumu yeniden yazmaz.
+    if (targets.length > 0) this.save(artifact);
+    return result;
+  }
+
+  /**
    * TUM DONDURULMUS KUMEYE KARSI UZLASTIRMA (hiyerarsi mutasyonu).
    *
    *   - snapshot'ta olan, ayni kimlik  -> tasinir (surum yeniden baglanir)
@@ -205,14 +240,21 @@ export class TargetStateStore {
   reconcileSnapshot(snapshot: MarketTargetSnapshot): SnapshotReconciliation {
     const artifact = this.read();
     const now = this.now().toISOString();
-    const result: SnapshotReconciliation = { fresh: 0, carried: 0, invalidated: 0, stale: 0, interrupted: 0 };
+    const result: SnapshotReconciliation = {
+      fresh: 0,
+      carried: 0,
+      invalidated: 0,
+      stale: 0,
+      interrupted: 0,
+    };
     const inSnapshot = new Set<string>();
     for (const target of snapshot.targets) {
       inSnapshot.add(target.targetId);
       const before = artifact.targets[target.targetId];
       const next = this.reconcileInto(artifact, target);
       if (!before) result.fresh += 1;
-      else if (next.status === 'INVALIDATED' && before.status !== 'INVALIDATED') result.invalidated += 1;
+      else if (next.status === 'INVALIDATED' && before.status !== 'INVALIDATED')
+        result.invalidated += 1;
       else {
         result.carried += 1;
         if (before.status === 'IN_PROGRESS') result.interrupted += 1;
@@ -277,7 +319,9 @@ export class TargetStateStore {
     const current = this.get(targetId);
     if (!current) throw new Error(`Cannot commit unknown target ${targetId}`);
     if (current.status === 'STALE' || current.status === 'INVALIDATED') {
-      throw new Error(`Cannot commit ${current.status} target ${targetId}; reconcile against the current snapshot first`);
+      throw new Error(
+        `Cannot commit ${current.status} target ${targetId}; reconcile against the current snapshot first`,
+      );
     }
 
     const boundaryDate = input.boundaryDate ?? current.previousBoundaryDate;
@@ -302,7 +346,8 @@ export class TargetStateStore {
       previousBoundaryDate: boundaryDate,
       seenListingIdsAtBoundary: boundaryIds,
       overlapAnchorIds: anchorIds,
-      lastSuccessfulPageBoundary: input.pageBoundary ?? current.lastSuccessfulPageBoundary,
+      lastSuccessfulPageBoundary:
+        input.pageBoundary ?? current.lastSuccessfulPageBoundary,
       lastBoundaryProof: input.proof ?? current.lastBoundaryProof,
       baselinePolicy: current.baselinePolicy ?? input.baselinePolicy ?? null,
       pagesVisitedLastRun: input.pagesVisited,
@@ -311,7 +356,10 @@ export class TargetStateStore {
     });
   }
 
-  private reconcileInto(artifact: TargetStateArtifact, target: MarketTarget): TargetRefreshState {
+  private reconcileInto(
+    artifact: TargetStateArtifact,
+    target: MarketTarget,
+  ): TargetRefreshState {
     const now = this.now().toISOString();
     const existing = artifact.targets[target.targetId];
     let next: TargetRefreshState;
@@ -342,7 +390,8 @@ export class TargetStateStore {
         updatedAt: now,
       };
       // STALE ama sinir hic kanitlanmamis bir hedef yeniden gorulurse taze sayilir.
-      if (existing.status === 'STALE' && !existing.lastSuccessfulRefreshAt) next.status = 'FRESH';
+      if (existing.status === 'STALE' && !existing.lastSuccessfulRefreshAt)
+        next.status = 'FRESH';
     }
     artifact.targets[target.targetId] = next;
     return next;

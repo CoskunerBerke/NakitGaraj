@@ -15,7 +15,7 @@ import { AtomicWeeklyMarketPublisher } from './artifact-publisher';
 import { WeeklyEvidenceStore, WeeklyRawObservation } from './evidence-store';
 import { buildMarketTargetSnapshot, MarketTarget, MarketTargetSnapshot } from './hierarchy-gate';
 import { TargetStateStore } from './target-state-store';
-import { WeeklyCheckpointPayload, WeeklyMarketSession, WeeklySessionOptions } from './weekly-session';
+import { DEFAULT_WEEKLY_PACE_MS, WeeklyCheckpointPayload, WeeklyMarketSession, WeeklySessionOptions } from './weekly-session';
 import { testTree } from './__fixtures__/tree';
 import { HierarchyNode, HierarchyTree } from '../../vehicle-hierarchy/hierarchy-tree';
 import { nodeIdFromPath } from '../../vehicle-hierarchy/category-path';
@@ -168,7 +168,7 @@ describe('incremental market refresh: per-target safe boundary', () => {
     expect(run.submitPageBatch(batch('many', 1, [['1105', '14 Eylül 2026'], ['1104', '14 Eylül 2026'], ['1103', '13 Eylül 2026']], true))).toMatchObject({ boundaryReached: false, newCount: 3 });
     run.nextDirective();
     expect(run.submitPageBatch(batch('many', 2, [['1102', '12 Eylül 2026'], ['1101', '12 Eylül 2026'], ['902', '11 Eylül 2026']], true))).toMatchObject({ boundaryReached: false, newCount: 2 });
-    expect(run.status().targets[0].boundaryReason).toContain('not yet passed');
+    expect(run.status({ detail: true }).targets![0].boundaryReason).toContain('not yet passed');
     run.nextDirective();
     const third = run.submitPageBatch(batch('many', 3, [['901', '11 Eylül 2026'], ['801', '10 Eylül 2026'], ['802', '10 Eylül 2026'], ['803', '9 Eylül 2026']], true));
     expect(third).toMatchObject({ boundaryReached: true, boundaryProof: 'ANCHOR_IDS', watermarkCommitted: true, newCount: 0 });
@@ -232,7 +232,7 @@ describe('incremental market refresh: per-target safe boundary', () => {
     expect(current.assignments['601']).toMatchObject({ status: 'AMBIGUOUS', nodeId: null });
     expect(current.pools[advanced.targetId]).toEqual(['602']);
     expect(current.pools[sline.targetId]).toEqual(['603']);
-    expect(run.status().targets.every((t) => t.watermark === 'ADVANCED')).toBe(true);
+    expect(run.status({ detail: true }).targets!.every((t) => t.watermark === 'ADVANCED')).toBe(true);
   });
 
   test('8) partial failure before the boundary holds the watermark and counts as a hold', () => {
@@ -244,7 +244,7 @@ describe('incremental market refresh: per-target safe boundary', () => {
     expect(run.submitPageBatch({ ...batch('partial', 3, [['502', '12 Eylül 2026']], true) })).toMatchObject({ targetFailed: true, failureCode: 'PARSE_ERROR', watermarkCommitted: false });
     expect(states().get(target().targetId)).toMatchObject({ status: 'INCOMPLETE', previousBoundaryDate: '2026-09-11', overlapAnchorIds: ['801', '802', '803', '804', '805'] });
     expect(run.status()).toMatchObject({ watermarkHolds: 1, targetsFailed: 1, state: 'INCOMPLETE' });
-    expect(run.status().targets[0].watermark).toBe('HELD');
+    expect(run.status({ detail: true }).targets![0].watermark).toBe('HELD');
   });
 
   test('10+11) unknown page format and the source not-found page both fail the target without advancing the watermark', () => {
@@ -282,8 +282,8 @@ describe('incremental market refresh: per-target safe boundary', () => {
     first.submitPageBatch(batch('crash', 1, [['401', '13 Eylül 2026']], true));
     expect(states().get(target().targetId)).toMatchObject({ status: 'IN_PROGRESS', previousBoundaryDate: '2026-09-11' });
     const resumed = WeeklyMarketSession.resume(options('crash'));
-    expect(resumed.nextDirective()).toMatchObject({ page: 2, delayMs: 2200 });
-    expect(resumed.status().targets[0].watermark).toBeNull();
+    expect(resumed.nextDirective()).toMatchObject({ page: 2, delayMs: DEFAULT_WEEKLY_PACE_MS });
+    expect(resumed.status({ detail: true }).targets![0].watermark).toBeNull();
     const done = resumed.submitPageBatch(batch('crash', 2, [['902', '11 Eylül 2026'], ['901', '11 Eylül 2026'], ['801', '10 Eylül 2026'], ['802', '10 Eylül 2026'], ['803', '9 Eylül 2026']], true));
     expect(done).toMatchObject({ boundaryReached: true, watermarkCommitted: true });
     expect(states().get(target().targetId)).toMatchObject({ status: 'COMPLETE', previousBoundaryDate: '2026-09-13', pagesVisitedLastRun: 2 });

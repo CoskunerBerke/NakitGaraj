@@ -67,7 +67,8 @@ const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '[::1]', '::1']);
  * Her uc nokta yalnizca oturumun destekledigi islemi cagirir; digerine 400 doner.
  */
 export interface BridgeSession {
-  status(): unknown;
+  /** `detail` yalnizca ayrinti ucundan gelir; yoklama HAFIF kalir. */
+  status(options?: { detail?: boolean }): unknown;
   nextDirective(): AutopilotDirective;
   pause(): void;
   stop(): void;
@@ -243,6 +244,22 @@ export class AutopilotBridge {
       return {
         status: 200,
         payload: session ? session.status() : { state: 'IDLE', runId: null },
+      };
+    }
+
+    /**
+     * AYRINTI UCU — panel bunu YOKLAMAZ.
+     *
+     * Tam hedef listesi 6205 hedefte ~1.8 MB'dir. 2 saniyelik yoklamanin
+     * tasiyacagi yuk degildir; isteyen acikca bu ucu cagirir.
+     */
+    if (ctx.method === 'GET' && ctx.pathname === '/autopilot/status/detail') {
+      const session = provider.current();
+      return {
+        status: 200,
+        payload: session
+          ? session.status({ detail: true })
+          : { state: 'IDLE', runId: null },
       };
     }
 

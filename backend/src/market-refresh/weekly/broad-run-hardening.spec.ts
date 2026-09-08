@@ -210,7 +210,7 @@ describe('BIR HEDEFIN HATASI KOSUYU BITIRMEZ', () => {
     const ids = allTargetIds();
     const session = WeeklyMarketSession.start(options('truth', ids));
     drive(session, 'truth', new Map([[ids[0], notFoundPage()]]));
-    const failed = session.status().targets.find((t) => t.targetId === ids[0]);
+    const failed = session.status({ detail: true }).targets!.find((t) => t.targetId === ids[0]);
     expect(failed?.status).toBe('INCOMPLETE');
     expect(session.summary().targetsCompleted).toBe(ids.length - 1);
   });

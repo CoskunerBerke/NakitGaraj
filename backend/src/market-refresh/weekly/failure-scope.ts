@@ -17,11 +17,27 @@
  * HELD kalir.
  */
 
-/** Kosuyu tumden durduran engeller: sonraki hedefte de ayni sonuc beklenir. */
+/**
+ * Kosuyu tumden durduran engeller: sonraki hedefte de ayni sonuc beklenir.
+ *
+ * ANTI-BOT ENGELLERI DE KURESELDIR. Canli 6205 kosusu (2026-09-08, 185 hedef
+ * sonra) Cloudflare duvarina carpti ve kayit "CAPTCHA / TARGET / retryable"
+ * olarak dusmustu: yani kosu durmus olsa bile KALICI kayit bunu hedefe ozgu
+ * gosteriyordu. Bir bot duvari acildiginda sonraki hedef de ayni duvari
+ * gorur; sirayi surdurmek kaynagi doverek durumu KOTULESTIRIR.
+ *
+ * `retryable` AYRI bir eksendir ve bu kodlar icin true KALIR: engel elle
+ * cozuldukten sonra ayni run-id ile RESUME hedefi yeniden kuyruga alir.
+ * "Otomatik yeniden deneme yok" kurali kosunun DURMASIYLA saglanir, hedefi
+ * kalici olarak dusurerek degil.
+ */
 const RUN_FATAL = new Set([
   'LOGIN_REQUIRED',
   'TWO_FACTOR_REQUIRED',
   'ACCESS_RESTRICTED',
+  'CAPTCHA',
+  'HTTP_403',
+  'HTTP_429',
 ]);
 
 /**
