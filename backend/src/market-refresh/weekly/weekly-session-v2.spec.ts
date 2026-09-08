@@ -241,7 +241,7 @@ describe('incremental market refresh: per-target safe boundary', () => {
     run.nextDirective();
     run.submitPageBatch(batch('partial', 1, [['501', '13 Eylül 2026']], true));
     run.nextDirective();
-    expect(() => run.submitPageBatch({ ...batch('partial', 3, [['502', '12 Eylül 2026']], true) })).toThrow('expected page 2');
+    expect(run.submitPageBatch({ ...batch('partial', 3, [['502', '12 Eylül 2026']], true) })).toMatchObject({ targetFailed: true, failureCode: 'PARSE_ERROR', watermarkCommitted: false });
     expect(states().get(target().targetId)).toMatchObject({ status: 'INCOMPLETE', previousBoundaryDate: '2026-09-11', overlapAnchorIds: ['801', '802', '803', '804', '805'] });
     expect(run.status()).toMatchObject({ watermarkHolds: 1, targetsFailed: 1, state: 'INCOMPLETE' });
     expect(run.status().targets[0].watermark).toBe('HELD');
@@ -253,14 +253,14 @@ describe('incremental market refresh: per-target safe boundary', () => {
     unknown.nextDirective();
     const bad = batch('unknown', 1, [], false);
     bad.rawHtml = unknownPage();
-    expect(() => unknown.submitPageBatch(bad)).toThrow('UNKNOWN_DATA_FORMAT');
+    expect(unknown.submitPageBatch(bad)).toMatchObject({ targetFailed: true, failureCode: 'UNKNOWN_DATA_FORMAT', watermarkCommitted: false });
     expect(states().get(target().targetId)).toMatchObject({ status: 'INCOMPLETE', previousBoundaryDate: '2026-09-11', lastFailure: expect.stringContaining('UNKNOWN_DATA_FORMAT') });
 
     const removed = start('removed');
     removed.nextDirective();
     const gone = batch('removed', 1, [], false);
     gone.rawHtml = notFoundPage();
-    expect(() => removed.submitPageBatch(gone)).toThrow('TARGET_NOT_FOUND');
+    expect(removed.submitPageBatch(gone)).toMatchObject({ targetFailed: true, failureCode: 'TARGET_NOT_FOUND', retryable: false, watermarkCommitted: false });
     expect(states().get(target().targetId)).toMatchObject({ status: 'INCOMPLETE', previousBoundaryDate: '2026-09-11', lastFailure: expect.stringContaining('TARGET_NOT_FOUND') });
   });
 
@@ -271,7 +271,7 @@ describe('incremental market refresh: per-target safe boundary', () => {
     // Ayni URL istendi, sayfa kendini ebeveyn kategori olarak tanitiyor.
     shorter.nodePath = target().categoryPath;
     shorter.pageUrl = buildIncrementalPageUrl(BASE, target().categoryPath, 1);
-    expect(() => run.submitPageBatch(shorter)).toThrow('REDIRECT_MISMATCH');
+    expect(run.submitPageBatch(shorter)).toMatchObject({ targetFailed: true, failureCode: 'REDIRECT_MISMATCH', watermarkCommitted: false });
     expect(states().get(target().targetId)).toMatchObject({ status: 'INCOMPLETE', previousBoundaryDate: null });
   });
 
@@ -297,7 +297,7 @@ describe('incremental market refresh: per-target safe boundary', () => {
     run.nextDirective();
     run.submitPageBatch(batch('cap', 1, [['301', '15 Eylül 2026']], true));
     run.nextDirective();
-    expect(() => run.submitPageBatch(batch('cap', 2, [['302', '14 Eylül 2026']], true))).toThrow('safe boundary not proven');
+    expect(run.submitPageBatch(batch('cap', 2, [['302', '14 Eylül 2026']], true))).toMatchObject({ targetFailed: true, watermarkCommitted: false });
     expect(states().get(target().targetId)).toMatchObject({ status: 'INCOMPLETE', previousBoundaryDate: '2026-09-11' });
   });
 
@@ -390,7 +390,7 @@ describe('hierarchy mutation and target state', () => {
     });
     const run = start('publish-fail', { publisher });
     run.nextDirective();
-    expect(() => run.submitPageBatch(batch('publish-fail', 1, [['111', '12 Eylül 2026'], ['902', '11 Eylül 2026'], ['901', '11 Eylül 2026'], ['801', '10 Eylül 2026'], ['802', '10 Eylül 2026'], ['803', '9 Eylül 2026']], true))).toThrow('VALIDATION_FAIL');
+    expect(run.submitPageBatch(batch('publish-fail', 1, [['111', '12 Eylül 2026'], ['902', '11 Eylül 2026'], ['901', '11 Eylül 2026'], ['801', '10 Eylül 2026'], ['802', '10 Eylül 2026'], ['803', '9 Eylül 2026']], true))).toMatchObject({ targetFailed: true, failureCode: 'VALIDATION_FAIL', watermarkCommitted: false });
     expect(fs.readFileSync(path.join(dir, 'published', 'current.json'), 'utf-8')).toBe(before);
     expect(states().get(target().targetId)).toMatchObject({ status: 'INCOMPLETE', previousBoundaryDate: '2026-09-11', seenListingIdsAtBoundary: ['901', '902'] });
   });

@@ -234,7 +234,7 @@ describe('weekly exact target session', () => {
     );
     refresh.nextDirective();
     const page2 = batch('failure', 2, [['103', 'bilinmeyen']], true);
-    expect(() => refresh.submitPageBatch(page2)).toThrow('UNKNOWN_DATA_FORMAT');
+    expect(refresh.submitPageBatch(page2)).toMatchObject({ targetFailed: true, failureCode: 'UNKNOWN_DATA_FORMAT', watermarkCommitted: false });
     expect(states.get(target().targetId)).toMatchObject({
       status: 'INCOMPLETE',
       previousBoundaryDate: '2026-09-04',
@@ -312,11 +312,11 @@ describe('weekly exact target session', () => {
     redirect.nextDirective();
     const wrong = batch('redirect', 1, [['1', '11 Eylül 2026']], false);
     wrong.pageUrl = 'https://www.sahibinden.com/audi-a3-a3-sedan';
-    expect(() => redirect.submitPageBatch(wrong)).toThrow('REDIRECT_MISMATCH');
+    expect(redirect.submitPageBatch(wrong)).toMatchObject({ targetFailed: true, failureCode: 'REDIRECT_MISMATCH', watermarkCommitted: false });
 
     const ordering = session('ordering');
     ordering.nextDirective();
-    expect(() =>
+    expect(
       ordering.submitPageBatch(
         batch(
           'ordering',
@@ -328,7 +328,7 @@ describe('weekly exact target session', () => {
           false,
         ),
       ),
-    ).toThrow('not newest-first');
+    ).toMatchObject({ targetFailed: true, failureCode: 'VALIDATION_FAIL', watermarkCommitted: false });
   });
 
   test('staged validation failure leaves the prior watermark unchanged', () => {
@@ -366,7 +366,7 @@ describe('weekly exact target session', () => {
       now: () => new Date('2026-09-11T12:00:00Z'),
     });
     refresh.nextDirective();
-    expect(() =>
+    expect(
       refresh.submitPageBatch(
         batch(
           'validation-fail',
@@ -378,7 +378,7 @@ describe('weekly exact target session', () => {
           false,
         ),
       ),
-    ).toThrow('VALIDATION_FAIL');
+    ).toMatchObject({ targetFailed: true, failureCode: 'VALIDATION_FAIL', watermarkCommitted: false });
     expect(states.get(target().targetId)).toMatchObject({
       status: 'INCOMPLETE',
       previousBoundaryDate: '2026-09-04',
@@ -403,7 +403,7 @@ describe('weekly exact target session', () => {
     refresh.nextDirective();
     const blocked = batch(`blocked-${name}`, 1, [], false);
     blocked.rawHtml = html;
-    expect(() => refresh.submitPageBatch(blocked)).toThrow(failure);
+    expect(() => refresh.submitPageBatch(blocked)).toThrow(failure); // engel KURESEL: kosu durur
     expect(
       new TargetStateStore(path.join(dir, 'states.json')).get(
         target().targetId,

@@ -20,6 +20,11 @@ import {
   PageBatch,
 } from '../autopilot/autopilot-contracts';
 import { AtomicChecksummedFile } from '../checkpoint-store';
+import {
+  classifyFailure,
+  FailureScope,
+  TargetFailureDetail,
+} from './failure-scope';
 import { parseTurkishNumber, parseYear } from '../extraction';
 import {
   buildIncrementalPageUrl,
@@ -76,6 +81,8 @@ interface WeeklyWorkItem {
   newestDate: string | null;
   lastOldestDate: string | null;
   failure: string | null;
+  /** Makine-okur basarisizlik kaydi — teshis ve yeniden deneme icin. */
+  failureDetail: TargetFailureDetail | null;
   boundaryReached: boolean;
   boundaryProof: BoundaryProof | null;
   boundaryReason: string | null;
@@ -134,6 +141,28 @@ export interface WeeklySessionOptions {
   now?: () => Date;
 }
 
+export interface WeeklyRunSummary {
+  runId: string;
+  hierarchyVersion: string;
+  state: AutopilotState;
+  targetsSelected: number;
+  targetsAttempted: number;
+  targetsCompleted: number;
+  targetsPending: number;
+  targetsFailed: number;
+  targetsBlocked: number;
+  pagesRead: number;
+  newListings: number;
+  duplicatesSuppressed: number;
+  exact: number;
+  ambiguousExcluded: number;
+  unresolvedExcluded: number;
+  watermarksAdvanced: number;
+  watermarksHeld: number;
+  failedTargetIds: string[];
+  failures: TargetFailureDetail[];
+}
+
 export interface WeeklyPageResult {
   accepted: number;
   duplicates: number;
@@ -146,6 +175,17 @@ export interface WeeklyPageResult {
   boundaryProof: BoundaryProof | null;
   boundaryReason: string;
   watermarkCommitted: boolean;
+  /**
+   * Bu hedef basarisiz oldu ama KOSU devam ediyor.
+   *
+   * Sonucu HTTP hatasi yerine normal yanit olarak dondurmek, uzantinin
+   * `next` isteyip SONRAKI hedefe gecmesini saglar. Basarisizlik gizlenmez;
+   * `targetComplete` false kalir ve filigran ilerlemez.
+   */
+  targetFailed?: boolean;
+  failureCode?: string;
+  failureScope?: FailureScope;
+  retryable?: boolean;
 }
 
 export interface WeeklyTargetStatus {
@@ -248,7 +288,9 @@ export class WeeklyMarketSession {
       this.knownListingIds.add(id);
     this.policy = {
       ...DEFAULT_BOUNDARY_POLICY,
-      ...(opts.overlapDays !== undefined ? { overlapDays: opts.overlapDays } : {}),
+      ...(opts.overlapDays !== undefined
+        ? { overlapDays: opts.overlapDays }
+        : {}),
       ...(opts.maxPagesPerTarget !== undefined
         ? { maxPagesPerTarget: opts.maxPagesPerTarget }
         : {}),
@@ -259,8 +301,14 @@ export class WeeklyMarketSession {
     if (!Number.isInteger(this.anchorSize) || this.anchorSize < 1) {
       throw new Error('Weekly anchorSize must be a positive integer');
     }
-    this.paceMs = Math.max(1000, Math.floor(opts.paceMs ?? DEFAULT_WEEKLY_PACE_MS));
-    this.jitter = Math.min(0.9, Math.max(0, opts.jitter ?? DEFAULT_WEEKLY_JITTER));
+    this.paceMs = Math.max(
+      1000,
+      Math.floor(opts.paceMs ?? DEFAULT_WEEKLY_PACE_MS),
+    );
+    this.jitter = Math.min(
+      0.9,
+      Math.max(0, opts.jitter ?? DEFAULT_WEEKLY_JITTER),
+    );
   }
 
   static start(opts: WeeklySessionOptions): WeeklyMarketSession {
@@ -356,6 +404,25 @@ export class WeeklyMarketSession {
         item.watermark = 'ADVANCED';
         item.finishedAt = state.lastSuccessfulRefreshAt;
       }
+    }
+    /**
+     * BASARISIZ HEDEFLER YENIDEN DENENEBILIR OLMALI.
+     *
+     * Devam eden kosuda INCOMPLETE kalan bir hedef bir daha hic servis
+     * edilmiyordu (kuyruk yalnizca PENDING/IN_PROGRESS servis eder), yani
+     * gecici bir hata hedefi kalici olarak dusuruyordu.
+     *
+     * Yeniden denemenin ANLAMSIZ oldugu hatalar disarida birakilir:
+     * "bulunamadi" ve "yanlis sayfaya yonlendirildi" kaynak yapisinin
+     * degistigini gosterir; tekrar istemek ayni sonucu verir ve kaynaga
+     * bosuna yuk olur. Onlar INCOMPLETE kalir ve raporda gorunur.
+     */
+    for (const item of session.items) {
+      if (item.status !== 'INCOMPLETE') continue;
+      if (item.failureDetail && !item.failureDetail.retryable) continue;
+      item.status = 'PENDING';
+      item.watermark = null;
+      item.finishedAt = null;
     }
     session.finishIfDone();
     session.persist();
@@ -606,7 +673,10 @@ export class WeeklyMarketSession {
           proof: decision.proof,
           baselinePolicy: item.previousBoundaryDate
             ? null
-            : { pages: this.policy.initialBaselinePages, days: this.policy.initialBaselineDays },
+            : {
+                pages: this.policy.initialBaselinePages,
+                days: this.policy.initialBaselineDays,
+              },
           pagesVisited: item.pagesVisited,
           newListings: item.newListings,
           completedAt,
@@ -632,10 +702,43 @@ export class WeeklyMarketSession {
         watermarkCommitted,
       };
     } catch (error: any) {
-      this.failItem(item, error?.message || String(error));
-      throw error instanceof AutopilotProtocolError
-        ? error
-        : new AutopilotProtocolError(error?.message || String(error));
+      const message = error?.message || String(error);
+      const scope = this.failItem(item, message, 'PAGE_SUBMIT');
+
+      /**
+       * KURESEL engel: sonraki hedef de ayni duvara carpar, kosu durur ve
+       * hata cagrana YUKSELIR (kopru HTTP hatasi dondurur).
+       */
+      if (scope === 'RUN' || error instanceof AutopilotProtocolError) {
+        throw error instanceof AutopilotProtocolError
+          ? error
+          : new AutopilotProtocolError(message);
+      }
+
+      /**
+       * HEDEFE OZEL engel: yalnizca BU hedef duser. Hata firlatmak koprunun
+       * HTTP hatasi dondurmesine ve kosunun bitmesine yol acardi; bunun
+       * yerine dogru sonuc dondurulur, uzanti `next` isteyip SONRAKI hedefe
+       * gecer. Basarisizlik gizlenmez: `targetComplete` false, filigran HELD.
+       */
+      const verdict = classifyFailure(message);
+      return {
+        accepted: 0,
+        duplicates: 0,
+        newCount: 0,
+        exact: 0,
+        ambiguous: 0,
+        unresolved: 0,
+        targetComplete: false,
+        boundaryReached: false,
+        boundaryProof: null,
+        boundaryReason: verdict.code,
+        watermarkCommitted: false,
+        targetFailed: true,
+        failureCode: verdict.code,
+        failureScope: verdict.scope,
+        retryable: verdict.retryable,
+      };
     }
   }
 
@@ -712,34 +815,62 @@ export class WeeklyMarketSession {
       startedAt: this.createdAt,
       updatedAt: this.updatedAt,
       targetsTotal: this.items.length,
-      targetsUnchanged: complete.filter((item) => item.newListings === 0).length,
+      targetsUnchanged: complete.filter((item) => item.newListings === 0)
+        .length,
       targetsChanged: complete.filter((item) => item.newListings > 0).length,
       targetsFailed: failed.length,
-      targetsFresh: this.items.filter((item) => !item.previousBoundaryDate).length,
+      targetsFresh: this.items.filter((item) => !item.previousBoundaryDate)
+        .length,
       currentTargetId: current?.target.targetId ?? null,
       currentTargetExactPath: current?.target.fullPath ?? null,
       currentBoundary: current
-        ? current.boundaryReason ??
+        ? (current.boundaryReason ??
           (current.previousBoundaryDate
             ? `previous boundary ${current.previousBoundaryDate} (${current.previousBoundaryIds.length} id(s), ${current.previousAnchorIds.length} anchor(s))`
             : `fresh target: baseline ${this.policy.initialBaselinePages} page(s)` +
-              (this.policy.initialBaselineDays ? ` / ${this.policy.initialBaselineDays} day(s)` : ''))
+              (this.policy.initialBaselineDays
+                ? ` / ${this.policy.initialBaselineDays} day(s)`
+                : '')))
         : null,
-      pagesRequested: this.items.reduce((sum, item) => sum + item.pagesVisited, 0),
+      pagesRequested: this.items.reduce(
+        (sum, item) => sum + item.pagesVisited,
+        0,
+      ),
       pagesAvoidedByBoundary: complete
         .filter((item) => item.previousBoundaryDate)
-        .reduce((sum, item) => sum + Math.max(0, this.policy.maxPagesPerTarget - item.pagesVisited), 0),
+        .reduce(
+          (sum, item) =>
+            sum +
+            Math.max(0, this.policy.maxPagesPerTarget - item.pagesVisited),
+          0,
+        ),
       duplicateSightings: this.opts.evidence.stats().duplicates,
       exactAssignments: complete.reduce((sum, item) => sum + item.exact, 0),
-      ambiguousAssignments: complete.reduce((sum, item) => sum + item.ambiguous, 0),
-      unresolvedAssignments: complete.reduce((sum, item) => sum + item.unresolved, 0),
-      watermarkHolds: this.items.filter((item) => item.watermark === 'HELD').length,
-      watermarkAdvances: this.items.filter((item) => item.watermark === 'ADVANCED').length,
+      ambiguousAssignments: complete.reduce(
+        (sum, item) => sum + item.ambiguous,
+        0,
+      ),
+      unresolvedAssignments: complete.reduce(
+        (sum, item) => sum + item.unresolved,
+        0,
+      ),
+      watermarkHolds: this.items.filter((item) => item.watermark === 'HELD')
+        .length,
+      watermarkAdvances: this.items.filter(
+        (item) => item.watermark === 'ADVANCED',
+      ).length,
       boundaryPolicy: { ...this.policy },
       paceMs: this.paceMs,
       estimatedRemainingMs:
-        avgTargetMs === null ? (pending.length === 0 ? 0 : null) : Math.round(avgTargetMs * pending.length),
-      totalWallMs: Math.max(0, Date.parse(this.updatedAt) - Date.parse(this.createdAt)),
+        avgTargetMs === null
+          ? pending.length === 0
+            ? 0
+            : null
+          : Math.round(avgTargetMs * pending.length),
+      totalWallMs: Math.max(
+        0,
+        Date.parse(this.updatedAt) - Date.parse(this.createdAt),
+      ),
       targets: this.items.map((item) => ({
         targetId: item.target.targetId,
         fullPath: item.target.fullPath,
@@ -777,7 +908,10 @@ export class WeeklyMarketSession {
     state: TargetRefreshState,
   ): WeeklyWorkItem {
     // INVALIDATED / FRESH / STALE: onceki sinir KULLANILMAZ (miras yok).
-    const usable = state.status === 'COMPLETE' || state.status === 'INCOMPLETE' || state.status === 'PENDING';
+    const usable =
+      state.status === 'COMPLETE' ||
+      state.status === 'INCOMPLETE' ||
+      state.status === 'PENDING';
     return {
       target,
       status: 'PENDING',
@@ -792,6 +926,7 @@ export class WeeklyMarketSession {
       newestDate: null,
       lastOldestDate: null,
       failure: null,
+      failureDetail: null,
       boundaryReached: false,
       boundaryProof: null,
       boundaryReason: null,
@@ -814,14 +949,69 @@ export class WeeklyMarketSession {
     return item;
   }
 
+  /**
+   * GENIS KOSU OZETI — DOGRUYU SOYLER.
+   *
+   * Basarisiz hedefi olan bir kosu kendini temiz basari ILAN ETMEZ; ama
+   * digerlerinin ilerlemesini de silmez. Cagiran taraf `failedTargetIds` ile
+   * tam olarak neyi yeniden deneyecegini bilir.
+   */
+  summary(): WeeklyRunSummary {
+    const by = (status: WeeklyItemStatus) =>
+      this.items.filter((item) => item.status === status);
+    const failed = by('INCOMPLETE');
+    const complete = by('COMPLETE');
+    const blocked = failed.filter(
+      (item) => item.failureDetail?.scope === 'RUN',
+    );
+    return {
+      runId: this.opts.runId,
+      hierarchyVersion: this.opts.snapshot.hierarchyVersion,
+      state: this.state,
+      targetsSelected: this.items.length,
+      targetsAttempted: this.items.filter((item) => item.startedAt !== null)
+        .length,
+      targetsCompleted: complete.length,
+      targetsPending: by('PENDING').length + by('IN_PROGRESS').length,
+      targetsFailed: failed.length,
+      targetsBlocked: blocked.length,
+      pagesRead: this.items.reduce((sum, item) => sum + item.pagesVisited, 0),
+      newListings: this.items.reduce((sum, item) => sum + item.newListings, 0),
+      duplicatesSuppressed: this.items.reduce(
+        (sum, item) => sum + item.duplicates,
+        0,
+      ),
+      exact: this.items.reduce((sum, item) => sum + item.exact, 0),
+      ambiguousExcluded: this.items.reduce(
+        (sum, item) => sum + item.ambiguous,
+        0,
+      ),
+      unresolvedExcluded: this.items.reduce(
+        (sum, item) => sum + item.unresolved,
+        0,
+      ),
+      watermarksAdvanced: this.items.filter(
+        (item) => item.watermark === 'ADVANCED',
+      ).length,
+      watermarksHeld: this.items.filter((item) => item.watermark === 'HELD')
+        .length,
+      failedTargetIds: failed.map((item) => item.target.targetId),
+      failures: failed
+        .map((item) => item.failureDetail)
+        .filter((detail): detail is TargetFailureDetail => detail !== null),
+    };
+  }
+
   private nextDelay(): number {
     const spread = (this.random() * 2 - 1) * this.jitter;
     return Math.max(1000, Math.round(this.paceMs * (1 + spread)));
   }
 
   private validateBatch(item: WeeklyWorkItem, batch: PageBatch): void {
-    if (batch.runId !== this.opts.runId)
-      throw new Error(`runId mismatch ${batch.runId}`);
+    if (batch.runId !== this.opts.runId) {
+      // Protokol hatasi (yanlis kosuya gonderim): hedefe yazilmaz, YUKSELIR.
+      throw new AutopilotProtocolError(`runId mismatch ${batch.runId}`);
+    }
     if (batch.page !== item.nextPage) {
       throw new Error(
         `PARSE_ERROR expected page ${item.nextPage}, received ${batch.page}`,
@@ -871,29 +1061,80 @@ export class WeeklyMarketSession {
     }
   }
 
-  private failItem(item: WeeklyWorkItem, failure: string): void {
+  /**
+   * Bir hedefi basarisiz isaretler.
+   *
+   * KOSU DURUMU BURADA KAPATILMAZ. Onceden `state = 'INCOMPLETE'` yaziliyordu
+   * ve `nextDirective` 'RUNNING' degilse HALT dondugu icin TEK hata butun
+   * kuyrugu kapatiyordu. Artik kosu durumu yalnizca yapilacak is kalmadiginda
+   * (ya da engel KURESEL oldugunda) yerlesir.
+   *
+   * Hicbir kapsam basarisiz hedefi COMPLETE yapmaz; filigran HELD kalir.
+   */
+  private failItem(
+    item: WeeklyWorkItem,
+    failure: string,
+    stage: TargetFailureDetail['stage'] = 'PAGE_SUBMIT',
+  ): FailureScope {
+    const verdict = classifyFailure(failure);
     item.status = 'INCOMPLETE';
     item.failure = failure;
     item.watermark = 'HELD';
     item.finishedAt = this.now().toISOString();
+    item.failureDetail = {
+      runId: this.opts.runId,
+      targetId: item.target.targetId,
+      exactPath: item.target.pathSegments.join(' / '),
+      hierarchyVersion: this.opts.snapshot.hierarchyVersion,
+      ordinal: this.items.indexOf(item),
+      status: 'INCOMPLETE',
+      stage,
+      code: verdict.code,
+      scope: verdict.scope,
+      retryable: verdict.retryable,
+      message: failure.slice(0, 500),
+      at: item.finishedAt,
+      pagesRead: item.pagesVisited,
+      rawEvidenceWritten: item.pagesVisited > 0,
+      stagedObservations: item.newListings,
+      watermarkAdvanced: false,
+    };
     this.lastError = failure;
-    this.state = 'INCOMPLETE';
     this.opts.states.fail(
       item.target.targetId,
       failure,
       item.pagesVisited,
       item.newListings,
     );
+    if (verdict.scope === 'RUN') this.state = 'INCOMPLETE';
+    else this.settleIfNoWorkLeft();
     this.persist();
+    return verdict.scope;
   }
 
-  private finishIfDone(): void {
+  /**
+   * Kuyrukta is KALMADIYSA kosu durumunu yerlestirir.
+   *
+   * Eskiden her tamamlamada cagriliyor ve "herhangi bir item INCOMPLETE ise
+   * kosu INCOMPLETE" diyordu; bu, bekleyen hedefler dururken kuyrugu
+   * kapatiyordu. Artik once "yapilacak is var mi" sorulur.
+   */
+  private settleIfNoWorkLeft(): void {
+    const pending = this.items.some(
+      (item) => item.status === 'PENDING' || item.status === 'IN_PROGRESS',
+    );
+    if (pending) return;
     if (this.items.every((item) => item.status === 'COMPLETE')) {
       this.state = 'COMPLETE';
       this.lastError = null;
-    } else if (this.items.some((item) => item.status === 'INCOMPLETE')) {
+    } else {
       this.state = 'INCOMPLETE';
     }
+  }
+
+  /** Geriye donuk ad: yerlesme karari tek yerde (`settleIfNoWorkLeft`). */
+  private finishIfDone(): void {
+    this.settleIfNoWorkLeft();
   }
 
   private persist(): void {
