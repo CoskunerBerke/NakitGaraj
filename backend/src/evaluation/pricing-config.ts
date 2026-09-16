@@ -149,6 +149,32 @@ export const PRICING_LIMITS = {
   defaultAnnualDepreciation: 0.08,
   annualDepreciationRange: [0.02, 0.18] as [number, number],
 
+  /**
+   * YIL NORMALIZASYONU: TEK ORAN DEGIL, HAVUZUN KENDI EGRISI.
+   *
+   * OLCULEN SORUN: `normalizeToYear` faktoru sabit [0.5, 2.0] araligina
+   * kirpiyordu. Ogrenilen oran %13,7 olan bir havuzda 2020 ilanini 2006'ya
+   * indirgemek icin gereken faktor 0,166'dir; kirpma onu 0,500'e cekiyor,
+   * yani fiyati 3,02 KATINA sisiriyordu. Kirpma ~9 yildan buyuk her yil
+   * farkinda devreye giriyordu.
+   *
+   * COZUM: yil farki buyudukce genisleyen, orana DAYALI bir sinir. Gercek
+   * bir yillik oran hicbir zaman `annualDepreciationRange` ust sinirini
+   * asamaz; sinir bu ustten yil farkina gore turetilir. Sabit 0,5 tabani
+   * kaldirilir.
+   */
+  yearBoundMaxAnnualRate: 0.18,
+
+  /**
+   * Gozlenen yil araliginin DISINA cikildiginda orana bu carpan uygulanir.
+   * Km tarafindaki `kmExtrapolationDamping` ile ayni gerekce: veri disinda
+   * olculen egim tasinamaz. Aralik ICINDE davranis degismez.
+   */
+  yearExtrapolationDamping: 0.6,
+
+  /** Bir yilin kendi medyaninin egriye girmesi icin gereken ilan sayisi. */
+  yearCurveMinListings: 3,
+
   /** Km duzeltmesi 10.000 km basina oran araligi */
   kmDecayRange: [0.006, 0.030] as [number, number],
   defaultKmDecayPer10k: 0.015,

@@ -373,12 +373,96 @@ export class EmsalMatcherService {
     };
   }
 
-  /** Emsali hedef yila indirger. */
-  private normalizeToYear(price: number, listingYear: number, targetYear: number, rate: number): number {
+  /**
+   * Havuzun KENDI yil egrisi: yil -> log(medyan fiyat).
+   *
+   * Tek bir ussel oran, gozlem araliginin uzagina tasindiginda bozulur:
+   * gercek deger kaybi ilk yillarda sert, sonra yavaslar. Yeterli ilani olan
+   * her yil icin gercek medyan KANITTIR; oran yalnizca bosluklarda ve aralik
+   * disinda kullanilir.
+   */
+  private buildYearCurve(rows: RawCandidate[]): Map<number, number> {
+    const byYear = new Map<number, number[]>();
+    for (const r of rows) {
+      if (r.price <= 0 || !r.year) continue;
+      if (!byYear.has(r.year)) byYear.set(r.year, []);
+      byYear.get(r.year)!.push(r.price);
+    }
+    const curve = new Map<number, number>();
+    for (const [year, prices] of byYear) {
+      if (prices.length < PRICING_LIMITS.yearCurveMinListings) continue;
+      const sorted = [...prices].sort((a, b) => a - b);
+      const median = sorted[Math.floor(sorted.length / 2)];
+      if (median > 0) curve.set(year, Math.log(median));
+    }
+    return curve;
+  }
+
+  /** Egriden bir yilin log-fiyati: gozlem, interpolasyon ya da sonumlu uzatma. */
+  private logPriceAtYear(
+    year: number,
+    curve: Map<number, number>,
+    rate: number,
+  ): number | null {
+    const observed = curve.get(year);
+    if (observed !== undefined) return observed;
+    const years = [...curve.keys()].sort((a, b) => a - b);
+    if (years.length === 0) return null;
+    const lo = years[0];
+    const hi = years[years.length - 1];
+    if (year < lo || year > hi) {
+      // Aralik DISI: olculen egim tasinmaz, sonumlenerek uygulanir.
+      const edge = year < lo ? lo : hi;
+      return (
+        curve.get(edge)! +
+        Math.log(1 + rate) *
+          (year - edge) *
+          PRICING_LIMITS.yearExtrapolationDamping
+      );
+    }
+    // Aralik ICI bosluk: komsu gozlemler arasinda log-uzayda interpolasyon.
+    let before = lo;
+    let after = hi;
+    for (const candidate of years) {
+      if (candidate <= year) before = candidate;
+      if (candidate >= year) {
+        after = candidate;
+        break;
+      }
+    }
+    if (before === after) return curve.get(before)!;
+    const t = (year - before) / (after - before);
+    return curve.get(before)! * (1 - t) + curve.get(after)! * t;
+  }
+
+  /**
+   * Emsali hedef yila indirger.
+   *
+   * SERT [0,5 - 2,0] KIRPMASI KALDIRILDI. Olculen: ogrenilen oranin %13,7
+   * oldugu bir havuzda 2020 ilanini 2006'ya indirgemek icin gereken faktor
+   * 0,166 iken kirpma onu 0,500'e cekiyor ve emsali 3,02 KATINA sisiriyordu;
+   * ~9 yildan buyuk her yil farkinda ayni sey oluyordu. Sinir artik yil
+   * farkina gore, mumkun olan EN SERT yillik orandan turetilir.
+   */
+  private normalizeToYear(
+    price: number,
+    listingYear: number,
+    targetYear: number,
+    rate: number,
+    curve?: Map<number, number>,
+  ): number {
     const diff = targetYear - listingYear;
     if (diff === 0) return price;
-    const factor = Math.pow(1 + rate, diff);
-    return Math.max(1, Math.round(price * clamp(factor, 0.5, 2.0)));
+
+    let factor = Math.pow(1 + rate, diff);
+    if (curve && curve.size > 0) {
+      const from = this.logPriceAtYear(listingYear, curve, rate);
+      const to = this.logPriceAtYear(targetYear, curve, rate);
+      if (from !== null && to !== null) factor = Math.exp(to - from);
+    }
+
+    const bound = Math.pow(1 + PRICING_LIMITS.yearBoundMaxAnnualRate, Math.abs(diff));
+    return Math.max(1, Math.round(price * clamp(factor, 1 / bound, bound)));
   }
 
   private toCleanListing(
@@ -890,6 +974,12 @@ export class EmsalMatcherService {
 
     const { rate: annualRate, source: yearAdjustmentSource } =
       this.learnAnnualDepreciation(candidates);
+    /**
+     * Yil egrisi, ORANLA AYNI aday kumesinden kurulur; boylece normalizasyon
+     * havuzun gercek yil profiline oturur ve tek bir ussel oran uzak yillara
+     * tasinmaz.
+     */
+    const yearCurve = this.buildYearCurve(candidates);
 
     const foldedParamTrim = foldTurkish(paramTrim);
 
@@ -1048,6 +1138,7 @@ export class EmsalMatcherService {
           targetKm,
           trimMatchedCount,
           annualRate,
+          yearCurve,
           yearAdjustmentSource,
           duplicateCount,
           damagedCount,
@@ -1077,6 +1168,7 @@ export class EmsalMatcherService {
         targetKm,
         trimMatchedCount: level3Snapshot.trimMatchedCount,
         annualRate,
+        yearCurve,
         yearAdjustmentSource,
         duplicateCount,
         damagedCount,
@@ -1156,6 +1248,8 @@ export class EmsalMatcherService {
     targetKm: number;
     trimMatchedCount: number;
     annualRate: number;
+    /** Havuzun kendi yil -> log(medyan) egrisi (bkz. buildYearCurve). */
+    yearCurve?: Map<number, number>;
     yearAdjustmentSource: string;
     duplicateCount: number;
     damagedCount: number;
@@ -1163,7 +1257,7 @@ export class EmsalMatcherService {
   }): EmsalMatchResult {
     const {
       level, make, model, paramEngine, paramTrim, paramFuel, paramBody, year, selected,
-      bodyEvidence, targetKm, trimMatchedCount, annualRate, yearAdjustmentSource,
+      bodyEvidence, targetKm, trimMatchedCount, annualRate, yearCurve, yearAdjustmentSource,
       duplicateCount, damagedCount,
     } = args;
 
@@ -1208,7 +1302,7 @@ export class EmsalMatcherService {
 
       const normalizedPrice = singleComparable
         ? r.price
-        : this.normalizeToYear(r.price, r.year, year, annualRate);
+        : this.normalizeToYear(r.price, r.year, year, annualRate, yearCurve);
 
       const fresh = this.freshnessWeight(r.scrapedAt);
       freshnessSum += fresh;
