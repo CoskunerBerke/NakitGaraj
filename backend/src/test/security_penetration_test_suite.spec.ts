@@ -4,9 +4,41 @@ import request from 'supertest';
 import helmet from 'helmet';
 import * as path from 'path';
 import * as fs from 'fs';
+import { execSync } from 'child_process';
 import { AppModule } from '../app.module';
 import { GlobalHttpExceptionFilter } from '../common/filters/http-exception.filter';
 import { PrismaService } from '../prisma.service';
+
+/**
+ * The suite asserts against a known-good relational shape: a manufacturer that
+ * owns a model, plus a second manufacturer/model pair to forge cross-brand
+ * references with. Idempotent, so the throwaway DB can be reused between runs.
+ */
+async function seedSecurityFixtures(prisma: PrismaService) {
+  const seeds: Array<[string, string]> = [
+    ['BMW', '3 Serisi'],
+    ['Mercedes-Benz', 'C Serisi'],
+  ];
+
+  for (const [manufacturerName, modelName] of seeds) {
+    const manufacturer = await prisma.manufacturer.upsert({
+      where: { name: manufacturerName },
+      update: {},
+      create: { name: manufacturerName },
+    });
+
+    await prisma.model.upsert({
+      where: {
+        manufacturerId_name: {
+          manufacturerId: manufacturer.id,
+          name: modelName,
+        },
+      },
+      update: {},
+      create: { name: modelName, manufacturerId: manufacturer.id },
+    });
+  }
+}
 
 describe('NakitGaraj Comprehensive Hardened Security Penetration Test Suite', () => {
   let app: INestApplication;
@@ -21,6 +53,15 @@ describe('NakitGaraj Comprehensive Hardened Security Penetration Test Suite', ()
     if (process.env.DATABASE_URL.includes('dev.db') && !process.env.DATABASE_URL.includes('test_security.db')) {
       throw new Error('SECURITY VIOLATION: Test suite attempted to run against dev.db instead of test_security.db!');
     }
+
+    // The isolated DB is a throwaway artifact and is empty on a fresh checkout.
+    // Bring it up to the committed schema before the app boots, otherwise every
+    // request below fails with a missing-table 500 instead of the status it asserts.
+    execSync('npx prisma migrate deploy', {
+      cwd: path.resolve(__dirname, '../..'),
+      env: { ...process.env, DATABASE_URL: `file:${testDbPath}` },
+      stdio: 'ignore',
+    });
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
@@ -42,7 +83,9 @@ describe('NakitGaraj Comprehensive Hardened Security Penetration Test Suite', ()
 
     await app.init();
     prisma = app.get<PrismaService>(PrismaService);
-  });
+
+    await seedSecurityFixtures(prisma);
+  }, 120_000);
 
   afterAll(async () => {
     if (app) {

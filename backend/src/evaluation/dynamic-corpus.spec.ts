@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import * as cheerio from 'cheerio';
 import { PrismaClient } from '@prisma/client';
 import { VehicleService } from '../vehicle/vehicle.service';
 import { EvaluationService } from './evaluation.service';
@@ -272,8 +273,25 @@ describe('Dinamik korpus (yeni marka/model güvenliği)', () => {
 
       const missing: string[] = [];
       for (const f of folders) {
-        const hasHtml = fs.readdirSync(path.join(ROOT, f)).some((n) => n.toLowerCase().endsWith('.html'));
-        if (hasHtml && !represented.has(f)) missing.push(f);
+        if (represented.has(f)) continue;
+
+        const htmlFiles = fs
+          .readdirSync(path.join(ROOT, f))
+          .filter((n) => n.toLowerCase().endsWith('.html'));
+        if (htmlFiles.length === 0) continue;
+
+        // Bir marka Sahibinden taksonomisinde var olup hic ilani olmayabilir;
+        // kaydedilen sayfa o zaman gercek bir "ilan bulunamadi" sayfasidir ve
+        // ice aktarilacak hicbir sey icermez. Korpus bosluguna kanit, ancak
+        // gercekten ilan satiri ureten bir klasordur. Secici, ice aktarimla
+        // ayni olmali (rebuild_raw_listings_v3.ts -> tr[data-id]).
+        const yieldsListings = htmlFiles.some(
+          (n) =>
+            cheerio.load(fs.readFileSync(path.join(ROOT, f, n), 'utf-8'))(
+              'tr[data-id]',
+            ).length > 0,
+        );
+        if (yieldsListings) missing.push(f);
       }
       // Sabit bir klasor sayisi BEKLENMEZ; bugun 60, yarin 75 olabilir.
       expect(missing).toEqual([]);

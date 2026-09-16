@@ -51,7 +51,7 @@ describe('Bildirim iletisim yapilandirmasi', () => {
       'utf-8',
     );
     const line = envExample
-      .split('\n')
+      .split(/\r?\n/)
       .find((l) => l.startsWith('GALLERY_WHATSAPP_PHONE='));
 
     expect(line).toBe('GALLERY_WHATSAPP_PHONE=');
