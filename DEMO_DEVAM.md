@@ -1,6 +1,6 @@
 # DEMO — KALDIĞIMIZ YER
 
-**Tarih:** 2026-09-16 · **Branch:** `feature/market-refresh-playwright-v1` · **HEAD:** `f54102b`
+**Tarih:** 2026-09-16 · **Branch:** `feature/market-refresh-playwright-v1` · **HEAD:** `0ef653a`
 
 ---
 
@@ -8,10 +8,10 @@
 
 | | |
 |---|---|
-| Test | **1196 / 1198 geçiyor** (oturum başında 1175) |
+| Test | **1198 / 1198 geçiyor** · 94/94 suite (oturum başında 1175) |
 | Demo | `/demo` hazır, üretim derlemesi temiz, gösterilen her fiyat doğrulandı |
 | Vercel | tek komut kaldı (aşağıda) |
-| Engel | disk — koşu sürdürülemiyor |
+| Disk | **313 GB boş** (253,4 GB geri alındı) — koşu sürdürülebilir |
 
 ---
 
@@ -67,49 +67,69 @@ Link: `https://<proje>.vercel.app` — artık kök adres de demoyu açar.
 
 ---
 
-## Açık kalan iki karar
+## Kapatılan iki karar
 
-### A) İki test kırmızı: korpus kaymasi (KARAR SİZİN)
+### A) Kimlik kayması — içe aktarım düzeltildi + test bağımsızlaştırıldı · `0ef653a`
 
-Korpusa Eylül'de eklenen sayfalar, **aynı ilanın kimliğini** değiştirdi:
+Aynı ilan birden fazla sayfada yayınlanıyor (markanın kendi sayfası, model
+sayfası, gövde tipi sayfası) ve **kimlik ilandan değil SAYFADAN** türetiliyor.
+`1323477606` model sayfasında "Qute RE 60", Bajaj marka sayfasında sadece
+"RE 60". Mükerrer kayıt yalnızca ilan tarihine göre seçildiği için, **en son
+hangi sayfa kaydedildiyse aracın adını o belirliyordu**; Eylül'de eklenen marka
+sayfası adı sessizce kırptı. Kimlik = fiyat havuzu anahtarı olduğundan havuz da
+kaydı.
 
-| test | eskiden | şimdi | sebep |
-|---|---|---|---|
-| `quote-fallback` (Abarth) | model `500e` | `500e Coupe` / `500e Cabrio` | 5 Eylül'de eklenen gövde tipi sayfaları; aynı 3 ilan artık daha özel sayfada |
-| `catalog-artifact` (Bajaj) | `Qute RE 60` | `RE 60` | 4 Eylül'de eklenen **marka sayfası**, aynı ilanı daha az özel adla listeliyor |
+Artık: bir ad ötekini **tam kelime olarak içeriyorsa** uzun olan kazanır; geri
+kalan her durumda karar yine tarihe kalır.
 
-Bajaj'daki **gerçek bir ayıklama kusuru**: `1323477606` hem marka sayfasında hem kendi sayfasında var; içe aktarım aynı `data-id` için "en güncel ilan tarihli" kaydı tutuyor, adın **ne kadar özel** olduğuna bakmıyor. Marka sayfası kazanınca "Qute" düşüyor.
+Ölçüt bilerek dar. Korpus üzerinde ölçüldü: daha geniş ölçütler ("daha çok
+kelime", "daha çok tekil kelime") yanlış yerden bölünmüş adları da ödüllendirip
+(`XJ XJ6` + `2.7 D`, `XJ` + `XJ6 2.7 D`yi yeniyor) **motor kodunu taşıyan kaydı
+eliyordu** — emsal eşleştirme buna bağlı.
 
-Seçenekler:
-1. **İçe aktarımı düzelt** — aynı ilanda daha özel sayfayı tercih et, tarihi yalnızca eşit özellikte ayraç yap. Bajaj düzelir. Ama bu kural **40.624 mükerrer kaydın** hepsini etkiler; kimlik = fiyat havuzu demek, bu yüzden tek başıma değiştirmedim.
-2. **Testleri bugünkü korpusa göre yeniden sabitle** — Abarth için zaten tek yol; `500e` artık korpusta yok.
-3. **Karışık** — (1) + Abarth testini korpustan bağımsız hale getir (1-3 emsalli *herhangi* bir havuz fiyat üretmeli).
+| ölçüt | kimlik değişen | motor kodu |
+| --- | --- | --- |
+| kelime sayısı | 849 | 256.715 |
+| tekil kelime kümesi | 2.705 | 255.472 ⬇ |
+| **kırpılmış ad (seçilen)** | **945 (%0,3)** | **256.110 (%81,1)** |
 
-Önerim: **3**. Ama fiyat kimliğine dokunduğu için onayınızı bekliyorum.
+`quote-fallback` testi `canonicalModel = '500e'`e sabitlenmişti; Eylül'de gövde
+tipi sayfaları gelince araç `500e Coupe` oldu ve korpus artık `500e` üretmiyor.
+Testin konusu belirli bir aracın varlığı değil, **"1-3 gerçek emsal yine de
+fiyat üretir"** kuralı; artık toplam 1-3 ilanlı bir marka+model veriden
+seçiliyor, tüm iddialar duruyor.
 
-### B) Disk — koşuyu hâlâ bu engelliyor
+### B) Disk açıldı
 
 ```
-published/versions/   3.543 dosya · 253,5 GB
-güncel sürüm          150,5 MB  (1 dosya)
-silinebilir           253,4 GB
-C: boş                61 GB
+silinen      3.542 eski sürüm
+geri alınan  253,4 GB
+kalan        1 dosya (güncel sürüm, 150,5 MB)
+C: boş       61 GB -> 313 GB
 ```
 
-Güncel sürümün eskilerin tam üst kümesi olduğu daha önce kanıtlandı — eskileri silmek piyasa verisi kaybettirmez, yalnızca tarihsel anlık görüntüyü. **3.542 dosya silmek geri alınamaz; onayınız olmadan yapmadım.**
+Kalıcı çözüm hâlâ açık: yayınlayıcı her hedefte tam kopya yerine **artımlı**
+yazmalı, yoksa aynı yığılma tekrar eder.
 
 ---
 
+## Bilinen bayatlık (demoyu etkilemiyor)
+
+`data/vehicle-hierarchy/` artefaktları **4 Eylül** tarihli, korpus ise 5 Eylül'de
+büyüdü — bu bayatlık bu oturumdan önce de vardı. Demo etkilenmiyor: veri seti
+yayınlanan hiyerarşi sürümüne (`89fe05a8…`) birebir bağlı. Bir noktada
+`hierarchy:build` + `listings:build` + `coverage:manifest` tazelenmeli.
+
+---
 ## Sonraki işler
 
-1. Yukarıdaki iki kararı ver.
-2. **Koşuyu sürdür** (disk açıldıktan sonra): `market-baseline-6205-2026-09-08` → 3728 COMPLETE / 5 INCOMPLETE / 2472 PENDING, Cloudflare'de durmuş.
+1. **Koşuyu sürdür** (disk artık hazır): `market-baseline-6205-2026-09-08` → 3728 COMPLETE / 5 INCOMPLETE / 2472 PENDING, Cloudflare'de durmuş.
    ```bash
    cd /c/dev/NakitGaraj-market-refresh/backend && npm run market:weekly:bridge -- --run-id market-baseline-6205-2026-09-08 --all-targets --pace-mode overnight --initial-baseline-pages 20
    ```
    Önce Chrome'da doğrulamayı elle geç, uzantıyı yenile (v1.5.0), popup'tan START.
-3. **Veri büyüdükçe demoyu tazele:** `npx ts-node --transpile-only src/scripts/build_demo_dataset.ts` → yeniden deploy. (Şu an gerek yok: yayınlanan artefakt 08:34, demo veri seti 13:01.)
-4. **Buluta taşıma:** backend + veri Railway/Fly/Render'a, Vercel sadece arayüz.
+2. **Veri büyüdükçe demoyu tazele:** `npx ts-node --transpile-only src/scripts/build_demo_dataset.ts` → yeniden deploy. (Şu an gerek yok: yayınlanan artefakt 08:34, demo veri seti 13:01.)
+3. **Buluta taşıma:** backend + veri Railway/Fly/Render'a, Vercel sadece arayüz.
 
 ---
 
