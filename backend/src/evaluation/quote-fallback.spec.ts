@@ -146,12 +146,57 @@ describe('Gercek emsal varken fiyat uretilir (gercek veritabani)', () => {
     }
   }, 60000);
 
-  test('DUSUK SAYI != VERI YOK: 1-3 gercek emsal fiyat uretir (Abarth 500e)', async () => {
-    const raw = await prisma.rawVehicleListing.count({ where: { canonicalMake: 'Abarth', canonicalModel: '500e' } });
-    expect(raw).toBeGreaterThan(0);
-    const m = await matcher.matchComparableListings({
-      make: 'Abarth', model: '500e', variant: 'Standart', trim: 'Coupe', year: 2024, mileageKm: 6_001,
+  interface SmallPoolProbe {
+    make: string;
+    model: string;
+    variant: string;
+    trim: string;
+    year: number;
+    mileageKm: number;
+  }
+
+  test('DUSUK SAYI != VERI YOK: 1-3 gercek emsal fiyat uretir', async () => {
+    // Korpus elle buyuyor: yeni bir sayfa eklendiginde bir aracin ADI
+    // degisebilir (Abarth '500e' bir gun '500e Coupe' olur) ya da tek ilanli
+    // havuz kalabalilasabilir. Bu yuzden ornek SABIT DEGIL, veriden secilir:
+    // sinanan sey belirli bir arac degil, "az sayi = veri yok degildir"
+    // kuralidir. Marka+model TOPLAMI 1-3 ilan olan bir havuz secilir, boylece
+    // eslestirici gevsese bile emsal sayisi kucuk kalir.
+    const [probe] = await prisma.$queryRawUnsafe<SmallPoolProbe[]>(`
+      SELECT canonicalMake AS make, canonicalModel AS model,
+             canonicalVariant AS variant, canonicalTrim AS trim,
+             year, mileageKm
+      FROM RawVehicleListing
+      WHERE parseStatus = 'VALID'
+        AND mileageKm IS NOT NULL
+        AND canonicalMake || '|' || canonicalModel IN (
+          SELECT canonicalMake || '|' || canonicalModel
+          FROM RawVehicleListing
+          WHERE parseStatus = 'VALID'
+          GROUP BY canonicalMake, canonicalModel
+          HAVING COUNT(*) BETWEEN 1 AND 3
+        )
+      ORDER BY canonicalMake, canonicalModel, year, mileageKm
+      LIMIT 1
+    `);
+
+    expect(probe).toBeDefined();
+
+    const poolSize = await prisma.rawVehicleListing.count({
+      where: { canonicalMake: probe.make, canonicalModel: probe.model },
     });
+    expect(poolSize).toBeGreaterThanOrEqual(1);
+    expect(poolSize).toBeLessThanOrEqual(3);
+
+    const m = await matcher.matchComparableListings({
+      make: probe.make,
+      model: probe.model,
+      variant: probe.variant,
+      trim: probe.trim,
+      year: Number(probe.year),
+      mileageKm: Number(probe.mileageKm),
+    });
+
     expect(m.level).toBeLessThan(4);
     expect(m.matchedCount).toBeGreaterThanOrEqual(1);
     expect(m.cleanListings.length).toBeGreaterThanOrEqual(1);

@@ -108,6 +108,29 @@ function scanHtmlFiles(dir: string): string[] {
   return out;
 }
 
+/**
+ * Ayni ilan hem markanin genel sayfasinda hem de kendi model sayfasinda
+ * listelenir ve kimlik SAYFADAN turetilir; iki sayfa ona ayni adi vermez.
+ * Marka sayfasi "RE 60" derken model sayfasi "Qute RE 60" der: biri otekinin
+ * KIRPILMISIDIR. Bu durumda uzun ad dogru olandir.
+ *
+ * Olcut bilerek dar tutuldu: yalnizca bir ad otekini TAM KELIME olarak
+ * iceriyorsa karar verir. Ayni bilgiyi alanlar arasinda baska turlu bolen
+ * kayitlara (model "XJ" + paket "XJ6 2.7 D" ile model "XJ XJ6" + motor
+ * "2.7 D") karismaz — orada karar yine ilan tarihine kalir. Daha genis bir
+ * olcut, yanlis yerden bolunmus adlari ve uzun paket metinlerini de
+ * odullendirir, motor kodunu tasiyan kaydi elerdi.
+ */
+function isTruncatedName(shorter: string, longer: string): boolean {
+  const s = shorter.toLocaleLowerCase('tr').trim();
+  const l = longer.toLocaleLowerCase('tr').trim();
+  if (!s || s.length >= l.length) return false;
+
+  return (
+    l.startsWith(s + ' ') || l.endsWith(' ' + s) || l.includes(' ' + s + ' ')
+  );
+}
+
 function parseIntSafe(text: string): number {
   const digits = (text || '').replace(/[^\d]/g, '');
   if (!digits) return NaN;
@@ -356,7 +379,19 @@ async function main() {
         const existing = byId.get(dataId);
         if (existing) {
           stats.duplicateSameId++;
-          // Ayni ilan birden fazla sayfada yer alabilir; en guncel tarihli kaydi tut.
+          // Ayni ilan birden fazla sayfada yer alabilir. ONCE daha ozel
+          // adlandirma kazanir; tarih yalnizca esit ozellikteki kayitlar
+          // arasinda ayrac olur. Tarih tek basina ayrac olsaydi, sonradan
+          // kaydedilen bir MARKA sayfasi ilanin adini kirpabilirdi ve kimlik
+          // = fiyat havuzu oldugu icin havuz sessizce kayardi.
+          if (isTruncatedName(existing.canonicalModel, record.canonicalModel)) {
+            byId.set(dataId, record);
+            return;
+          }
+          if (isTruncatedName(record.canonicalModel, existing.canonicalModel)) {
+            return;
+          }
+
           const a = existing.scrapedAt ? existing.scrapedAt.getTime() : 0;
           const b = scrapedAt ? scrapedAt.getTime() : 0;
           if (b > a) byId.set(dataId, record);
