@@ -2,6 +2,12 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import { PRICING_LIMITS, clamp } from './pricing-config';
 import {
+  buildYearCurve,
+  learnAnnualDepreciation,
+  logPriceAtYear,
+  normalizeToYear,
+} from './year-evidence';
+import {
   composeFullModel,
   deriveFuelFromEngineCode,
   deriveFuelType,
@@ -323,127 +329,30 @@ export class EmsalMatcherService {
    * Havuzdan yillik deger kaybi orani ogrenir (log-fiyat ~ yil regresyonu).
    * Ogrenilemezse konfigurasyondaki varsayilan kullanilir.
    */
+  /**
+   * Yil kaniti mantigi `year-evidence.ts` icinde durur: canli motor ile demo
+   * veri seti AYNI egriyi, AYNI normalizasyonu ve AYNI yil-uzakligi
+   * agirligini kullanir. Buradaki metotlar yalnizca o tek kaynaga baglar.
+   */
   private learnAnnualDepreciation(rows: RawCandidate[]): {
     rate: number;
     source: string;
   } {
-    const byYear = new Map<number, number[]>();
-    for (const r of rows) {
-      if (r.price <= 0) continue;
-      if (!byYear.has(r.year)) byYear.set(r.year, []);
-      byYear.get(r.year)!.push(r.price);
-    }
-    const points: Array<{ year: number; logPrice: number; n: number }> = [];
-    for (const [year, prices] of byYear) {
-      if (prices.length < 3) continue;
-      const sorted = [...prices].sort((a, b) => a - b);
-      const median = sorted[Math.floor(sorted.length / 2)];
-      if (median > 0) points.push({ year, logPrice: Math.log(median), n: prices.length });
-    }
-
-    if (points.length >= 3) {
-      const totalN = points.reduce((s, p) => s + p.n, 0);
-      const meanX = points.reduce((s, p) => s + p.year * p.n, 0) / totalN;
-      const meanY = points.reduce((s, p) => s + p.logPrice * p.n, 0) / totalN;
-      let num = 0;
-      let den = 0;
-      for (const p of points) {
-        num += p.n * (p.year - meanX) * (p.logPrice - meanY);
-        den += p.n * (p.year - meanX) ** 2;
-      }
-      if (den > 0) {
-        const slope = num / den; // log-fiyat / yil
-        const rate = Math.exp(slope) - 1; // yillik artis orani (yeni model daha pahali)
-        if (Number.isFinite(rate) && rate > 0) {
-          return {
-            rate: clamp(
-              rate,
-              PRICING_LIMITS.annualDepreciationRange[0],
-              PRICING_LIMITS.annualDepreciationRange[1],
-            ),
-            source: 'LEARNED_FROM_LISTINGS',
-          };
-        }
-      }
-    }
-
-    return {
-      rate: PRICING_LIMITS.defaultAnnualDepreciation,
-      source: 'DEFAULT_ANNUAL_RATE',
-    };
+    return learnAnnualDepreciation(rows);
   }
 
-  /**
-   * Havuzun KENDI yil egrisi: yil -> log(medyan fiyat).
-   *
-   * Tek bir ussel oran, gozlem araliginin uzagina tasindiginda bozulur:
-   * gercek deger kaybi ilk yillarda sert, sonra yavaslar. Yeterli ilani olan
-   * her yil icin gercek medyan KANITTIR; oran yalnizca bosluklarda ve aralik
-   * disinda kullanilir.
-   */
   private buildYearCurve(rows: RawCandidate[]): Map<number, number> {
-    const byYear = new Map<number, number[]>();
-    for (const r of rows) {
-      if (r.price <= 0 || !r.year) continue;
-      if (!byYear.has(r.year)) byYear.set(r.year, []);
-      byYear.get(r.year)!.push(r.price);
-    }
-    const curve = new Map<number, number>();
-    for (const [year, prices] of byYear) {
-      if (prices.length < PRICING_LIMITS.yearCurveMinListings) continue;
-      const sorted = [...prices].sort((a, b) => a - b);
-      const median = sorted[Math.floor(sorted.length / 2)];
-      if (median > 0) curve.set(year, Math.log(median));
-    }
-    return curve;
+    return buildYearCurve(rows);
   }
 
-  /** Egriden bir yilin log-fiyati: gozlem, interpolasyon ya da sonumlu uzatma. */
   private logPriceAtYear(
     year: number,
     curve: Map<number, number>,
     rate: number,
   ): number | null {
-    const observed = curve.get(year);
-    if (observed !== undefined) return observed;
-    const years = [...curve.keys()].sort((a, b) => a - b);
-    if (years.length === 0) return null;
-    const lo = years[0];
-    const hi = years[years.length - 1];
-    if (year < lo || year > hi) {
-      // Aralik DISI: olculen egim tasinmaz, sonumlenerek uygulanir.
-      const edge = year < lo ? lo : hi;
-      return (
-        curve.get(edge)! +
-        Math.log(1 + rate) *
-          (year - edge) *
-          PRICING_LIMITS.yearExtrapolationDamping
-      );
-    }
-    // Aralik ICI bosluk: komsu gozlemler arasinda log-uzayda interpolasyon.
-    let before = lo;
-    let after = hi;
-    for (const candidate of years) {
-      if (candidate <= year) before = candidate;
-      if (candidate >= year) {
-        after = candidate;
-        break;
-      }
-    }
-    if (before === after) return curve.get(before)!;
-    const t = (year - before) / (after - before);
-    return curve.get(before)! * (1 - t) + curve.get(after)! * t;
+    return logPriceAtYear(year, curve, rate);
   }
 
-  /**
-   * Emsali hedef yila indirger.
-   *
-   * SERT [0,5 - 2,0] KIRPMASI KALDIRILDI. Olculen: ogrenilen oranin %13,7
-   * oldugu bir havuzda 2020 ilanini 2006'ya indirgemek icin gereken faktor
-   * 0,166 iken kirpma onu 0,500'e cekiyor ve emsali 3,02 KATINA sisiriyordu;
-   * ~9 yildan buyuk her yil farkinda ayni sey oluyordu. Sinir artik yil
-   * farkina gore, mumkun olan EN SERT yillik orandan turetilir.
-   */
   private normalizeToYear(
     price: number,
     listingYear: number,
@@ -451,18 +360,7 @@ export class EmsalMatcherService {
     rate: number,
     curve?: Map<number, number>,
   ): number {
-    const diff = targetYear - listingYear;
-    if (diff === 0) return price;
-
-    let factor = Math.pow(1 + rate, diff);
-    if (curve && curve.size > 0) {
-      const from = this.logPriceAtYear(listingYear, curve, rate);
-      const to = this.logPriceAtYear(targetYear, curve, rate);
-      if (from !== null && to !== null) factor = Math.exp(to - from);
-    }
-
-    const bound = Math.pow(1 + PRICING_LIMITS.yearBoundMaxAnnualRate, Math.abs(diff));
-    return Math.max(1, Math.round(price * clamp(factor, 1 / bound, bound)));
+    return normalizeToYear(price, listingYear, targetYear, rate, curve);
   }
 
   private toCleanListing(

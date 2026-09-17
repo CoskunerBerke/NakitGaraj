@@ -118,6 +118,10 @@ export interface DemoQuote {
   /** Kilometre duzeltmesinin FMV'ye etkisi (TL, isaretli). */
   mileageAdjustment: number;
   referenceMedianMileage: number;
+  /** Hedef yilin KENDI ilanlari. */
+  directComparables: number;
+  /** Komsu yildan alinip hedef yila indirgenmis ilanlar. */
+  borrowedComparables: number;
   requiresManualApproval: boolean;
   manualApprovalReason?: string;
 }
@@ -129,8 +133,15 @@ export interface QuoteInput {
   fmvPoints: [number, number, number];
   /** Kullanicinin girdigi kilometre. */
   mileageKm: number;
-  /** O yila ait ilan sayisi. */
-  yearListingCount: number;
+  /** Hedef yilin KENDI ilan sayisi. */
+  directComparables: number;
+  /** Komsu yildan (+-2) alinip hedef yila indirgenmis ilan sayisi. */
+  borrowedComparables: number;
+  /**
+   * Agirliklarin toplami. Odunc alinan ilan kanittir ama dogrudan gozlemle
+   * ESIT degildir; guven ve likidite bu sayidan okunur, ham adetten degil.
+   */
+  effectiveComparables: number;
   /** Havuzun toplam ilan sayisi. */
   poolListingCount: number;
 }
@@ -196,8 +207,15 @@ function confidenceFrom(yearCount: number, poolCount: number): number {
 }
 
 export function quote(input: QuoteInput): DemoQuote {
-  const { kmPoints, fmvPoints, mileageKm, yearListingCount, poolListingCount } =
-    input;
+  const {
+    kmPoints,
+    fmvPoints,
+    mileageKm,
+    directComparables,
+    borrowedComparables,
+    effectiveComparables,
+    poolListingCount,
+  } = input;
 
   // 1) Kilometre: motorun ornekledigi egriden okunur
   const referenceMedianMileage = kmPoints[1];
@@ -211,9 +229,21 @@ export function quote(input: QuoteInput): DemoQuote {
 
   // 3) Maliyet + risk + hedef kar
   const operatingCost = operatingCostFor(expectedSalePrice);
-  const dataConfidence = confidenceFrom(yearListingCount, poolListingCount);
+  /**
+   * GUVEN, HAM ADETTEN DEGIL ETKIN KANITTAN OKUNUR.
+   *
+   * Hedef yilin kendi ilanlari tam agirlik tasir; komsu yildan indirgenen
+   * ilan daha dusuk agirlikla sayilir (year-evidence.ts). Yalnizca dogrudan
+   * ilani olan bir yilda etkin kanit = dogrudan ilan sayisidir, yani yogun
+   * havuzlarda hicbir sey degismez.
+   */
+  const dataConfidence = confidenceFrom(effectiveComparables, poolListingCount);
   const liquidityPenalty =
-    yearListingCount >= 25 ? 0 : yearListingCount >= LIMITS.lowCompCountThreshold ? 0.004 : 0.01;
+    effectiveComparables >= 25
+      ? 0
+      : effectiveComparables >= LIMITS.lowCompCountThreshold
+        ? 0.004
+        : 0.01;
   const highConfidenceRebate = Math.max(0, dataConfidence - 0.72) * 0.02;
   const riskRate = clamp(
     0.003 + (1 - dataConfidence) * 0.022 + liquidityPenalty - highConfidenceRebate,
@@ -226,6 +256,21 @@ export function quote(input: QuoteInput): DemoQuote {
   // 4) Nakit teklif — musteri tabani delinirse fiyat gosterilmez, manuel istenir
   let requiresManualApproval = false;
   let manualApprovalReason: string | undefined;
+
+  /**
+   * TEK ILAN, DESTEKSIZ: fiyat GOSTERILIR ama uzman onayina gider.
+   *
+   * Motorun kendi kurali budur (bkz. emsal-matcher `singleComparable`):
+   * tek gercek emsalde piyasa referansi O ILANIN fiyatidir, yil ve
+   * kilometre normalizasyonu uygulanmaz ve arac manuel kontrole gider.
+   * Fiyati gizlemek kanitin yok oldugu anlamina gelirdi; oysa bir gozlem
+   * vardir, yalnizca yayilimi olcemeyiz.
+   */
+  if (directComparables <= 1 && borrowedComparables === 0) {
+    requiresManualApproval = true;
+    manualApprovalReason =
+      'Bu araç için piyasada tek ilan gözlendi ve yakın model yıllarında destekleyici emsal yok. Fiyat bu tek gözleme dayanıyor; teklif uzman kontrolüyle kesinleşir.';
+  }
 
   const rawCashOffer = expectedSalePrice - operatingCost - riskCost - targetProfit;
   const customerFloor = Math.round(expectedSalePrice * segment.minCashRatioOfExpectedSale);
@@ -288,19 +333,35 @@ export function quote(input: QuoteInput): DemoQuote {
     consignmentAdvantage: customerConsignmentNet - cashOffer,
     estimatedDaysToSellMin: segment.daysToSell[0],
     estimatedDaysToSellMax: segment.daysToSell[1],
-    matchedListingCount: poolListingCount,
+    matchedListingCount: directComparables + borrowedComparables,
     confidencePct: Math.round(dataConfidence * 100),
     segment: segment.name,
     mileageAdjustment,
     referenceMedianMileage,
+    directComparables,
+    borrowedComparables,
     requiresManualApproval,
     manualApprovalReason,
   };
 }
 
-/** Veri setinde yeterli emsal yoksa fiyat URETILMEZ. */
-export const hasEnoughEvidence = (yearListingCount: number): boolean =>
-  yearListingCount >= LIMITS.minCompCountForPricing;
+/**
+ * FIYAT URETILEBILIR MI?
+ *
+ * Eskiden demo "yilin kendi ilani >= 5" istiyordu ve 3 ilanli bir yil bos
+ * ekran gosteriyordu. Bu esik motorda YOKTUR: `minCompCountForPricing`
+ * orada emsal merdiveninin ne zaman genisleyecegini soyler, fiyati
+ * reddetmez. Motor kanit bulamazsa Seviye 4e duser (hic ilan yok); aksi
+ * halde SINIRLI KANIT etiketiyle fiyat uretir.
+ *
+ * Demo da ayni kurali uygular: tek kosul en az bir kullanilabilir emsaldir.
+ * Kanitin zayifligi fiyati gizleyerek degil, guven skoru ve manuel onay
+ * bayragiyla anlatilir.
+ */
+export const hasEnoughEvidence = (
+  directComparables: number,
+  borrowedComparables = 0,
+): boolean => directComparables + borrowedComparables > 0;
 
 export const formatTL = (value: number): string =>
   new Intl.NumberFormat('tr-TR', { maximumFractionDigits: 0 }).format(

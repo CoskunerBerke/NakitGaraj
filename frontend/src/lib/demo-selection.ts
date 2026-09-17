@@ -19,8 +19,42 @@
  * eslestiginde cozulur. Fiyat kimligi hicbir yerde kirpilmaz.
  */
 
-/** [km1, km2, km3, fmv1, fmv2, fmv3, ilan sayisi] — motorun km egrisi ornegi */
-export type YearRow = [number, number, number, number, number, number, number];
+/**
+ * [km1, km2, km3, fmv1, fmv2, fmv3, dogrudan, odunc, etkin]
+ *
+ * Ilk alti sayi motorun km egrisi ornegi. Son uc sayi KANITI anlatir:
+ * hedef yilin kendi ilanlari, komsu yildan indirgenenler ve agirlikli
+ * toplam. Bir yilin veri setinde OLMASI ile tek basina fiyatlanabilir
+ * OLMASI ayri seylerdir; bu sayilar ikincisini anlatir.
+ */
+export type YearRow = [
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+];
+
+/** Yil satirini isimli alanlara acar; indis bilgisi TEK yerde durur. */
+export interface YearEvidence {
+  kmPoints: [number, number, number];
+  fmvPoints: [number, number, number];
+  directComparables: number;
+  borrowedComparables: number;
+  effectiveComparables: number;
+}
+
+export const yearEvidenceOf = (row: YearRow): YearEvidence => ({
+  kmPoints: [row[0], row[1], row[2]],
+  fmvPoints: [row[3], row[4], row[5]],
+  directComparables: row[6],
+  borrowedComparables: row[7],
+  effectiveComparables: row[8],
+});
 
 /**
  * Bir secim seviyesinin ne oldugu. Kaynak veride seviye TIPI yazmaz; tip,

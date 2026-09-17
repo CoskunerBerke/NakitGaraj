@@ -23,13 +23,27 @@ import {
   optionsAt,
   poolEntries,
   resolvePool,
+  yearEvidenceOf,
   yearsOf,
   type DemoData,
+  type YearRow,
 } from './demo-selection.ts';
 
-/** [km1, km2, km3, fmv1, fmv2, fmv3, ilan sayisi] */
-const row = (n: number): [number, number, number, number, number, number, number] => [
-  50_000, 80_000, 120_000, 900_000, 850_000, 800_000, n,
+/** [km1, km2, km3, fmv1, fmv2, fmv3, dogrudan, odunc, etkin] */
+const row = (
+  direct: number,
+  borrowed = 0,
+  effective = direct + borrowed * 0.75,
+): YearRow => [
+  50_000,
+  80_000,
+  120_000,
+  900_000,
+  850_000,
+  800_000,
+  direct,
+  borrowed,
+  effective,
 ];
 
 /**
@@ -57,7 +71,7 @@ const FIXTURE: DemoData = {
       path: ['Audi', 'A3', 'A3 Sedan', '1.5 TFSI', 'Sport Line'],
       n: 5,
       km: 0.015,
-      years: { '2017': row(2), '2018': row(3) },
+      years: { '2017': row(2, 3), '2018': row(3, 2) },
     },
     'audi/a3/a3-sedan/1-6-tdi/sport-line': {
       path: ['Audi', 'A3', 'A3 Sedan', '1.6 TDI', 'Sport Line'],
@@ -76,6 +90,12 @@ const FIXTURE: DemoData = {
       n: 8,
       km: 0.015,
       years: { '2009': row(8) },
+    },
+    'audi/a3/a3-sedan/1-5-tfsi/design-line': {
+      path: ['Audi', 'A3', 'A3 Sedan', '1.5 TFSI', 'Design Line'],
+      n: 1,
+      km: 0.015,
+      years: { '2018': row(1) },
     },
     'alfa-romeo/146/1-4/ts': {
       path: ['Alfa Romeo', '146', '1.4', 'TS'],
@@ -107,7 +127,7 @@ describe('Audi > A3 > A3 Sedan > 1.5 TFSI (asil regresyon)', () => {
 
   test('Paket seviyesi geri geldi ve MOTOR etiketi tasimaz', () => {
     const packages = optionsAt(ENTRIES, 4, AUDI_SEDAN_15);
-    assert.deepEqual(packages, ['Advanced', 'Sport Line']);
+    assert.deepEqual(packages, ['Advanced', 'Design Line', 'Sport Line']);
     assert.equal(packages.includes('1.5 TFSI'), false);
   });
 
@@ -192,6 +212,40 @@ describe('Ust secim degisince alt secim gereksiz yere dusmez', () => {
   });
 });
 
+
+/**
+ * VARLIK ile FIYATLANABILIRLIK AYRI SEYLERDIR.
+ *
+ * Sabitlenen hata: veri seti, yilin kendi ilani 3 un altindaysa o yili HIC
+ * yazmiyordu; havuz 5 ilanin altindaysa paket bile gorunmuyordu. Gercekte
+ * var olan model yillari (Sport Line 2017, 2 ilan) ekranda yoktu. Dropdown
+ * VARLIKTAN turer; kanitin yeterliligi fiyat katmaninin isidir.
+ */
+describe('Yil listesi kanit esigine gore FILTRELENMEZ', () => {
+  test('1 ilanli yil gorunur (A)', () => {
+    const selection = ['Audi', 'A3', 'A3 Sedan', '1.5 TFSI', 'Design Line'];
+    const pool = resolvePool(ENTRIES, selection);
+    assert.deepEqual(yearsOf(pool), [2018]);
+    assert.equal(yearEvidenceOf(pool!.pool.years["2018"]).directComparables, 1);
+  });
+
+  test('2 ilanli yil gorunur (B)', () => {
+    const pool = resolvePool(ENTRIES, [...AUDI_SEDAN_15, 'Sport Line']);
+    assert.ok(yearsOf(pool).includes(2017));
+    assert.equal(yearEvidenceOf(pool!.pool.years["2017"]).directComparables, 2);
+  });
+
+  test('3 ilanli yil gorunur (C)', () => {
+    const pool = resolvePool(ENTRIES, [...AUDI_SEDAN_15, 'Sport Line']);
+    assert.ok(yearsOf(pool).includes(2018));
+    assert.equal(yearEvidenceOf(pool!.pool.years["2018"]).directComparables, 3);
+  });
+
+  test('tek ilanli paket yine de secilebilir', () => {
+    const packages = optionsAt(ENTRIES, 4, AUDI_SEDAN_15);
+    assert.ok(packages.includes('Design Line'));
+  });
+});
 /**
  * Canli veri seti buyudugu icin burada MARKA/MODEL adi degil, SOZLESME
  * sinanir: yol kirpilmamis mi, etiketler kaynaktan mi geliyor, her dalin
@@ -230,6 +284,27 @@ describe('Yayinlanan veri seti sozlesmesi', () => {
       if (!kinds || kinds.length < pool.path.length - 2) missing.add(branch);
     }
     assert.deepEqual([...missing], []);
+  });
+
+  /**
+   * Odunc kanit PAKET SINIRINI GECMEZ: her yil satirinin kullandigi emsal
+   * sayisi, o havuzun KENDI ilan sayisini asamaz. Advanced ile Sport Line
+   * birbirinin kanitini kullanamaz.
+   */
+  test('odunc alinan kanit havuzun disina cikmaz (G)', () => {
+    const leaks: string[] = [];
+    for (const { key, pool } of entries) {
+      for (const [year, row] of Object.entries(pool.years)) {
+        const e = yearEvidenceOf(row);
+        if (e.directComparables + e.borrowedComparables > pool.n) {
+          leaks.push(`${key} ${year}`);
+        }
+        if (e.effectiveComparables > e.directComparables + e.borrowedComparables) {
+          leaks.push(`${key} ${year} (etkin > toplam)`);
+        }
+      }
+    }
+    assert.deepEqual(leaks, []);
   });
 
   test('ayni ilk dort etiketi paylasan havuzlar ayri cozulur', () => {

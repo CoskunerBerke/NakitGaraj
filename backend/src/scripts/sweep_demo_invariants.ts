@@ -30,8 +30,18 @@ import {
   type DemoQuote,
 } from '../../../frontend/src/lib/demo-pricing';
 
-/** [km1, km2, km3, fmv1, fmv2, fmv3, oYilinIlanSayisi] */
-type YearRow = [number, number, number, number, number, number, number];
+/** [km1, km2, km3, fmv1, fmv2, fmv3, dogrudan, odunc, etkin kanit] */
+type YearRow = [
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+  number,
+];
 
 interface Pool {
   /** Sahibinden etiket yolu: ["Audi","A3","A3 Sedan","1.5 TFSI","Advanced"] */
@@ -98,8 +108,10 @@ function main(): void {
     for (const [year, row] of Object.entries(pool.years)) {
       rowsTotal += 1;
 
-      const yearListingCount = row[6];
-      if (!hasEnoughEvidence(yearListingCount)) {
+      const directComparables = row[6];
+      const borrowedComparables = row[7];
+      const effectiveComparables = row[8];
+      if (!hasEnoughEvidence(directComparables, borrowedComparables)) {
         rowsBelowEvidence += 1;
         continue;
       }
@@ -117,7 +129,9 @@ function main(): void {
           kmPoints: [row[0], row[1], row[2]],
           fmvPoints: [row[3], row[4], row[5]],
           mileageKm,
-          yearListingCount,
+          directComparables,
+          borrowedComparables,
+          effectiveComparables,
           poolListingCount: pool.n,
         });
 
@@ -153,7 +167,7 @@ function main(): void {
   console.log(`  havuz                      : ${demo.poolCount}`);
   console.log(`  (havuz, yil) satiri        : ${rowsTotal}`);
   console.log(
-    `  emsal esigi altinda        : ${rowsBelowEvidence} (%${pct(rowsBelowEvidence, rowsTotal)}) — demo zaten fiyat URETMEZ`,
+    `  hic kanit yok              : ${rowsBelowEvidence} (%${pct(rowsBelowEvidence, rowsTotal)}) — fiyat URETILMEZ`,
   );
   console.log(`  fiyatlanabilir satir       : ${priceableRows}`);
 

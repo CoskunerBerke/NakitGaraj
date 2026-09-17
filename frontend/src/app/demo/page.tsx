@@ -31,6 +31,7 @@ import {
   headingFor,
   poolEntries,
   resolvePool,
+  yearEvidenceOf,
   yearsOf,
   type DemoData,
 } from '../../lib/demo-selection';
@@ -74,14 +75,25 @@ export default function DemoPage() {
     if (!pool || !activeYear) return null;
     const row = pool.pool.years[activeYear];
     if (!row) return null;
-    const [k1, k2, k3, f1, f2, f3, yearCount] = row;
-    if (!hasEnoughEvidence(yearCount)) return null;
-    const mileageKm = Number(km.replace(/\D/g, '')) || k2;
+
+    const evidence = yearEvidenceOf(row);
+    if (
+      !hasEnoughEvidence(
+        evidence.directComparables,
+        evidence.borrowedComparables,
+      )
+    ) {
+      return null;
+    }
+
+    const mileageKm = Number(km.replace(/\D/g, '')) || evidence.kmPoints[1];
     return quote({
-      kmPoints: [k1, k2, k3],
-      fmvPoints: [f1, f2, f3],
+      kmPoints: evidence.kmPoints,
+      fmvPoints: evidence.fmvPoints,
       mileageKm,
-      yearListingCount: yearCount,
+      directComparables: evidence.directComparables,
+      borrowedComparables: evidence.borrowedComparables,
+      effectiveComparables: evidence.effectiveComparables,
       poolListingCount: pool.pool.n,
     });
   }, [pool, activeYear, km]);
@@ -238,8 +250,13 @@ export default function DemoPage() {
                 <div className="text-right text-xs text-[var(--text-secondary)]">
                   <div className="flex items-center justify-end gap-1.5">
                     <TrendingUp size={13} />
-                    {formatTL(result.matchedListingCount)} emsal ilan
+                    {formatTL(result.directComparables)} doğrudan emsal
                   </div>
+                  {result.borrowedComparables > 0 && (
+                    <div className="mt-0.5">
+                      + {formatTL(result.borrowedComparables)} yakın yıl emsali
+                    </div>
+                  )}
                   <div className="mt-0.5">veri güveni %{result.confidencePct}</div>
                 </div>
               </div>

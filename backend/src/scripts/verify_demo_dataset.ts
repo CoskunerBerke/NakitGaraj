@@ -13,7 +13,13 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
+import { PRICING_LIMITS } from '../evaluation/pricing-config';
 import { RobustPricingCalculator } from '../evaluation/robust-pricing-calculator';
+import {
+  buildYearCurve,
+  learnAnnualDepreciation,
+  selectYearEvidence,
+} from '../evaluation/year-evidence';
 
 interface Observation {
   year: number;
@@ -38,12 +44,18 @@ function main(): void {
     >;
   };
 
-  const publishedDir = path.join(backendRoot, 'data/market-refresh/weekly/published');
+  const publishedDir = path.join(
+    backendRoot,
+    'data/market-refresh/weekly/published',
+  );
   const pointer = JSON.parse(
     fs.readFileSync(path.join(publishedDir, 'current.json'), 'utf-8'),
   ) as { release: string };
   const release = JSON.parse(
-    fs.readFileSync(path.join(publishedDir, 'versions', pointer.release), 'utf-8'),
+    fs.readFileSync(
+      path.join(publishedDir, 'versions', pointer.release),
+      'utf-8',
+    ),
   ) as {
     pools: Record<string, string[]>;
     assignments: Record<string, { sourceObservation?: Observation }>;
@@ -63,16 +75,13 @@ function main(): void {
       .map((id) => release.assignments[id]?.sourceObservation)
       .filter((o): o is Observation => Boolean(o))
       .filter((o) => o.year > 1980 && o.price > 0 && o.mileage != null);
-    if (observations.length < 5) continue;
+    if (observations.length === 0) continue;
 
-    const listings = observations.map((o) => ({
-      make: 'x',
-      model: 'y',
-      year: o.year,
-      mileageKm: o.mileage,
-      price: o.price,
-      listingDate: o.listingDate,
-    }));
+    // Kanit secimi veri setiyle AYNI kaynaktan gelir; dogrulama, saklanan
+    // sayinin taze bir motor cagrisiyla ortusup ortusmedigini sinar.
+    const points = observations.map((o) => ({ year: o.year, price: o.price }));
+    const { rate } = learnAnnualDepreciation(points);
+    const curve = buildYearCurve(points);
 
     const pool = demo.pools[node];
     for (const [yearKey, row] of Object.entries(pool.years)) {
@@ -81,14 +90,32 @@ function main(): void {
       const medianKm = k2;
       const year = Number(yearKey);
 
+      const evidence = selectYearEvidence(observations, year, {
+        rate,
+        curve,
+        minCount: PRICING_LIMITS.minCompCountForPricing,
+      });
+      if (evidence.length === 0) continue;
+
+      const listings = evidence.map((e) => ({
+        make: 'x',
+        model: 'y',
+        year,
+        mileageKm: e.observation.mileage,
+        price: e.price,
+        listingDate: e.observation.listingDate,
+      }));
+      const listingWeights = evidence.map((e) => e.weight);
+
       // 1) Medyan kilometrede: birebir ayni cagri olmali.
       const engineAtMedian = RobustPricingCalculator.computeValuation({
-        cleanListings: listings as never,
+        cleanListings: listings,
         userYear: year,
         userMileage: medianKm,
         matchedLevel: 1,
         baseConfidenceScore: 0.9,
-      } as never);
+        listingWeights,
+      });
       atMedian.push(
         (100 * (demoFmv - engineAtMedian.fairMarketValue)) /
           engineAtMedian.fairMarketValue,
@@ -97,10 +124,17 @@ function main(): void {
       // 2) Medyandan uzak bir kilometrede: demo, duzeltmeyi FMV'ye uygular.
       const testKm = Math.max(5_000, Math.round(medianKm * 1.5));
       // Tarayicinin yaptigi ISIN AYNISI: uc noktali egriden log-interpolasyon.
-      const logAt = (a: number, b: number, fa: number, fb: number, x: number) =>
+      const logAt = (
+        a: number,
+        b: number,
+        fa: number,
+        fb: number,
+        x: number,
+      ) =>
         b === a
           ? Math.log(fa)
-          : Math.log(fa) * (1 - (x - a) / (b - a)) + Math.log(fb) * ((x - a) / (b - a));
+          : Math.log(fa) * (1 - (x - a) / (b - a)) +
+            Math.log(fb) * ((x - a) / (b - a));
       const DAMP = 0.6;
       let logValue: number;
       if (testKm <= k1) {
@@ -118,12 +152,13 @@ function main(): void {
         clamp(Math.exp(logValue), f2 * 0.65, f2 * 1.35),
       );
       const engineAtKm = RobustPricingCalculator.computeValuation({
-        cleanListings: listings as never,
+        cleanListings: listings,
         userYear: year,
         userMileage: testKm,
         matchedLevel: 1,
         baseConfidenceScore: 0.9,
-      } as never);
+        listingWeights,
+      });
       if (engineAtKm.fairMarketValue > 0) {
         offMedian.push(
           (100 * (demoAdjusted - engineAtKm.fairMarketValue)) /
@@ -141,7 +176,9 @@ function main(): void {
   const absolute = (values: number[]) => values.map(Math.abs);
 
   process.stdout.write(`DEMO DOGRULAMA — ${checked} (havuz, yil) noktasi\n\n`);
-  process.stdout.write('1) Yilin MEDYAN kilometresinde (birebir ayni olmali):\n');
+  process.stdout.write(
+    '1) Yilin MEDYAN kilometresinde (birebir ayni olmali):\n',
+  );
   process.stdout.write(
     `   |sapma| medyan %${quantile(absolute(atMedian), 0.5).toFixed(3)}   ` +
       `p99 %${quantile(absolute(atMedian), 0.99).toFixed(3)}   ` +

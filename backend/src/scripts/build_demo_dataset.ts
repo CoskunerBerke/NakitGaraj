@@ -26,12 +26,27 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
+import { PRICING_LIMITS } from '../evaluation/pricing-config';
 import { RobustPricingCalculator } from '../evaluation/robust-pricing-calculator';
+import {
+  buildYearCurve,
+  learnAnnualDepreciation,
+  selectYearEvidence,
+} from '../evaluation/year-evidence';
 
-/** Bir yilin egriye/veri setine girmesi icin gereken en az ilan sayisi. */
-const MIN_LISTINGS_PER_YEAR = 3;
-/** Bir havuzun veri setine girmesi icin gereken en az ilan sayisi. */
-const MIN_LISTINGS_PER_POOL = 5;
+/**
+ * VARLIK ile FIYATLANABILIRLIK AYRI SEYLERDIR.
+ *
+ * Eskiden bir yil, kendi ilan sayisi 3 in altindaysa veri setine HIC
+ * yazilmiyordu; havuz da 5 ilanin altindaysa tamamen dusuyordu. Boylece
+ * gercekten var olan model yillari (Audi A3 Sedan 1.5 TFSI Sport Line 2017,
+ * 2 ilan) ekranda hic gorunmuyor, kullanici o araci hic secemiyordu.
+ *
+ * Artik ilani olan her havuz ve her yil veri setine girer. Az kanitli bir
+ * yil GORUNUR; fiyatin uretilip uretilmeyecegine ve ne kadar guvenle
+ * sunulacagina fiyat katmani karar verir.
+ */
+const MIN_LISTINGS_PER_POOL = 1;
 
 interface Observation {
   year: number;
@@ -118,7 +133,9 @@ function classifyBranchLevels(paths: string[][], model: string): LevelKind[] {
   const kinds: LevelKind[] = [];
 
   for (let i = 2; i < maxDepth; i++) {
-    const labels = [...new Set(paths.filter((p) => p.length > i).map((p) => p[i]))];
+    const labels = [
+      ...new Set(paths.filter((p) => p.length > i).map((p) => p[i])),
+    ];
     if (labels.length === 0) {
       kinds.push('series');
       continue;
@@ -126,8 +143,10 @@ function classifyBranchLevels(paths: string[][], model: string): LevelKind[] {
 
     const isDeepest = i === maxDepth - 1;
     const modelPrefixed =
-      labels.filter((l) => startsWithModel(l, model)).length / labels.length > 0.5;
-    const engineish = labels.filter(looksLikeEngine).length / labels.length > 0.5;
+      labels.filter((l) => startsWithModel(l, model)).length / labels.length >
+      0.5;
+    const engineish =
+      labels.filter(looksLikeEngine).length / labels.length > 0.5;
 
     if (modelPrefixed) kinds.push(isDeepest ? 'series' : 'body');
     else if (engineish) kinds.push('engine');
@@ -153,7 +172,10 @@ function main(): void {
   ) as { release: string; hierarchyVersion: string };
   process.stdout.write(`Yayin dosyasi okunuyor: ${pointer.release}\n`);
   const release = JSON.parse(
-    fs.readFileSync(path.join(publishedDir, 'versions', pointer.release), 'utf-8'),
+    fs.readFileSync(
+      path.join(publishedDir, 'versions', pointer.release),
+      'utf-8',
+    ),
   ) as {
     pools: Record<string, string[]>;
     assignments: Record<string, { sourceObservation?: Observation }>;
@@ -211,18 +233,21 @@ function main(): void {
       continue;
     }
 
-    // Motor icin emsal listesi: fiyatlar HAM, yil normalizasyonu motorun isi.
-    // Hesap yil/km/fiyat uzerinden yurur; kimlik alanlari yalnizca tasiyicidir.
-    const listings = observations.map((o) => ({
-      make: labelPath[0],
-      model: labelPath[1] || '',
-      variant: labelPath[2] || '',
-      trim: labelPath[labelPath.length - 1] || '',
-      year: o.year,
-      mileageKm: o.mileage,
-      price: o.price,
-      listingDate: o.listingDate,
-    }));
+    /**
+     * SEYREK YIL: KANIT YOK SAYILMAZ, ODUNC ALINIR.
+     *
+     * Havuzun kendi yil egrisi ve ogrenilen orani bir kez cikarilir; her
+     * hedef yil icin +-2 yil icindeki ilanlar bu egriyle hedef yila
+     * indirgenir ve yil uzakligina gore daha dusuk agirlik alir. Kural
+     * canli motorun kullandigi kuralin AYNISIDIR (year-evidence.ts);
+     * demoya ozel ikinci bir fiyat mantigi YOKTUR.
+     */
+    const { rate } = learnAnnualDepreciation(
+      observations.map((o) => ({ year: o.year, price: o.price })),
+    );
+    const yearCurve = buildYearCurve(
+      observations.map((o) => ({ year: o.year, price: o.price })),
+    );
 
     const byYear = new Map<number, Observation[]>();
     for (const o of observations) {
@@ -231,8 +256,42 @@ function main(): void {
     }
 
     const years: Record<string, number[]> = {};
-    for (const [year, group] of [...byYear.entries()].sort((a, b) => a[0] - b[0])) {
-      if (group.length < MIN_LISTINGS_PER_YEAR) continue;
+    for (const [year, group] of [...byYear.entries()].sort(
+      (a, b) => a[0] - b[0],
+    )) {
+      /**
+       * Kanit secimi CANLI MOTORLA AYNI kuraldan gelir (year-evidence.ts):
+       * once yilin kendi ilanlari, yetmezse +-1, sonra +-2 yil.
+       */
+      const evidence = selectYearEvidence(observations, year, {
+        rate,
+        curve: yearCurve,
+        minCount: PRICING_LIMITS.minCompCountForPricing,
+      });
+      if (evidence.length === 0) continue;
+
+      const directCount = group.length;
+      const borrowedCount = evidence.length - directCount;
+      /**
+       * ETKIN KANIT: agirliklarin toplami. Odunc alinan ilan sayilir ama
+       * dogrudan gozlemle ESIT sayilmaz; guven skoru bu sayidan turer,
+       * ham ilan adedinden degil.
+       */
+      const effectiveCount =
+        Math.round(evidence.reduce((sum, e) => sum + e.weight, 0) * 100) / 100;
+
+      // Fiyatlar hedef yila indirgendi; kimlik alanlari yalnizca tasiyicidir.
+      const listings = evidence.map((e) => ({
+        make: labelPath[0],
+        model: labelPath[1] || '',
+        variant: labelPath[2] || '',
+        trim: labelPath[labelPath.length - 1] || '',
+        year,
+        mileageKm: e.observation.mileage,
+        price: e.price,
+        listingDate: e.observation.listingDate,
+      }));
+      const listingWeights = evidence.map((e) => e.weight);
 
       /**
        * MOTORUN KILOMETRE TEPKISI ORNEKLENIR — TEK NOKTA YETMEZ.
@@ -248,7 +307,9 @@ function main(): void {
        * aradaki degerleri interpole eder. Demoda herkes KENDI kilometresini
        * girecegi icin bu dogruluk sarttir.
        */
-      const kms = group.map((o) => o.mileage).sort((a, b) => a - b);
+      const kms = evidence
+        .map((e) => e.observation.mileage)
+        .sort((a, b) => a - b);
       const at = (q: number) =>
         kms[Math.min(kms.length - 1, Math.floor(kms.length * q))];
       const medianKm = median(kms);
@@ -265,16 +326,17 @@ function main(): void {
       try {
         const fmvs = points.map((mileage) => {
           const r = RobustPricingCalculator.computeValuation({
-            cleanListings: listings as never,
+            cleanListings: listings,
             userYear: year,
             userMileage: mileage,
             matchedLevel: 1,
             baseConfidenceScore: 0.9,
-          } as never);
+            listingWeights,
+          });
           return Math.round(r.fairMarketValue);
         });
         if (fmvs.some((v) => !v || v <= 0)) continue;
-        // [km1, km2, km3, fmv1, fmv2, fmv3, ilan sayisi]
+        // [km1, km2, km3, fmv1, fmv2, fmv3, dogrudan, odunc, etkin kanit]
         years[String(year)] = [
           Math.round(points[0]),
           Math.round(points[1]),
@@ -282,7 +344,9 @@ function main(): void {
           fmvs[0],
           fmvs[1],
           fmvs[2],
-          group.length,
+          directCount,
+          borrowedCount,
+          effectiveCount,
         ];
         yearRows += 1;
       } catch {
