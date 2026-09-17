@@ -15,6 +15,19 @@
  * degistirin.
  */
 
+/**
+ * MANUEL DEGERLENDIRME GEREKCELERI — `pricing-config.ts`
+ * `MANUAL_REVIEW_REASONS` ile AYNI metinler, ayni sirada. Veri seti
+ * gerekceyi kod olarak tasir; metin burada cozulur.
+ */
+const MANUAL_REVIEW_REASONS = [
+  'Bu araç için otomatik fiyatlandırma güvenli aralıkta sonuç üretemedi. ' +
+    'Size gerçekçi bir teklif sunabilmemiz adına aracınız uzmanımız tarafından değerlendirilecektir.',
+  'Bu fiyat segmentinde konsinye komisyonu, müşteriye nakit teklifin üzerinde net bırakacak seviyede kurgulanamıyor. Manuel değerlendirme gereklidir.',
+  'Fiyat invariantları sağlanamadı (nakit/konsinye tutarlılığı). Manuel değerlendirme gereklidir.',
+  'Bu araçta o model yılına ait ilan ile yakın model yıllarının emsalleri birbirini tutmuyor. Fiyat uzman kontrolüyle kesinleşir.',
+];
+
 /** Musteriye giden tum tutarlar 5.000 TL adimlarina yuvarlanir. */
 export const QUOTE_STEP = 5_000;
 const roundToStep = (value: number): number =>
@@ -142,8 +155,12 @@ export interface QuoteInput {
    * ESIT degildir; guven ve likidite bu sayidan okunur, ham adetten degil.
    */
   effectiveComparables: number;
-  /** Havuzun toplam ilan sayisi. */
-  poolListingCount: number;
+  /** MOTORUN kendi guven skoru (0-100), veri seti uretilirken hesaplandi. */
+  engineConfidencePct: number;
+  /** Emsallerin ceyrekler acikligi / medyan — motorun yayilim olcusu. */
+  dispersion: number;
+  /** Motorun manuel degerlendirme karari; 0 = gerekmiyor. */
+  engineManualCode: number;
 }
 
 /**
@@ -158,7 +175,7 @@ export interface QuoteInput {
  * olculen sapma medyanin %50 uzaginda p90 %16,3 idi. Motor duzeltmeyi yuzdelik
  * boru hattinin icinde uygular, bu yuzden sonradan carpmak ayni sonucu vermez.
  */
-function fmvAtMileage(
+export function fmvAtMileage(
   kmPoints: [number, number, number],
   fmvPoints: [number, number, number],
   mileageKm: number,
@@ -195,16 +212,6 @@ function fmvAtMileage(
 /** Gozlenen km araliginin disinda egim oldugu gibi tasinmaz. */
 const OUTSIDE_DAMPING = 0.6;
 
-/**
- * Guven skoru: demoda yalnizca emsal DESTEGINDEN turetilir. Backend ayrica
- * motor/yakit/vites kaniti da tartar; demo veri setinde o alanlar yoktur, bu
- * yuzden burada DAHA MUHAFAZAKAR bir tahmin uretilir (yukari degil).
- */
-function confidenceFrom(yearCount: number, poolCount: number): number {
-  const yearSupport = clamp(yearCount / 25, 0, 1);
-  const poolSupport = clamp(poolCount / 200, 0, 1);
-  return clamp(0.55 + 0.3 * yearSupport + 0.15 * poolSupport, 0, 0.97);
-}
 
 export function quote(input: QuoteInput): DemoQuote {
   const {
@@ -214,7 +221,9 @@ export function quote(input: QuoteInput): DemoQuote {
     directComparables,
     borrowedComparables,
     effectiveComparables,
-    poolListingCount,
+    engineConfidencePct,
+    dispersion,
+    engineManualCode,
   } = input;
 
   // 1) Kilometre: motorun ornekledigi egriden okunur
@@ -230,14 +239,16 @@ export function quote(input: QuoteInput): DemoQuote {
   // 3) Maliyet + risk + hedef kar
   const operatingCost = operatingCostFor(expectedSalePrice);
   /**
-   * GUVEN, HAM ADETTEN DEGIL ETKIN KANITTAN OKUNUR.
+   * GUVEN MOTORUN SKORUDUR — BURADA YENIDEN URETILMEZ.
    *
-   * Hedef yilin kendi ilanlari tam agirlik tasir; komsu yildan indirgenen
-   * ilan daha dusuk agirlikla sayilir (year-evidence.ts). Yalnizca dogrudan
-   * ilani olan bir yilda etkin kanit = dogrudan ilan sayisidir, yani yogun
-   * havuzlarda hicbir sey degismez.
+   * Onceki surumde guven, ilan sayisindan uydurulmus bir egriyle
+   * hesaplaniyordu; motorun eslesme kademesi, motor/yakit/vites bilgisinin
+   * bilinirligi, tazelik ve YAYILIM gibi sinyalleri demoya hic ulasmiyordu.
+   * Olculen sonuc: 10 ilanli bir havuzda demo %68 derken motor %84 diyordu
+   * ve tersi durumda demo, motorun guvenmedigi bir araci emin gosteriyordu.
+   * Skor artik veri seti uretilirken motordan alinip saklaniyor.
    */
-  const dataConfidence = confidenceFrom(effectiveComparables, poolListingCount);
+  const dataConfidence = clamp(engineConfidencePct / 100, 0, 1);
   const liquidityPenalty =
     effectiveComparables >= 25
       ? 0
@@ -245,8 +256,22 @@ export function quote(input: QuoteInput): DemoQuote {
         ? 0.004
         : 0.01;
   const highConfidenceRebate = Math.max(0, dataConfidence - 0.72) * 0.02;
+  /**
+   * YAYILIM RISK REZERVINE GIRER — motordaki ile ayni katsayi.
+   *
+   * Demo bu terimi tasimadigi icin, fiyatlari 4,75 ile 13,5 milyon arasina
+   * dagilmis bir havuzu dar bir havuzla ayni rezervle fiyatliyordu.
+   * `stalePenalty` sabittir: veri seti uretilirken motor ilan tarihi
+   * almadigi icin kendi varsayilan tazelik skorunu (0,6) kullanir.
+   */
+  const stalePenalty = (1 - 0.6) * 0.01;
   const riskRate = clamp(
-    0.003 + (1 - dataConfidence) * 0.022 + liquidityPenalty - highConfidenceRebate,
+    0.003 +
+      (1 - dataConfidence) * 0.022 +
+      dispersion * 0.01 +
+      liquidityPenalty +
+      stalePenalty -
+      highConfidenceRebate,
     LIMITS.riskRateRange[0],
     LIMITS.riskRateRange[1],
   );
@@ -256,6 +281,19 @@ export function quote(input: QuoteInput): DemoQuote {
   // 4) Nakit teklif — musteri tabani delinirse fiyat gosterilmez, manuel istenir
   let requiresManualApproval = false;
   let manualApprovalReason: string | undefined;
+
+  /**
+   * MOTOR "FIYATLAYAMAM" DEDIYSE DEMO DA DEMEZ.
+   *
+   * Veri seti uretilirken motor her (havuz, yil) icin bir KARAR da verir.
+   * Eskiden yalnizca sayisi saklanip karari atiliyordu; motorun manuel
+   * istedigi 1.465 satir demoda kesin fiyat olarak gorunuyordu.
+   */
+  if (engineManualCode > 0) {
+    requiresManualApproval = true;
+    manualApprovalReason =
+      MANUAL_REVIEW_REASONS[engineManualCode - 1] ?? MANUAL_REVIEW_REASONS[0];
+  }
 
   /**
    * TEK ILAN, DESTEKSIZ: fiyat GOSTERILIR ama uzman onayina gider.
@@ -278,7 +316,7 @@ export function quote(input: QuoteInput): DemoQuote {
   if (cashOffer < customerFloor) {
     requiresManualApproval = true;
     manualApprovalReason =
-      'Bu araçta hesaplanan nakit teklif, müşteri koruma tabanının altında kalıyor. Manuel değerlendirme gerekiyor.';
+      manualApprovalReason || MANUAL_REVIEW_REASONS[0];
     cashOffer = roundToStep(customerFloor);
   }
 
@@ -297,8 +335,7 @@ export function quote(input: QuoteInput): DemoQuote {
   if (commissionCap < segment.commission.min) {
     requiresManualApproval = true;
     manualApprovalReason =
-      manualApprovalReason ||
-      'Bu fiyat segmentinde konsinye komisyonu, müşteriye nakit teklifin üzerinde net bırakacak seviyede kurgulanamıyor. Manuel değerlendirme gereklidir.';
+      manualApprovalReason || MANUAL_REVIEW_REASONS[1];
     consignmentCommission = Math.max(0, commissionCap);
   }
 
@@ -319,8 +356,7 @@ export function quote(input: QuoteInput): DemoQuote {
   ) {
     requiresManualApproval = true;
     manualApprovalReason =
-      manualApprovalReason ||
-      'Fiyat tutarlılık kontrolü sağlanamadı. Manuel değerlendirme gerekiyor.';
+      manualApprovalReason || MANUAL_REVIEW_REASONS[2];
   }
 
   return {

@@ -20,14 +20,19 @@
  */
 
 /**
- * [km1, km2, km3, fmv1, fmv2, fmv3, dogrudan, odunc, etkin]
+ * [km1, km2, km3, fmv1, fmv2, fmv3, dogrudan, odunc, etkin,
+ *  yayilim, motor guveni, manuel gerekce kodu]
  *
- * Ilk alti sayi motorun km egrisi ornegi. Son uc sayi KANITI anlatir:
+ * Ilk alti sayi motorun km egrisi ornegi. Sonraki uc sayi KANITI anlatir:
  * hedef yilin kendi ilanlari, komsu yildan indirgenenler ve agirlikli
- * toplam. Bir yilin veri setinde OLMASI ile tek basina fiyatlanabilir
- * OLMASI ayri seylerdir; bu sayilar ikincisini anlatir.
+ * toplam. Son uc sayi MOTORUN KARARIDIR: emsallerin yayilimi, motorun
+ * kendi guven skoru ve manuel degerlendirme gerekcesi. Bir yilin veri
+ * setinde OLMASI ile guvenle fiyatlanabilir OLMASI ayri seylerdir.
  */
 export type YearRow = [
+  number,
+  number,
+  number,
   number,
   number,
   number,
@@ -46,6 +51,9 @@ export interface YearEvidence {
   directComparables: number;
   borrowedComparables: number;
   effectiveComparables: number;
+  dispersion: number;
+  engineConfidencePct: number;
+  engineManualCode: number;
 }
 
 export const yearEvidenceOf = (row: YearRow): YearEvidence => ({
@@ -54,6 +62,9 @@ export const yearEvidenceOf = (row: YearRow): YearEvidence => ({
   directComparables: row[6],
   borrowedComparables: row[7],
   effectiveComparables: row[8],
+  dispersion: row[9],
+  engineConfidencePct: row[10],
+  engineManualCode: row[11],
 });
 
 /**

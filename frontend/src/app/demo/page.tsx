@@ -94,7 +94,9 @@ export default function DemoPage() {
       directComparables: evidence.directComparables,
       borrowedComparables: evidence.borrowedComparables,
       effectiveComparables: evidence.effectiveComparables,
-      poolListingCount: pool.pool.n,
+      engineConfidencePct: evidence.engineConfidencePct,
+      dispersion: evidence.dispersion,
+      engineManualCode: evidence.engineManualCode,
     });
   }, [pool, activeYear, km]);
 

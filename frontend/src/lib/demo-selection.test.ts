@@ -29,7 +29,10 @@ import {
   type YearRow,
 } from './demo-selection.ts';
 
-/** [km1, km2, km3, fmv1, fmv2, fmv3, dogrudan, odunc, etkin] */
+/**
+ * [km1, km2, km3, fmv1, fmv2, fmv3, dogrudan, odunc, etkin,
+ *  yayilim, motor guveni, manuel gerekce kodu]
+ */
 const row = (
   direct: number,
   borrowed = 0,
@@ -44,6 +47,9 @@ const row = (
   direct,
   borrowed,
   effective,
+  0.1,
+  80,
+  0,
 ];
 
 /**

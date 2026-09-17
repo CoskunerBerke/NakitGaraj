@@ -30,8 +30,14 @@ import {
   type DemoQuote,
 } from '../../../frontend/src/lib/demo-pricing';
 
-/** [km1, km2, km3, fmv1, fmv2, fmv3, dogrudan, odunc, etkin kanit] */
+/**
+ * [km1, km2, km3, fmv1, fmv2, fmv3, dogrudan, odunc, etkin,
+ *  yayilim, motor guveni, manuel gerekce kodu]
+ */
 type YearRow = [
+  number,
+  number,
+  number,
   number,
   number,
   number,
@@ -111,6 +117,9 @@ function main(): void {
       const directComparables = row[6];
       const borrowedComparables = row[7];
       const effectiveComparables = row[8];
+      const dispersion = row[9];
+      const engineConfidencePct = row[10];
+      const engineManualCode = row[11];
       if (!hasEnoughEvidence(directComparables, borrowedComparables)) {
         rowsBelowEvidence += 1;
         continue;
@@ -132,7 +141,9 @@ function main(): void {
           directComparables,
           borrowedComparables,
           effectiveComparables,
-          poolListingCount: pool.n,
+          engineConfidencePct,
+          dispersion,
+          engineManualCode,
         });
 
         bucket.evaluations += 1;

@@ -1,5 +1,6 @@
 import { CleanListingItem } from './emsal-matcher.service';
 import {
+  MANUAL_REVIEW_REASONS,
   PRICING_ECONOMICS,
   PRICING_LIMITS,
   PricingSegment,
@@ -392,9 +393,7 @@ export class RobustPricingCalculator {
       // Yanlis/korkutucu fiyat gostermek yerine manuel degerlendirme.
       requiresManualApproval = true;
       // Musteriye gosterilen metin: dahili kar/rezerv rakamlari sizdirilmaz.
-      manualApprovalReason =
-        'Bu araç için otomatik fiyatlandırma güvenli aralıkta sonuç üretemedi. ' +
-        'Size gerçekçi bir teklif sunabilmemiz adına aracınız uzmanımız tarafından değerlendirilecektir.';
+      manualApprovalReason = MANUAL_REVIEW_REASONS.CUSTOMER_FLOOR;
       cashOffer = this.roundCashOffer(customerFloor);
     }
 
@@ -418,8 +417,7 @@ export class RobustPricingCalculator {
     if (commissionCap < segment.commission.min) {
       requiresManualApproval = true;
       manualApprovalReason =
-        manualApprovalReason ||
-        'Bu fiyat segmentinde konsinye komisyonu, müşteriye nakit teklifin üzerinde net bırakacak seviyede kurgulanamıyor. Manuel değerlendirme gereklidir.';
+        manualApprovalReason || MANUAL_REVIEW_REASONS.COMMISSION_FLOOR;
       consignmentCommission = Math.max(0, commissionCap);
     }
 
@@ -451,9 +449,7 @@ export class RobustPricingCalculator {
 
     if (!invariantsOk) {
       requiresManualApproval = true;
-      manualApprovalReason =
-        manualApprovalReason ||
-        'Fiyat invariantları sağlanamadı (nakit/konsinye tutarlılığı). Manuel değerlendirme gereklidir.';
+      manualApprovalReason = manualApprovalReason || MANUAL_REVIEW_REASONS.INVARIANT;
     }
 
     // 10) Guven skoru (bilesik veri kalitesi)

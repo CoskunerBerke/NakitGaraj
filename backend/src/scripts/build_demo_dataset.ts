@@ -26,8 +26,13 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
-import { PRICING_LIMITS } from '../evaluation/pricing-config';
+import {
+  MANUAL_REVIEW_CODES,
+  MANUAL_REVIEW_REASONS,
+  PRICING_LIMITS,
+} from '../evaluation/pricing-config';
 import { RobustPricingCalculator } from '../evaluation/robust-pricing-calculator';
+import { fmvAtMileage } from '../../../frontend/src/lib/demo-pricing';
 import {
   buildYearCurve,
   learnAnnualDepreciation,
@@ -47,6 +52,13 @@ import {
  * sunulacagina fiyat katmani karar verir.
  */
 const MIN_LISTINGS_PER_POOL = 1;
+
+/**
+ * Uretilen fiyatin, hedef yilin KENDI gozlemlerinden ayrilabilecegi en
+ * buyuk oran. Olculen: >=5 dogrudan ilani olan satirlarda sapma medyani
+ * %2,0 / p90 %8,1 / p99 %19,6. Bu esik normal degiskenligin disindadir.
+ */
+const MAX_EVIDENCE_GAP = 0.35;
 
 interface Observation {
   year: number;
@@ -115,22 +127,40 @@ const startsWithModel = (label: string, model: string): boolean =>
   label === model || label.startsWith(model + ' ');
 
 /**
+ * Model adi oneki atilmis etiket: "CLK 200" -> "200", "A3 Sedan" -> "Sedan".
+ *
+ * Onek tek basina seviyenin ne oldugunu SOYLEMEZ. Audi kasayi model adiyla
+ * yazar (A3 Sedan), Mercedes ise motoru (CLK 200). Ayirt eden sey onekten
+ * SONRA kalan kisimdir.
+ */
+function withoutModelPrefix(label: string, model: string): string {
+  if (!startsWithModel(label, model)) return label;
+  return label.slice(model.length).trim();
+}
+
+/**
  * SEVIYELERIN ANLAMI KANITTAN CIKARILIR.
  *
  * Kaynak veride seviye tipi yoktur ve konum sabit degildir; "3. segment
  * motordur" demek tam da bu hatanin kaynagiydi (Audi'de kasa, BMW'de alt
- * model). Bu yuzden her marka/model dalinda o seviyedeki ETIKETLERE bakilir:
+ * model). Her marka/model dalinda o seviyedeki ETIKETLERE bakilir:
  *
- *   - etiketler model adiyla basliyorsa (A3 -> "A3 Sedan") kasa seviyesidir;
- *     altinda baska seviye yoksa kasa degil, seri/tip ayrimidir (RS -> "RS 7").
- *   - hacim/motor imzasi tasiyorsa ("1.5 TFSI", "eDrive 40") motor seviyesidir.
- *   - daldaki EN DERIN seviye ise paket/donanimdir ("Advanced", "M Sport").
- *   - hicbiri degilse seri/tip olarak birakilir (BMW "i Serisi" -> "i4"):
- *     yanlis bir ad vermektense notr kalmak dogrudur.
+ *   - model onekli VE onekten sonrasi motor imzasi tasimiyorsa kasa
+ *     (A3 -> "A3 Sedan"); altinda baska seviye yoksa kasa degil, seri/tip
+ *     ayrimidir (RS -> "RS 7", 300 -> "300 CE").
+ *   - hacim/motor imzasi tasiyorsa motor seviyesidir ("1.5 TFSI",
+ *     "eDrive 40"); model oneki de olsa bu gecerlidir (CLK -> "CLK 200").
+ *   - daldaki EN DERIN seviye ve etiketler cogunlukla RAKAMSIZ ise
+ *     paket/donanimdir ("Advanced", "M Sport", "TS").
+ *   - hicbiri belirgin cogunluk degilse seri/tip olarak birakilir
+ *     (BMW "M Serisi" -> "M3 | M4 | M5"; Jaguar XJ'de paket ve motor ayni
+ *     seviyede karisir). Yanlis bir ad vermektense notr kalmak dogrudur.
  */
 function classifyBranchLevels(paths: string[][], model: string): LevelKind[] {
   const maxDepth = Math.max(...paths.map((p) => p.length));
   const kinds: LevelKind[] = [];
+  /** Belirgin cogunluk esigi; altinda kalan seviye adlandirilmaz. */
+  const MAJORITY = 0.6;
 
   for (let i = 2; i < maxDepth; i++) {
     const labels = [
@@ -142,16 +172,29 @@ function classifyBranchLevels(paths: string[][], model: string): LevelKind[] {
     }
 
     const isDeepest = i === maxDepth - 1;
-    const modelPrefixed =
-      labels.filter((l) => startsWithModel(l, model)).length / labels.length >
-      0.5;
-    const engineish =
-      labels.filter(looksLikeEngine).length / labels.length > 0.5;
+    const share = (predicate: (label: string) => boolean) =>
+      labels.filter(predicate).length / labels.length;
 
-    if (modelPrefixed) kinds.push(isDeepest ? 'series' : 'body');
-    else if (engineish) kinds.push('engine');
-    else if (isDeepest) kinds.push('package');
-    else kinds.push('series');
+    const engineShare = share(
+      (l) =>
+        looksLikeEngine(l) || looksLikeEngine(withoutModelPrefix(l, model)),
+    );
+    const bodyShare = share(
+      (l) =>
+        startsWithModel(l, model) &&
+        !looksLikeEngine(withoutModelPrefix(l, model)),
+    );
+    const digitShare = share((l) => /\d/.test(l));
+
+    if (bodyShare > MAJORITY) {
+      kinds.push(isDeepest ? 'series' : 'body');
+    } else if (engineShare > MAJORITY) {
+      kinds.push('engine');
+    } else if (isDeepest && digitShare <= 0.5) {
+      kinds.push('package');
+    } else {
+      kinds.push('series');
+    }
   }
 
   return kinds;
@@ -324,19 +367,94 @@ function main(): void {
       ];
 
       try {
-        const fmvs = points.map((mileage) => {
-          const r = RobustPricingCalculator.computeValuation({
+        const runs = points.map((mileage) =>
+          RobustPricingCalculator.computeValuation({
             cleanListings: listings,
             userYear: year,
             userMileage: mileage,
             matchedLevel: 1,
             baseConfidenceScore: 0.9,
             listingWeights,
-          });
-          return Math.round(r.fairMarketValue);
-        });
+          }),
+        );
+        const fmvs = runs.map((r) => Math.round(r.fairMarketValue));
         if (fmvs.some((v) => !v || v <= 0)) continue;
-        // [km1, km2, km3, fmv1, fmv2, fmv3, dogrudan, odunc, etkin kanit]
+
+        /**
+         * YAYILIM: emsallerin ceyrekler acikligi / medyan.
+         *
+         * Motor bu sayiyi zaten uretir ve guven skorunu onunla dusurur.
+         * Demo tasimadigi icin, 4,75 ile 13,5 milyon arasina dagilmis dort
+         * ilandan cikan sayiyi 40 ilanlik bir havuz kadar emin gosteriyordu.
+         * Medyan km noktasindaki deger saklanir.
+         */
+        const verdict = runs[1];
+        const audit = verdict.pricingAudit as
+          { dispersion?: number } | undefined;
+        const dispersion = Number((audit?.dispersion ?? 0).toFixed(3));
+
+        /**
+         * MOTORUN KARARI DA TASINIR — yalnizca sayisi degil.
+         *
+         * Eskiden yalnizca `fairMarketValue` saklaniyor, guven skoru ve
+         * manuel onay karari tarayicida ilan sayisindan YENIDEN
+         * uretiliyordu. Sonuc: motorun "bu araci otomatik fiyatlayamam"
+         * dedigi satirlar demoda kesin bir fiyat olarak gorunuyordu
+         * (olculen: 1.126 satir). Karar motorundur.
+         */
+        const confidence = Math.round(verdict.confidenceScore ?? 0);
+        let manualCode = 0;
+        if (verdict.requiresManualApproval) {
+          const index = MANUAL_REVIEW_CODES.findIndex(
+            (key) =>
+              MANUAL_REVIEW_REASONS[key] === verdict.manualApprovalReason,
+          );
+          if (index < 0) {
+            throw new Error(
+              'Bilinmeyen manuel degerlendirme gerekcesi: ' +
+                String(verdict.manualApprovalReason),
+            );
+          }
+          manualCode = index + 1;
+        }
+
+        /**
+         * HEDEF YILIN KENDI GOZLEMIYLE UZLASMA KONTROLU.
+         *
+         * Komsu yillardan kanit odunc almak sayiyi iyilestirir, ama tek bir
+         * dogrudan gozlemi tamamen ezebilir: 2011 Aston Martin DB9 icin
+         * kayitli TEK ilan 6.367 km / 13.500.000 TL iken komsu yillardan
+         * gelen emsaller fiyati 6.795.000 TL gosteriyordu. Sayi savunulamaz
+         * degil ama KESIN de degildir.
+         *
+         * Karsilastirma AYNI kilometrede yapilir: motor, yilin kendi
+         * ilanlarinin medyan kilometresinde calistirilip o yilin gozlenen
+         * medyan fiyatiyla olculur. Olculen: >=5 dogrudan ilani olan
+         * satirlarda sapma p99 %19,6 -- yani %35 esigi normal degiskenligin
+         * cok uzaginda kalir ve yalnizca uzlasmayan satirlari isaretler.
+         */
+        if (manualCode === 0 && group.length > 0) {
+          const directKm = median(group.map((o) => o.mileage));
+          const directPrice = median(group.map((o) => o.price));
+          // EKRANIN gosterecegi sayi ile olculur: tarayici km egrisini
+          // log-interpolasyonla okur ve +-%35 ile kirpar. Motoru ayrica
+          // calistirmak, kullanicinin hic gormedigi bir sayiyi olcerdi.
+          const atDirectKm = fmvAtMileage(
+            [points[0], points[1], points[2]],
+            [fmvs[0], fmvs[1], fmvs[2]],
+            directKm,
+          );
+
+          const gap =
+            directPrice > 0
+              ? Math.abs(atDirectKm - directPrice) / directPrice
+              : 0;
+          if (gap > MAX_EVIDENCE_GAP) {
+            manualCode = MANUAL_REVIEW_CODES.indexOf('EVIDENCE_CONFLICT') + 1;
+          }
+        }
+        // [km1, km2, km3, fmv1, fmv2, fmv3, dogrudan, odunc, etkin,
+        //  yayilim, motor guveni, manuel gerekce kodu]
         years[String(year)] = [
           Math.round(points[0]),
           Math.round(points[1]),
@@ -347,6 +465,9 @@ function main(): void {
           directCount,
           borrowedCount,
           effectiveCount,
+          dispersion,
+          confidence,
+          manualCode,
         ];
         yearRows += 1;
       } catch {

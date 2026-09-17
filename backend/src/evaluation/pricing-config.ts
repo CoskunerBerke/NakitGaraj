@@ -295,6 +295,42 @@ export function getSegment(expectedSalePrice: number): PricingSegment {
   return PRICING_SEGMENTS[PRICING_SEGMENTS.length - 1];
 }
 
+/**
+ * MANUEL DEGERLENDIRME GEREKCELERI — musteriye gosterilen metinler.
+ *
+ * Tek yerde durur cunku demo veri seti motorun KARARINI tasir: hangi
+ * gerekceyle manuel istendigi kod olarak saklanir, metin burada cozulur.
+ * Dahili kar/rezerv rakamlari bu metinlerde sizdirilmaz.
+ */
+export const MANUAL_REVIEW_REASONS = {
+  /** Nakit teklif musteri koruma tabaninin altina duser. */
+  CUSTOMER_FLOOR:
+    'Bu araç için otomatik fiyatlandırma güvenli aralıkta sonuç üretemedi. ' +
+    'Size gerçekçi bir teklif sunabilmemiz adına aracınız uzmanımız tarafından değerlendirilecektir.',
+  /** Konsinye komisyonu, musteriye nakitten fazla birakacak sekilde kurulamaz. */
+  COMMISSION_FLOOR:
+    'Bu fiyat segmentinde konsinye komisyonu, müşteriye nakit teklifin üzerinde net bırakacak seviyede kurgulanamıyor. Manuel değerlendirme gereklidir.',
+  /**
+   * Hedef yilin KENDI gozlemi, komsu yillardan indirgenen kanitla
+   * uzlasmiyor. Sayi uretilebilir ama savunulamaz.
+   */
+  EVIDENCE_CONFLICT:
+    'Bu araçta o model yılına ait ilan ile yakın model yıllarının emsalleri birbirini tutmuyor. Fiyat uzman kontrolüyle kesinleşir.',
+  /** Fiyat siralamasi saglanamadi. */
+  INVARIANT:
+    'Fiyat invariantları sağlanamadı (nakit/konsinye tutarlılığı). Manuel değerlendirme gereklidir.',
+} as const;
+
+export type ManualReviewReasonKey = keyof typeof MANUAL_REVIEW_REASONS;
+
+/** Veri setinde saklanan kod -> gerekce. 0 = manuel gerekmiyor. */
+export const MANUAL_REVIEW_CODES: ManualReviewReasonKey[] = [
+  'CUSTOMER_FLOOR',
+  'COMMISSION_FLOOR',
+  'INVARIANT',
+  'EVIDENCE_CONFLICT',
+];
+
 export function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
