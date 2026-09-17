@@ -34,7 +34,7 @@ function main(): void {
   ) as {
     pools: Record<
       string,
-      { label: string; n: number; km: number; years: Record<string, number[]> }
+      { path: string[]; n: number; km: number; years: Record<string, number[]> }
     >;
   };
 

@@ -14,6 +14,13 @@
  * Boylece demo GERCEK motorun sayilarini gosterir — yaklasik bir taklidini
  * degil.
  *
+ * KATEGORI YOLU DEGISKEN DERINLIKTEDIR — KIRPILMAZ. Havuz kimligi
+ * "audi/a3/a3-sedan/1-5-tfsi/advanced" gibi 2-5 segmentlidir ve segmentlerin
+ * ANLAMI markadan markaya degisir: Audi'de 3. segment kasadir (A3 Sedan),
+ * Alfa Romeo'da motordur (1.4), BMW'de alt modeldir (i4). Bu yuzden veri seti
+ * yolu oldugu gibi tasir ve seviyelerin ne anlama geldigini her marka/model
+ * dali icin KANITTAN sinifllandirir (asagida `classifyBranchLevels`).
+ *
  * Kullanim:
  *   npx ts-node src/scripts/build_demo_dataset.ts [cikis-yolu]
  */
@@ -31,7 +38,15 @@ interface Observation {
   mileage: number;
   price: number;
   listingDate?: string;
+  /** Sahibinden'in kendi etiketleri: ["Audi","A3","A3 Sedan","1.5 TFSI","Advanced"] */
+  requestedTargetPath?: string[];
 }
+
+/**
+ * Bir secim seviyesinin ne oldugu. Kaynakta seviye TIPI YAZMAZ; bu yuzden
+ * etiketlerin kendisinden cikarilir ve emin olunamayan seviye 'series' kalir.
+ */
+type LevelKind = 'body' | 'engine' | 'package' | 'series';
 
 const median = (values: number[]): number => {
   if (values.length === 0) return 0;
@@ -54,18 +69,73 @@ function learnKmDecayPer10k(rows: Observation[]): number {
   }
   if (den <= 0) return 0.015;
   const per10k = -(num / den) * 10_000;
-  return Math.min(0.030, Math.max(0.006, per10k));
+  return Math.min(0.03, Math.max(0.006, per10k));
 }
 
-function titleCase(slug: string): string {
-  return slug
-    .split('-')
-    .map((part) =>
-      /^\d/.test(part) || part.length <= 2
-        ? part.toLocaleUpperCase('tr')
-        : part.charAt(0).toLocaleUpperCase('tr') + part.slice(1),
-    )
-    .join(' ');
+/**
+ * Motor adlarinda gecen yakit/aktarma imzalari. Sondaki rakamlar imzaya
+ * BITISIK yazilabildigi icin (BMW "xDrive40") kelime siniri sonda aranmaz.
+ */
+const ENGINE_TOKEN =
+  /\b(tfsi|tdi|tsi|cdi|dci|crdi|hdi|jtd|jtdm|fsi|mpi|cdti|tce|thp|vti|multijet|bluehdi|ecoboost|skyactiv|vvt|hybrid|edrive|sdrive|xdrive|quattro|4matic|bluetec|cgi|kompressor)\d*\b/i;
+/** "1.4", "2.0" gibi hacim. */
+const ENGINE_DISPLACEMENT = /\d+[.,]\d/;
+/**
+ * "118i", "650Ci", "30 TDI", "M50", "C 180" gibi motor kodu. Basta en cok
+ * iki harf olabilir; "i4"/"MG4" gibi alt model adlari elenir cunku iki-uc
+ * basamak ister.
+ */
+const ENGINE_CODE = /^[a-z]{0,2}\s?\d{2,3}\s?[a-z]{0,4}$/i;
+
+function looksLikeEngine(label: string): boolean {
+  if (!/\d/.test(label)) return false;
+  return (
+    ENGINE_DISPLACEMENT.test(label) ||
+    ENGINE_TOKEN.test(label) ||
+    ENGINE_CODE.test(label.trim())
+  );
+}
+
+const startsWithModel = (label: string, model: string): boolean =>
+  label === model || label.startsWith(model + ' ');
+
+/**
+ * SEVIYELERIN ANLAMI KANITTAN CIKARILIR.
+ *
+ * Kaynak veride seviye tipi yoktur ve konum sabit degildir; "3. segment
+ * motordur" demek tam da bu hatanin kaynagiydi (Audi'de kasa, BMW'de alt
+ * model). Bu yuzden her marka/model dalinda o seviyedeki ETIKETLERE bakilir:
+ *
+ *   - etiketler model adiyla basliyorsa (A3 -> "A3 Sedan") kasa seviyesidir;
+ *     altinda baska seviye yoksa kasa degil, seri/tip ayrimidir (RS -> "RS 7").
+ *   - hacim/motor imzasi tasiyorsa ("1.5 TFSI", "eDrive 40") motor seviyesidir.
+ *   - daldaki EN DERIN seviye ise paket/donanimdir ("Advanced", "M Sport").
+ *   - hicbiri degilse seri/tip olarak birakilir (BMW "i Serisi" -> "i4"):
+ *     yanlis bir ad vermektense notr kalmak dogrudur.
+ */
+function classifyBranchLevels(paths: string[][], model: string): LevelKind[] {
+  const maxDepth = Math.max(...paths.map((p) => p.length));
+  const kinds: LevelKind[] = [];
+
+  for (let i = 2; i < maxDepth; i++) {
+    const labels = [...new Set(paths.filter((p) => p.length > i).map((p) => p[i]))];
+    if (labels.length === 0) {
+      kinds.push('series');
+      continue;
+    }
+
+    const isDeepest = i === maxDepth - 1;
+    const modelPrefixed =
+      labels.filter((l) => startsWithModel(l, model)).length / labels.length > 0.5;
+    const engineish = labels.filter(looksLikeEngine).length / labels.length > 0.5;
+
+    if (modelPrefixed) kinds.push(isDeepest ? 'series' : 'body');
+    else if (engineish) kinds.push('engine');
+    else if (isDeepest) kinds.push('package');
+    else kinds.push('series');
+  }
+
+  return kinds;
 }
 
 function main(): void {
@@ -92,16 +162,17 @@ function main(): void {
   const poolNames = Object.keys(release.pools).sort();
   process.stdout.write(`${poolNames.length} havuz bulundu\n`);
 
-  /** marka -> model -> varyant -> paket listesi (secim agaci) */
-  const tree: Record<string, Record<string, Record<string, string[]>>> = {};
   const pools: Record<
     string,
-    { label: string; n: number; km: number; years: Record<string, number[]> }
+    { path: string[]; n: number; km: number; years: Record<string, number[]> }
   > = {};
+  /** marka/model dali -> o dalda gorulmus tum etiket yollari */
+  const branchPaths = new Map<string, string[][]>();
 
   let listingTotal = 0;
   let yearRows = 0;
   let skipped = 0;
+  let noLabelPath = 0;
   let done = 0;
 
   for (const node of poolNames) {
@@ -122,19 +193,31 @@ function main(): void {
       continue;
     }
 
-    const segments = node.split('/');
-    const [makeSlug, modelSlug, variantSlug, trimSlug] = segments;
-    const make = titleCase(makeSlug);
-    const model = titleCase(modelSlug || '');
-    const variant = titleCase(variantSlug || '-');
-    const trim = titleCase(trimSlug || '-');
+    /**
+     * ETIKETLER KAYNAKTAN GELIR, SLUG'DAN DEGIL.
+     *
+     * Havuz kimligi slug'dir ve noktalama kaybeder: "1-5-tfsi". Slug'i
+     * guzellestirmek "1 5 Tfsi" gibi UYDURMA bir ad uretir. Yayin dosyasi her
+     * ilanla birlikte Sahibinden'in KENDI etiket yolunu tasir; gosterilen ad
+     * odur. Yol uzunlugu havuz kimliginin segment sayisiyla birebir ortusur
+     * (3557/3557 olculdu); ortusmezse havuz alinmaz, tahmin edilmez.
+     */
+    const labelPath = observations.find((o) =>
+      Array.isArray(o.requestedTargetPath),
+    )?.requestedTargetPath;
+    if (!labelPath || labelPath.length !== node.split('/').length) {
+      noLabelPath += 1;
+      skipped += 1;
+      continue;
+    }
 
     // Motor icin emsal listesi: fiyatlar HAM, yil normalizasyonu motorun isi.
+    // Hesap yil/km/fiyat uzerinden yurur; kimlik alanlari yalnizca tasiyicidir.
     const listings = observations.map((o) => ({
-      make,
-      model,
-      variant,
-      trim,
+      make: labelPath[0],
+      model: labelPath[1] || '',
+      variant: labelPath[2] || '',
+      trim: labelPath[labelPath.length - 1] || '',
       year: o.year,
       mileageKm: o.mileage,
       price: o.price,
@@ -166,7 +249,8 @@ function main(): void {
        * girecegi icin bu dogruluk sarttir.
        */
       const kms = group.map((o) => o.mileage).sort((a, b) => a - b);
-      const at = (q: number) => kms[Math.min(kms.length - 1, Math.floor(kms.length * q))];
+      const at = (q: number) =>
+        kms[Math.min(kms.length - 1, Math.floor(kms.length * q))];
       const medianKm = median(kms);
       const lowKm = Math.max(0, Math.min(at(0.15), medianKm));
       const highKm = Math.max(at(0.85), medianKm);
@@ -212,20 +296,22 @@ function main(): void {
     }
 
     pools[node] = {
-      label: [make, model, variant, trim].filter((p) => p && p !== '-').join(' / '),
+      path: labelPath,
       n: observations.length,
       km: Math.round(learnKmDecayPer10k(observations) * 10_000) / 10_000,
       years,
     };
     listingTotal += observations.length;
 
-    if (!tree[make]) tree[make] = {};
-    if (!tree[make][model]) tree[make][model] = {};
-    const variantKey = variant || '-';
-    if (!tree[make][model][variantKey]) tree[make][model][variantKey] = [];
-    if (!tree[make][model][variantKey].includes(trim)) {
-      tree[make][model][variantKey].push(trim);
-    }
+    const branchKey = node.split('/').slice(0, 2).join('/');
+    if (!branchPaths.has(branchKey)) branchPaths.set(branchKey, []);
+    branchPaths.get(branchKey)!.push(labelPath);
+  }
+
+  const levels: Record<string, LevelKind[]> = {};
+  for (const [branchKey, paths] of branchPaths) {
+    const kinds = classifyBranchLevels(paths, paths[0][1] || '');
+    if (kinds.length > 0) levels[branchKey] = kinds;
   }
 
   const payload = {
@@ -235,7 +321,7 @@ function main(): void {
     poolCount: Object.keys(pools).length,
     listingCount: listingTotal,
     yearRowCount: yearRows,
-    tree,
+    levels,
     pools,
   };
 
@@ -243,14 +329,22 @@ function main(): void {
   fs.writeFileSync(outPath, JSON.stringify(payload), 'utf-8');
   const bytes = fs.statSync(outPath).size;
 
+  const kindCount: Record<string, number> = {};
+  for (const kinds of Object.values(levels)) {
+    for (const k of kinds) kindCount[k] = (kindCount[k] || 0) + 1;
+  }
+
   process.stdout.write('\nDEMO VERI SETI HAZIR\n');
   process.stdout.write(`  dosya        : ${outPath}\n`);
   process.stdout.write(`  boyut        : ${(bytes / 1048576).toFixed(2)} MB\n`);
   process.stdout.write(`  havuz        : ${payload.poolCount}\n`);
   process.stdout.write(`  yil satiri   : ${payload.yearRowCount}\n`);
   process.stdout.write(`  temsil ilan  : ${payload.listingCount}\n`);
-  process.stdout.write(`  marka        : ${Object.keys(tree).length}\n`);
-  process.stdout.write(`  atlanan havuz: ${skipped}\n`);
+  process.stdout.write(`  marka/model  : ${Object.keys(levels).length} dal\n`);
+  process.stdout.write(`  seviye tipi  : ${JSON.stringify(kindCount)}\n`);
+  process.stdout.write(
+    `  atlanan havuz: ${skipped} (etiket yolu yok: ${noLabelPath})\n`,
+  );
 }
 
 main();

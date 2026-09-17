@@ -7,6 +7,9 @@
  * yil) icin GERCEK fiyat motorunun urettigi FMV vardir; bu sayfa yalnizca
  * kilometre duzeltmesini ve musteriye donuk fiyat formullerini uygular
  * (`lib/demo-pricing.ts`). Yani gosterilen sayilar motorun kendi sayilaridir.
+ *
+ * Secim zinciri sabit derinlikte DEGILDIR ve mantigi `lib/demo-selection.ts`
+ * icinde, arayuzden bagimsiz sinanabilir halde durur.
  */
 
 import React, { useEffect, useMemo, useState } from 'react';
@@ -21,46 +24,23 @@ import {
   Clock,
 } from 'lucide-react';
 import { quote, hasEnoughEvidence, formatTL, DemoQuote } from '../../lib/demo-pricing';
-
-/** [km1, km2, km3, fmv1, fmv2, fmv3, ilan sayisi] — motorun km egrisi ornegi */
-type YearRow = [number, number, number, number, number, number, number];
-
-interface Pool {
-  label: string;
-  n: number;
-  km: number;
-  years: Record<string, YearRow>;
-}
-
-interface DemoData {
-  generatedAt: string;
-  hierarchyVersion: string;
-  poolCount: number;
-  listingCount: number;
-  yearRowCount: number;
-  tree: Record<string, Record<string, Record<string, string[]>>>;
-  pools: Record<string, Pool>;
-}
-
-const slug = (value: string): string =>
-  value
-    .toLocaleLowerCase('tr')
-    .replace(/ /g, '-')
-    .replace(/ı/g, 'i')
-    .replace(/ş/g, 's')
-    .replace(/ğ/g, 'g')
-    .replace(/ü/g, 'u')
-    .replace(/ö/g, 'o')
-    .replace(/ç/g, 'c');
+import {
+  applyChoice,
+  branchKeyIndex,
+  buildChain,
+  headingFor,
+  poolEntries,
+  resolvePool,
+  yearsOf,
+  type DemoData,
+} from '../../lib/demo-selection';
 
 export default function DemoPage() {
   const [data, setData] = useState<DemoData | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  const [make, setMake] = useState('');
-  const [model, setModel] = useState('');
-  const [variant, setVariant] = useState('');
-  const [trim, setTrim] = useState('');
+  /** Secilen etiketler, koktan asagi: ["Audi","A3","A3 Sedan", ...] */
+  const [selection, setSelection] = useState<string[]>([]);
   const [year, setYear] = useState('');
   const [km, setKm] = useState('');
 
@@ -74,59 +54,25 @@ export default function DemoPage() {
       .catch((e: Error) => setLoadError(e.message));
   }, []);
 
-  const makes = useMemo(
-    () => (data ? Object.keys(data.tree).sort((a, b) => a.localeCompare(b, 'tr')) : []),
-    [data],
-  );
-  const models = useMemo(
-    () =>
-      data && make && data.tree[make]
-        ? Object.keys(data.tree[make]).sort((a, b) => a.localeCompare(b, 'tr'))
-        : [],
-    [data, make],
-  );
-  const variants = useMemo(
-    () =>
-      data && make && model && data.tree[make]?.[model]
-        ? Object.keys(data.tree[make][model]).sort((a, b) => a.localeCompare(b, 'tr'))
-        : [],
-    [data, make, model],
-  );
-  const trims = useMemo(
-    () =>
-      data && make && model && variant && data.tree[make]?.[model]?.[variant]
-        ? [...data.tree[make][model][variant]].sort((a, b) => a.localeCompare(b, 'tr'))
-        : [],
-    [data, make, model, variant],
-  );
+  const entries = useMemo(() => (data ? poolEntries(data) : []), [data]);
+  const branchKeys = useMemo(() => branchKeyIndex(entries), [entries]);
+  const chain = useMemo(() => buildChain(entries, selection), [entries, selection]);
+  const pool = useMemo(() => resolvePool(entries, selection), [entries, selection]);
+  const years = useMemo(() => yearsOf(pool), [pool]);
 
-  /** Secimden havuz anahtarini kur; etikete gore dogrula. */
-  const pool = useMemo(() => {
-    if (!data || !make || !model || !variant || !trim) return null;
-    const parts = [make, model, variant, trim]
-      .filter((p) => p && p !== '-')
-      .map(slug);
-    const key = parts.join('/');
-    if (data.pools[key]) return { key, pool: data.pools[key] };
-    // Etiket eslesmesi: slug'lastirma kenar durumlarina karsi guvenlik agi.
-    const wanted = [make, model, variant, trim].filter((p) => p && p !== '-').join(' / ');
-    const found = Object.entries(data.pools).find(([, p]) => p.label === wanted);
-    return found ? { key: found[0], pool: found[1] } : null;
-  }, [data, make, model, variant, trim]);
-
-  const years = useMemo(
-    () =>
-      pool
-        ? Object.keys(pool.pool.years)
-            .map(Number)
-            .sort((a, b) => b - a)
-        : [],
-    [pool],
+  /**
+   * Ust secim degisince yil KOR RESETLENMEZ: secili yil yeni havuzda da
+   * varsa korunur, yoksa yok sayilir. Durum temizlemek yerine TURETILIR;
+   * bir effect icinden setState cagirmak zincirleme render uretir.
+   */
+  const activeYear = useMemo(
+    () => (pool && year && pool.pool.years[year] ? year : ''),
+    [pool, year],
   );
 
   const result: DemoQuote | null = useMemo(() => {
-    if (!pool || !year) return null;
-    const row = pool.pool.years[year];
+    if (!pool || !activeYear) return null;
+    const row = pool.pool.years[activeYear];
     if (!row) return null;
     const [k1, k2, k3, f1, f2, f3, yearCount] = row;
     if (!hasEnoughEvidence(yearCount)) return null;
@@ -138,27 +84,9 @@ export default function DemoPage() {
       yearListingCount: yearCount,
       poolListingCount: pool.pool.n,
     });
-  }, [pool, year, km]);
+  }, [pool, activeYear, km]);
 
-  const yearRow = pool && year ? pool.pool.years[year] : null;
-
-  const reset = (level: 'make' | 'model' | 'variant' | 'trim') => {
-    if (level === 'make') {
-      setModel('');
-      setVariant('');
-      setTrim('');
-      setYear('');
-    } else if (level === 'model') {
-      setVariant('');
-      setTrim('');
-      setYear('');
-    } else if (level === 'variant') {
-      setTrim('');
-      setYear('');
-    } else {
-      setYear('');
-    }
-  };
+  const yearRow = pool && activeYear ? pool.pool.years[activeYear] : null;
 
   if (loadError) {
     return (
@@ -206,93 +134,38 @@ export default function DemoPage() {
             Araç seçimi
           </div>
 
-          <div className="grid gap-3 md:grid-cols-4">
-            <label className="block">
-              <span className="mb-1.5 block text-xs text-[var(--text-secondary)]">Marka</span>
-              <select
-                className={selectClass}
-                value={make}
-                onChange={(e) => {
-                  setMake(e.target.value);
-                  reset('make');
-                }}
-              >
-                <option value="">Seçiniz</option>
-                {makes.map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="block">
-              <span className="mb-1.5 block text-xs text-[var(--text-secondary)]">Model</span>
-              <select
-                className={selectClass}
-                value={model}
-                disabled={!make}
-                onChange={(e) => {
-                  setModel(e.target.value);
-                  reset('model');
-                }}
-              >
-                <option value="">Seçiniz</option>
-                {models.map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="block">
-              <span className="mb-1.5 block text-xs text-[var(--text-secondary)]">Motor</span>
-              <select
-                className={selectClass}
-                value={variant}
-                disabled={!model}
-                onChange={(e) => {
-                  setVariant(e.target.value);
-                  reset('variant');
-                }}
-              >
-                <option value="">Seçiniz</option>
-                {variants.map((v) => (
-                  <option key={v} value={v}>
-                    {v}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="block">
-              <span className="mb-1.5 block text-xs text-[var(--text-secondary)]">Paket</span>
-              <select
-                className={selectClass}
-                value={trim}
-                disabled={!variant}
-                onChange={(e) => {
-                  setTrim(e.target.value);
-                  reset('trim');
-                }}
-              >
-                <option value="">Seçiniz</option>
-                {trims.map((t) => (
-                  <option key={t} value={t}>
-                    {t}
-                  </option>
-                ))}
-              </select>
-            </label>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {chain.map(({ depth, options, value }) => (
+              <label className="block" key={depth}>
+                <span className="mb-1.5 block text-xs text-[var(--text-secondary)]">
+                  {headingFor(data, branchKeys, selection, depth)}
+                </span>
+                <select
+                  className={selectClass}
+                  value={value}
+                  onChange={(e) =>
+                    setSelection((previous) =>
+                      applyChoice(entries, previous, depth, e.target.value),
+                    )
+                  }
+                >
+                  <option value="">Seçiniz</option>
+                  {options.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ))}
           </div>
 
-          <div className="mt-3 grid gap-3 md:grid-cols-2">
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
             <label className="block">
               <span className="mb-1.5 block text-xs text-[var(--text-secondary)]">Yıl</span>
               <select
                 className={selectClass}
-                value={year}
+                value={activeYear}
                 disabled={!pool}
                 onChange={(e) => setYear(e.target.value)}
               >
@@ -327,9 +200,19 @@ export default function DemoPage() {
               />
             </label>
           </div>
+
+          {pool && (
+            <p className="mt-3 text-xs text-[var(--text-secondary)]">
+              Fiyat havuzu:{' '}
+              <span className="font-medium text-[var(--text-primary)]">
+                {pool.pool.path.join(' › ')}
+              </span>{' '}
+              — {formatTL(pool.pool.n)} emsal ilan
+            </p>
+          )}
         </section>
 
-        {pool && year && !result && (
+        {pool && activeYear && !result && (
           <div className="mt-5 flex items-start gap-3 rounded-xl border border-amber-300/60 bg-amber-50 p-4 text-sm">
             <AlertTriangle size={18} className="mt-0.5 shrink-0 text-amber-600" />
             <p>
@@ -403,16 +286,36 @@ export default function DemoPage() {
                   {formatTL(result.customerConsignmentNet)}{' '}
                   <span className="text-base font-normal opacity-60">TL</span>
                 </div>
+
+                {/*
+                  HESAP ACIK YAZILIR. Net tutar BEKLENEN SATIS'tan komisyon
+                  dusulerek bulunur, ilan fiyatindan degil; ilan fiyati pazarlik
+                  payi tasidigi icin her zaman daha yuksektir. Ikisi yan yana
+                  yazilip beklenen satis gizlendiginde kart "ilan - komisyon"
+                  gibi okunuyor ve rakamlar tutmuyordu.
+                */}
                 <dl className="mt-3 space-y-1.5 text-xs text-[var(--text-secondary)]">
                   <div className="flex justify-between">
                     <dt>İlan fiyatı</dt>
                     <dd className="font-medium">{formatTL(result.consignmentListingPrice)} TL</dd>
                   </div>
                   <div className="flex justify-between">
-                    <dt>Komisyonumuz</dt>
-                    <dd className="font-medium">{formatTL(result.consignmentCommission)} TL</dd>
+                    <dt>Beklenen satış</dt>
+                    <dd className="font-medium">{formatTL(result.expectedSalePrice)} TL</dd>
                   </div>
                   <div className="flex justify-between">
+                    <dt>Komisyonumuz</dt>
+                    <dd className="font-medium">
+                      − {formatTL(result.consignmentCommission)} TL
+                    </dd>
+                  </div>
+                  <div className="flex justify-between border-t border-[#a30022]/20 pt-1.5 text-[var(--text-primary)]">
+                    <dt className="font-medium">Elinize geçecek</dt>
+                    <dd className="font-semibold">
+                      {formatTL(result.customerConsignmentNet)} TL
+                    </dd>
+                  </div>
+                  <div className="flex justify-between pt-0.5">
                     <dt className="flex items-center gap-1">
                       <Clock size={11} /> Tahmini satış
                     </dt>
@@ -432,9 +335,11 @@ export default function DemoPage() {
             )}
 
             <p className="text-xs leading-relaxed text-[var(--text-secondary)]">
-              Fiyatlar {formatTL(data.listingCount)} gerçek ilandan hesaplanır; aracın
-              hasar/boya durumu ve ekspertiz sonucuna göre nihai teklif değişebilir.
-              Veri tarihi: {new Date(data.generatedAt).toLocaleDateString('tr-TR')}.
+              İlan fiyatı pazarlık payı taşır; komisyon beklenen satış üzerinden
+              alınır. Fiyatlar {formatTL(data.listingCount)} gerçek ilandan hesaplanır;
+              aracın hasar/boya durumu ve ekspertiz sonucuna göre nihai teklif
+              değişebilir. Veri tarihi:{' '}
+              {new Date(data.generatedAt).toLocaleDateString('tr-TR')}.
             </p>
           </section>
         )}

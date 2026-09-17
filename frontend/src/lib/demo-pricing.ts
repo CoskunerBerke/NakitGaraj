@@ -98,6 +98,12 @@ const psychologicalListingPrice = (calculated: number, floor: number): number =>
 export interface DemoQuote {
   /** Temiz piyasa referansi (emsal merkezi), km'ye gore duzeltilmis. */
   fairMarketValue: number;
+  /**
+   * Konsinyede gercekci satis beklentisi. Komisyon ve musteri neti BUNUN
+   * uzerinden kurulur (net = beklenen satis - komisyon), ilan fiyatindan
+   * DEGIL; kart bu yuzden ikisini ayri gosterir.
+   */
+  expectedSalePrice: number;
   cashOffer: number;
   consignmentListingPrice: number;
   consignmentCommission: number;
@@ -274,6 +280,7 @@ export function quote(input: QuoteInput): DemoQuote {
 
   return {
     fairMarketValue,
+    expectedSalePrice,
     cashOffer,
     consignmentListingPrice,
     consignmentCommission,

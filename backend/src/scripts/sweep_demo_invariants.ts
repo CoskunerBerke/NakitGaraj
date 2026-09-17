@@ -34,7 +34,8 @@ import {
 type YearRow = [number, number, number, number, number, number, number];
 
 interface Pool {
-  label: string;
+  /** Sahibinden etiket yolu: ["Audi","A3","A3 Sedan","1.5 TFSI","Advanced"] */
+  path: string[];
   n: number;
   years: Record<string, YearRow>;
 }
