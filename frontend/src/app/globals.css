@@ -196,3 +196,223 @@ body {
 }
 
 
+
+/* ============================================================
+   DEMO — HAREKET KATMANI
+   ------------------------------------------------------------
+   Yalnizca /demo ekranini etkiler (`demo-` onekli siniflar).
+   Tamami CSS: sayfaya animasyon icin ek bir bagimlilik girmez.
+   Hareket yalnizca `transform` ve `opacity` uzerinden yapilir;
+   genislik/yukseklik animasyonu yoktur, dolayisiyla yerlesim
+   yeniden hesaplanmaz.
+   ============================================================ */
+
+@keyframes demo-rise {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 10px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes demo-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes demo-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Ust secim degisince alt alan "yenilendi" sinyali verir — kirmizi yanip
+   sonmez, yalnizca kisa bir tazelenme hissi birakir. */
+@keyframes demo-refresh {
+  from {
+    opacity: 0.4;
+    transform: translate3d(0, -3px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.demo-rise {
+  animation: demo-rise 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.demo-fade {
+  animation: demo-fade 260ms ease-out both;
+}
+
+.demo-pop {
+  animation: demo-pop 280ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.demo-refresh {
+  animation: demo-refresh 280ms ease-out;
+}
+
+.demo-delay-1 {
+  animation-delay: 60ms;
+}
+.demo-delay-2 {
+  animation-delay: 120ms;
+}
+.demo-delay-3 {
+  animation-delay: 180ms;
+}
+
+/* Kart mikro-etkilesimi: yalnizca gercek imlecli cihazlarda. */
+.demo-card {
+  transition:
+    transform 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 180ms ease,
+    border-color 180ms ease;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .demo-card:hover {
+    transform: translate3d(0, -2px, 0);
+    box-shadow: 0 12px 28px -18px rgba(15, 17, 21, 0.38);
+  }
+
+  /* Konsinye karti satis anlatisinin merkezi: golgesi biraz daha belirgin,
+     ama hareket miktari nakit kartiyla AYNI kalir. */
+  .demo-card-accent:hover {
+    box-shadow: 0 14px 34px -16px rgba(163, 0, 34, 0.32);
+  }
+}
+
+.demo-select {
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    opacity 160ms ease;
+}
+
+.demo-select:hover:not(:disabled) {
+  border-color: color-mix(in srgb, #a30022 32%, var(--border-gray));
+}
+
+.demo-select:focus-visible,
+.demo-input:focus-visible {
+  border-color: #a30022;
+  box-shadow: 0 0 0 3px rgba(163, 0, 34, 0.18);
+  outline: none;
+}
+
+.demo-input {
+  transition:
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    opacity 160ms ease;
+}
+
+/* Secim degisip yeni fiyat hesaplanana kadar cok kisa bir yatisma. */
+.demo-settling {
+  opacity: 0.55;
+  transition: opacity 120ms ease;
+}
+
+.demo-settled {
+  opacity: 1;
+  transition: opacity 180ms ease;
+}
+
+/* Guven gostergesi: panoya donusmeyen, tek satirlik ince bir bar. */
+.demo-confidence-track {
+  width: 56px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--accent-gray);
+  overflow: hidden;
+}
+
+.demo-confidence-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition:
+    width 520ms cubic-bezier(0.22, 1, 0.36, 1),
+    background-color 260ms ease;
+}
+
+/* Gezinme ve CTA: odak halkasi her yerde gorunur olsun. */
+.nav-focus:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(163, 0, 34, 0.35);
+  border-radius: 0.75rem;
+}
+
+.nav-cta {
+  transition:
+    transform 160ms cubic-bezier(0.22, 1, 0.36, 1),
+    box-shadow 160ms ease,
+    background-color 160ms ease;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .nav-cta:hover {
+    transform: translate3d(0, -1px, 0);
+    box-shadow: 0 10px 22px -12px rgba(163, 0, 34, 0.55);
+  }
+}
+
+.nav-cta:active {
+  transform: scale(0.98);
+}
+
+/* Sayfa kaydirilinca baslik biraz daha belirginlesir; yuksekligi DEGISMEZ. */
+.nav-scrolled {
+  box-shadow: 0 6px 24px -20px rgba(15, 17, 21, 0.55);
+  border-bottom-color: color-mix(in srgb, var(--border-gray) 70%, transparent);
+}
+
+/*
+ * ERISILEBILIRLIK: kullanici hareketi azaltmayi sectiyse animasyon YOK.
+ * Sayac da bu tercihi okur (`use-count-up.ts`) ve degeri aninda yazar.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .demo-rise,
+  .demo-fade,
+  .demo-pop,
+  .demo-refresh {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+
+  .demo-card,
+  .demo-select,
+  .demo-input,
+  .demo-confidence-fill,
+  .nav-cta,
+  .demo-settling,
+  .demo-settled {
+    transition: none !important;
+  }
+
+  .demo-card:hover,
+  .nav-cta:hover,
+  .nav-cta:active {
+    transform: none !important;
+  }
+
+  .demo-settling {
+    opacity: 1 !important;
+  }
+}

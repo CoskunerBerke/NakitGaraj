@@ -10,6 +10,11 @@
  *
  * Secim zinciri sabit derinlikte DEGILDIR ve mantigi `lib/demo-selection.ts`
  * icinde, arayuzden bagimsiz sinanabilir halde durur.
+ *
+ * HAREKET: tamami CSS (`globals.css` -> "DEMO — HAREKET KATMANI"). Tek
+ * istisna fiyat sayaci; o da tek bir requestAnimationFrame dongusudur
+ * (`lib/use-count-up.ts`). Sayfaya animasyon icin ek bagimlilik girmez ve
+ * hareket yalnizca transform/opacity uzerinden yapilir.
  */
 
 import React, { useEffect, useMemo, useState } from 'react';
@@ -24,6 +29,7 @@ import {
   Clock,
 } from 'lucide-react';
 import { quote, hasEnoughEvidence, formatTL, DemoQuote } from '../../lib/demo-pricing';
+import { useCountUp } from '../../lib/use-count-up';
 import {
   applyChoice,
   branchKeyIndex,
@@ -35,6 +41,17 @@ import {
   yearsOf,
   type DemoData,
 } from '../../lib/demo-selection';
+
+/**
+ * Guven tonu. Kirmizi marka rengidir, "kotu" anlamina gelmez; bu yuzden
+ * trafik isigi yerine mevcut paletten iki ton kullanilir: guclu kanit
+ * icin olumlu yesil, zayif kanit ve uzman kontrolu icin uyari kehribari.
+ */
+const confidenceTone = (pct: number, needsReview: boolean): string => {
+  if (needsReview || pct < 70) return '#d97706';
+  if (pct < 80) return '#f59e0b';
+  return '#047857';
+};
 
 export default function DemoPage() {
   const [data, setData] = useState<DemoData | null>(null);
@@ -102,10 +119,19 @@ export default function DemoPage() {
 
   const yearRow = pool && activeYear ? pool.pool.years[activeYear] : null;
 
+  /**
+   * Sayilar yerinden ziplamaz, yeni degere sayarak gider. Fiyat ortadan
+   * kalkarsa (gecersiz secim) bolum komple kalkar ve sayac bir sonraki
+   * gosterimde bastan baslar; yani eski fiyat yeni araca hic takilmaz.
+   */
+  const shownMarketValue = useCountUp(result?.fairMarketValue ?? 0);
+  const shownCashOffer = useCountUp(result?.cashOffer ?? 0);
+  const shownConsignmentNet = useCountUp(result?.customerConsignmentNet ?? 0);
+
   if (loadError) {
     return (
       <main className="min-h-screen flex items-center justify-center p-6">
-        <div className="max-w-md text-center">
+        <div className="demo-fade max-w-md text-center">
           <AlertTriangle className="mx-auto mb-3 text-[#a30022]" size={32} />
           <p className="text-sm text-[var(--text-secondary)]">{loadError}</p>
         </div>
@@ -122,12 +148,14 @@ export default function DemoPage() {
   }
 
   const selectClass =
-    'w-full rounded-lg border border-[var(--border-gray)] bg-[var(--card-bg)] px-3 py-2.5 text-sm outline-none transition focus:border-[#a30022] disabled:opacity-40';
+    'demo-select w-full rounded-lg border border-[var(--border-gray)] bg-[var(--card-bg)] px-3 py-2.5 text-sm outline-none disabled:opacity-40';
+  const inputClass =
+    'demo-input w-full rounded-lg border border-[var(--border-gray)] bg-[var(--card-bg)] px-3 py-2.5 text-sm outline-none disabled:opacity-40';
 
   return (
     <main className="min-h-screen px-4 py-10 md:py-14">
       <div className="mx-auto max-w-5xl">
-        <header className="mb-8">
+        <header className="demo-rise mb-8">
           <div className="inline-flex items-center gap-2 rounded-full bg-[#a30022]/10 px-3 py-1 text-xs font-medium text-[#a30022]">
             <Database size={13} />
             Canlı piyasa verisi
@@ -142,7 +170,7 @@ export default function DemoPage() {
           </p>
         </header>
 
-        <section className="rounded-2xl border border-[var(--border-gray)] bg-[var(--card-bg)] p-5 shadow-sm md:p-6">
+        <section className="demo-rise demo-delay-1 rounded-2xl border border-[var(--border-gray)] bg-[var(--card-bg)] p-5 shadow-sm md:p-6">
           <div className="mb-4 flex items-center gap-2 text-sm font-medium">
             <Search size={16} className="text-[#a30022]" />
             Araç seçimi
@@ -150,7 +178,14 @@ export default function DemoPage() {
 
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {chain.map(({ depth, options, value }) => (
-              <label className="block" key={depth}>
+              // Anahtar SECENEK KUMESINI tasir: ust secim degisip bu alanin
+              // secenekleri yenilendiginde alan kisa bir tazelenme animasyonu
+              // oynatir. Ayni seviyede secim yapmak seti degistirmedigi icin
+              // kullanici kendi sectigi alanda hicbir hareket gormez.
+              <label
+                className="demo-refresh block"
+                key={`${depth}:${options.join('|')}`}
+              >
                 <span className="mb-1.5 block text-xs text-[var(--text-secondary)]">
                   {headingFor(data, branchKeys, selection, depth)}
                 </span>
@@ -175,7 +210,7 @@ export default function DemoPage() {
           </div>
 
           <div className="mt-3 grid gap-3 sm:grid-cols-2">
-            <label className="block">
+            <label className="demo-refresh block" key={`yil:${pool?.key ?? ''}`}>
               <span className="mb-1.5 block text-xs text-[var(--text-secondary)]">Yıl</span>
               <select
                 className={selectClass}
@@ -196,13 +231,16 @@ export default function DemoPage() {
               <span className="mb-1.5 block text-xs text-[var(--text-secondary)]">
                 Kilometre{' '}
                 {yearRow ? (
-                  <span className="opacity-60">
+                  // Varsayilan kilometre yil degisince degisir; sessizce
+                  // yer degistirmesin diye yumusak girer. Kullanicinin
+                  // YAZDIGI deger buradan etkilenmez.
+                  <span className="demo-fade opacity-60" key={yearRow[1]}>
                     — boş bırakılırsa {formatTL(yearRow[1])} km varsayılır
                   </span>
                 ) : null}
               </span>
               <input
-                className={selectClass}
+                className={inputClass}
                 inputMode="numeric"
                 placeholder={yearRow ? formatTL(yearRow[1]) : 'örn. 120.000'}
                 value={km}
@@ -216,7 +254,10 @@ export default function DemoPage() {
           </div>
 
           {pool && (
-            <p className="mt-3 text-xs text-[var(--text-secondary)]">
+            <p
+              className="demo-fade mt-3 text-xs text-[var(--text-secondary)]"
+              key={pool.key}
+            >
               Fiyat havuzu:{' '}
               <span className="font-medium text-[var(--text-primary)]">
                 {pool.pool.path.join(' › ')}
@@ -227,7 +268,7 @@ export default function DemoPage() {
         </section>
 
         {pool && activeYear && !result && (
-          <div className="mt-5 flex items-start gap-3 rounded-xl border border-amber-300/60 bg-amber-50 p-4 text-sm">
+          <div className="demo-rise mt-5 flex items-start gap-3 rounded-xl border border-amber-300/60 bg-amber-50 p-4 text-sm">
             <AlertTriangle size={18} className="mt-0.5 shrink-0 text-amber-600" />
             <p>
               Bu yıl için yeterli emsal yok. Yanlış bir fiyat göstermektense fiyat
@@ -237,19 +278,28 @@ export default function DemoPage() {
         )}
 
         {result && (
+          /*
+            Bolum, fiyat OLUSTUGUNDA monte olur ve bir kez iceri girer;
+            sonraki secimlerde yerinde kalir ki sayilar eski degerden
+            yenisine SAYARAK gitsin. Arac gecersizlesirse (marka degisimi)
+            `result` null olur, bolum ayni karede kalkar: yanlis araca
+            takili eski fiyat ekranda kalmaz.
+          */
           <section className="mt-5 space-y-4">
-            <div className="rounded-2xl border border-[var(--border-gray)] bg-[var(--card-bg)] p-5 shadow-sm">
+            <div className="demo-rise demo-card rounded-2xl border border-[var(--border-gray)] bg-[var(--card-bg)] p-5 shadow-sm">
               <div className="flex flex-wrap items-baseline justify-between gap-2">
                 <div>
                   <div className="text-xs text-[var(--text-secondary)]">
                     Piyasa değeri (emsal merkezi)
                   </div>
-                  <div className="mt-0.5 text-3xl font-semibold tracking-tight">
-                    {formatTL(result.fairMarketValue)}{' '}
+                  <div className="mt-0.5 text-3xl font-semibold tracking-tight tabular-nums">
+                    {formatTL(shownMarketValue)}{' '}
                     <span className="text-lg font-normal opacity-60">TL</span>
                   </div>
                 </div>
-                <div className="text-right text-xs text-[var(--text-secondary)]">
+
+                {/* Kanit bloku sayidan AYRI, biraz gecikmeli girer. */}
+                <div className="demo-fade demo-delay-2 text-right text-xs text-[var(--text-secondary)]">
                   <div className="flex items-center justify-end gap-1.5">
                     <TrendingUp size={13} />
                     {formatTL(result.directComparables)} doğrudan emsal
@@ -259,12 +309,30 @@ export default function DemoPage() {
                       + {formatTL(result.borrowedComparables)} yakın yıl emsali
                     </div>
                   )}
-                  <div className="mt-0.5">veri güveni %{result.confidencePct}</div>
+                  <div className="mt-1 flex items-center justify-end gap-2">
+                    <span>veri güveni %{result.confidencePct}</span>
+                    <span
+                      className="demo-confidence-track"
+                      role="img"
+                      aria-label={`Veri güveni yüzde ${result.confidencePct}`}
+                    >
+                      <span
+                        className="demo-confidence-fill block"
+                        style={{
+                          width: `${Math.max(6, Math.min(100, result.confidencePct))}%`,
+                          backgroundColor: confidenceTone(
+                            result.confidencePct,
+                            result.requiresManualApproval,
+                          ),
+                        }}
+                      />
+                    </span>
+                  </div>
                 </div>
               </div>
 
               {result.mileageAdjustment !== 0 && (
-                <p className="mt-3 text-xs text-[var(--text-secondary)]">
+                <p className="demo-fade demo-delay-2 mt-3 text-xs text-[var(--text-secondary)]">
                   Kilometre düzeltmesi:{' '}
                   <strong className={result.mileageAdjustment > 0 ? 'text-emerald-700' : 'text-[#a30022]'}>
                     {result.mileageAdjustment > 0 ? '+' : ''}
@@ -276,13 +344,13 @@ export default function DemoPage() {
             </div>
 
             <div className="grid gap-4 md:grid-cols-2">
-              <div className="rounded-2xl border-2 border-[var(--border-gray)] bg-[var(--card-bg)] p-5">
+              <div className="demo-rise demo-delay-1 demo-card rounded-2xl border-2 border-[var(--border-gray)] bg-[var(--card-bg)] p-5">
                 <div className="flex items-center gap-2 text-sm font-medium">
                   <Banknote size={17} className="text-[var(--text-secondary)]" />
                   Nakit alım — bugün
                 </div>
-                <div className="mt-3 text-3xl font-semibold tracking-tight">
-                  {formatTL(result.cashOffer)}{' '}
+                <div className="mt-3 text-3xl font-semibold tracking-tight tabular-nums">
+                  {formatTL(shownCashOffer)}{' '}
                   <span className="text-base font-normal opacity-60">TL</span>
                 </div>
                 <p className="mt-2 text-xs leading-relaxed text-[var(--text-secondary)]">
@@ -291,18 +359,18 @@ export default function DemoPage() {
                 </p>
               </div>
 
-              <div className="rounded-2xl border-2 border-[#a30022] bg-[#a30022]/[0.03] p-5">
+              <div className="demo-rise demo-delay-2 demo-card demo-card-accent rounded-2xl border-2 border-[#a30022] bg-[#a30022]/[0.03] p-5">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2 text-sm font-medium text-[#a30022]">
                     <Handshake size={17} />
                     Konsinye — elinize geçecek
                   </div>
-                  <span className="rounded-full bg-[#a30022] px-2 py-0.5 text-[10px] font-semibold text-white">
+                  <span className="demo-pop demo-delay-3 rounded-full bg-[#a30022] px-2 py-0.5 text-[10px] font-semibold text-white">
                     +{formatTL(result.consignmentAdvantage)} TL
                   </span>
                 </div>
-                <div className="mt-3 text-3xl font-semibold tracking-tight text-[#a30022]">
-                  {formatTL(result.customerConsignmentNet)}{' '}
+                <div className="mt-3 text-3xl font-semibold tracking-tight tabular-nums text-[#a30022]">
+                  {formatTL(shownConsignmentNet)}{' '}
                   <span className="text-base font-normal opacity-60">TL</span>
                 </div>
 
@@ -313,24 +381,28 @@ export default function DemoPage() {
                   yazilip beklenen satis gizlendiginde kart "ilan - komisyon"
                   gibi okunuyor ve rakamlar tutmuyordu.
                 */}
-                <dl className="mt-3 space-y-1.5 text-xs text-[var(--text-secondary)]">
+                <dl className="demo-fade demo-delay-3 mt-3 space-y-1.5 text-xs text-[var(--text-secondary)]">
                   <div className="flex justify-between">
                     <dt>İlan fiyatı</dt>
-                    <dd className="font-medium">{formatTL(result.consignmentListingPrice)} TL</dd>
+                    <dd className="font-medium tabular-nums">
+                      {formatTL(result.consignmentListingPrice)} TL
+                    </dd>
                   </div>
                   <div className="flex justify-between">
                     <dt>Beklenen satış</dt>
-                    <dd className="font-medium">{formatTL(result.expectedSalePrice)} TL</dd>
+                    <dd className="font-medium tabular-nums">
+                      {formatTL(result.expectedSalePrice)} TL
+                    </dd>
                   </div>
                   <div className="flex justify-between">
                     <dt>Komisyonumuz</dt>
-                    <dd className="font-medium">
+                    <dd className="font-medium tabular-nums">
                       − {formatTL(result.consignmentCommission)} TL
                     </dd>
                   </div>
                   <div className="flex justify-between border-t border-[#a30022]/20 pt-1.5 text-[var(--text-primary)]">
                     <dt className="font-medium">Elinize geçecek</dt>
-                    <dd className="font-semibold">
+                    <dd className="font-semibold tabular-nums">
                       {formatTL(result.customerConsignmentNet)} TL
                     </dd>
                   </div>
@@ -347,13 +419,18 @@ export default function DemoPage() {
             </div>
 
             {result.requiresManualApproval && (
-              <div className="flex items-start gap-3 rounded-xl border border-amber-300/60 bg-amber-50 p-4 text-sm">
+              // Fiyat EKRANDA KALIR; uyari altina bilgilendirme olarak girer.
+              // Hata ekrani degil, "bu araca uzman baksin" notudur.
+              <div className="demo-rise demo-delay-3 flex items-start gap-3 rounded-xl border border-amber-300/60 bg-amber-50 p-4 text-sm">
                 <AlertTriangle size={18} className="mt-0.5 shrink-0 text-amber-600" />
-                <p>{result.manualApprovalReason}</p>
+                <div>
+                  <p className="font-medium text-amber-900">Uzman kontrolü önerilir</p>
+                  <p className="mt-0.5 text-amber-900/80">{result.manualApprovalReason}</p>
+                </div>
               </div>
             )}
 
-            <p className="text-xs leading-relaxed text-[var(--text-secondary)]">
+            <p className="demo-fade demo-delay-3 text-xs leading-relaxed text-[var(--text-secondary)]">
               İlan fiyatı pazarlık payı taşır; komisyon beklenen satış üzerinden
               alınır. Fiyatlar {formatTL(data.listingCount)} gerçek ilandan hesaplanır;
               aracın hasar/boya durumu ve ekspertiz sonucuna göre nihai teklif

@@ -1,6 +1,6 @@
 'use client';
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { Shield, Car, LayoutDashboard, Sun, Moon, Globe } from 'lucide-react';
@@ -11,6 +11,24 @@ export default function Navbar() {
   const pathname = usePathname();
   const { theme, toggleTheme } = useTheme();
   const { language, setLanguage, t } = useLanguage();
+  const [scrolled, setScrolled] = useState(false);
+
+  /**
+   * Sayfa kaydirilinca baslik biraz daha belirginlesir. Yukseklik ve
+   * markalama DEGISMEZ; yalnizca golge/kenarlik tonu degisir. Dinleyici
+   * passive, is yalnizca esik gecildiginde yapilir.
+   */
+  useEffect(() => {
+    const onScroll = () => setScrolled(window.scrollY > 8);
+    // Ilk okuma bir sonraki kareye birakilir: effect icinde senkron
+    // setState zincirleme render tetikler.
+    const frame = requestAnimationFrame(onScroll);
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener('scroll', onScroll);
+    };
+  }, []);
 
   const navItems = [
     { name: t('nav.valuation'), href: '/degerleme', icon: Shield },
@@ -18,9 +36,13 @@ export default function Navbar() {
   ];
 
   return (
-    <header className="sticky top-0 z-50 w-full glass-panel border-b border-zinc-800/10 dark:border-white/5 px-4 md:px-8 py-4 transition-all duration-300">
+    <header
+      className={`sticky top-0 z-50 w-full glass-panel border-b border-zinc-800/10 dark:border-white/5 px-4 md:px-8 py-4 transition-all duration-300 ${
+        scrolled ? 'nav-scrolled' : ''
+      }`}
+    >
       <div className="max-w-7xl mx-auto flex items-center justify-between">
-        <Link href="/" className="flex items-center gap-2 group">
+        <Link href="/" className="nav-focus flex items-center gap-2 group">
           <img
             src="/logo.png"
             alt="NakitGaraj Logo"
@@ -36,7 +58,7 @@ export default function Navbar() {
               <Link
                 key={item.href}
                 href={item.href}
-                className={`flex items-center gap-2 text-sm font-medium transition-all ${
+                className={`nav-focus flex items-center gap-2 text-sm font-medium transition-all ${
                   isActive
                     ? 'text-brand-orange'
                     : 'text-zinc-500 dark:text-zinc-300 hover:text-brand-orange'
@@ -53,7 +75,7 @@ export default function Navbar() {
           {/* Theme Switcher */}
           <button
             onClick={toggleTheme}
-            className="p-2 rounded-lg hover:bg-zinc-800/10 dark:hover:bg-white/5 text-zinc-500 dark:text-zinc-400 transition-all border border-transparent hover:border-zinc-800/20 dark:hover:border-white/10"
+            className="nav-focus p-2 rounded-lg hover:bg-zinc-800/10 dark:hover:bg-white/5 text-zinc-500 dark:text-zinc-400 transition-all border border-transparent hover:border-zinc-800/20 dark:hover:border-white/10"
             title={theme === 'light' ? 'Koyu Tema' : 'Açık Tema'}
           >
             {theme === 'light' ? <Moon className="w-4 h-4" /> : <Sun className="w-4 h-4" />}
@@ -62,7 +84,7 @@ export default function Navbar() {
           {/* Language Switcher */}
           <button
             onClick={() => setLanguage(language === 'tr' ? 'en' : 'tr')}
-            className="p-2 rounded-lg hover:bg-zinc-800/10 dark:hover:bg-white/5 text-zinc-500 dark:text-zinc-400 transition-all border border-transparent hover:border-zinc-800/20 dark:hover:border-white/10 flex items-center gap-1.5 text-xs font-bold"
+            className="nav-focus p-2 rounded-lg hover:bg-zinc-800/10 dark:hover:bg-white/5 text-zinc-500 dark:text-zinc-400 transition-all border border-transparent hover:border-zinc-800/20 dark:hover:border-white/10 flex items-center gap-1.5 text-xs font-bold"
             title={language === 'tr' ? 'English' : 'Türkçe'}
           >
             <Globe className="w-3.5 h-3.5" />
@@ -71,7 +93,7 @@ export default function Navbar() {
 
           <Link
             href="/degerleme"
-            className="hidden sm:inline-flex items-center justify-center bg-brand-orange hover:bg-brand-orange/90 text-white font-semibold text-xs px-4 py-2 rounded-xl transition-all duration-300 shadow-md shadow-brand-orange/20 cursor-pointer"
+            className="nav-cta nav-focus hidden sm:inline-flex items-center justify-center bg-brand-orange hover:bg-brand-orange/90 text-white font-semibold text-xs px-4 py-2 rounded-xl shadow-md shadow-brand-orange/20 cursor-pointer"
           >
             {t('wiz.step3.banner.btn')}
           </Link>
