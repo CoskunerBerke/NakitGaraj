@@ -1,9 +1,28 @@
 /**
  * DEMO VERI SETI URETICI — Vercel'e gidecek KUCUK dosya.
  *
- * NEDEN: yayinlanan piyasa artefakti 151 MB'dir (184.000 ilan). Vercel'e
- * konamaz. Ama demoda kisiler KENDI araclarini deneyecek, yani elimizde tum
- * havuzlar bulunmali.
+ * KATALOG ile FIYAT AYRI KAYNAKTAN GELIR.
+ *
+ * Eskiden bu script yalnizca YAYINLANAN PIYASA DOSYASINI okuyordu ve secim
+ * agacini da oradan turetiyordu. Yayin dosyasi ise haftalik taramanin O ANA
+ * KADAR ZIYARET ETTIGI hedeflerden olusur; tarama alfabetik ilerledigi icin
+ * dosya `opel/corsa/1-3-cdti/enjoy-111` hedefinde kesiliyordu. Sonuc: Opel
+ * yalnizca Corsa-e'ye kadar, marka listesi de Opel'e kadar gorunuyordu —
+ * Insignia (2.186 ilan), Vectra (2.706), Peugeot, Renault, Toyota,
+ * Volkswagen, Volvo... hepsi dropdown'dan SESSIZCE dusuyordu. Arac var,
+ * ilani var, hiyerarside var; sadece taramanin sirasi oraya gelmemisti.
+ *
+ * Secim agaci taramanin nerede oldugunu YANSITMAMALIDIR. Bu yuzden:
+ *
+ *   KATALOG  <- yayinlanan HIYERARSI artefakti (kaynak kanitinin tamami)
+ *   FIYAT    <- yayinlanan PIYASA dosyasi (o ana kadarki emsal kaniti)
+ *
+ * Katalogda olup fiyati olmayan bir arac EKRANDA KALIR; fiyat yerine neden
+ * gosterilemedigi soylenir. Arac gizlenmez.
+ *
+ * NEDEN KUCUK DOSYA: yayinlanan piyasa artefakti 151 MB'dir (184.000 ilan).
+ * Vercel'e konamaz. Ama demoda kisiler KENDI araclarini deneyecek, yani
+ * elimizde tum havuzlar bulunmali.
  *
  * COZUM: ilanlarin kendisi degil, FIYATIN TURETILEBILMESI icin gereken en az
  * bilgi tasinir. Her havuz icin, ilanlari olan her yila ait GERCEK motor
@@ -33,11 +52,16 @@ import {
 } from '../evaluation/pricing-config';
 import { RobustPricingCalculator } from '../evaluation/robust-pricing-calculator';
 import { fmvAtMileage } from '../../../frontend/src/lib/demo-pricing';
+import type { CatalogWire } from '../../../frontend/src/lib/demo-selection';
 import {
   buildYearCurve,
   learnAnnualDepreciation,
   selectYearEvidence,
 } from '../evaluation/year-evidence';
+import {
+  loadArtifact,
+  resolveArtifactPath,
+} from '../vehicle-hierarchy/hierarchy-source';
 
 /**
  * VARLIK ile FIYATLANABILIRLIK AYRI SEYLERDIR.
@@ -50,6 +74,9 @@ import {
  * Artik ilani olan her havuz ve her yil veri setine girer. Az kanitli bir
  * yil GORUNUR; fiyatin uretilip uretilmeyecegine ve ne kadar guvenle
  * sunulacagina fiyat katmani karar verir.
+ *
+ * Bu esik yalnizca FIYAT HAVUZUNU baglar. Aracin SECILEBILIR olmasi
+ * katalogdan gelir ve bu esikten etkilenmez.
  */
 const MIN_LISTINGS_PER_POOL = 1;
 
@@ -200,6 +227,87 @@ function classifyBranchLevels(paths: string[][], model: string): LevelKind[] {
   return kinds;
 }
 
+interface CatalogSourceNode {
+  id: string;
+  name: string;
+  parentId: string | null;
+  depth: number;
+  pathSegments: string[];
+  totalListingCount: number;
+}
+
+/**
+ * KATALOG — hiyerarsinin TAMAMI, kirpilmadan.
+ *
+ * Fiyat havuzu olup olmadigina BAKILMAZ. Bir dal kaynakta varsa demoda da
+ * vardir; Opel Manta'nin (kaynakta 0 ilan) secilebilir olmasi ile Opel
+ * Insignia'nin (2.008 ilan) secilebilir olmasi ayni kuraldan gelir.
+ *
+ * KIMLIK TAM YAZILIR. Ilk surumde yalnizca son segment tasiniyor, kimlik
+ * "ebeveyn + '/' + segment" diye kuruluyordu. Hiyerarside 14 dugumde bu kural
+ * gecersizdir: "206" ve "206 +" ayri modellerdir, ikisi de `peugeot/206`
+ * slug'ina duser, ikincisi `peugeot/206-2` olur ama COCUKLARI etiket
+ * slug'indan uretildigi icin `peugeot/206/1-4` olarak kalir. Kimlik bu yuzden
+ * BIR YOL DEGIL, opak anahtardir; agac `parentId`den kurulur.
+ */
+function buildCatalogWire(nodes: CatalogSourceNode[]): {
+  wire: CatalogWire[];
+  labelPathsByBranch: Map<string, string[][]>;
+  leafCount: number;
+} {
+  const childrenOf = new Map<string | null, CatalogSourceNode[]>();
+  for (const node of nodes) {
+    const key = node.parentId ?? null;
+    if (!childrenOf.has(key)) childrenOf.set(key, []);
+    childrenOf.get(key)!.push(node);
+  }
+  for (const group of childrenOf.values()) {
+    group.sort((a, b) => a.name.localeCompare(b.name, 'tr'));
+  }
+
+  /** model dugumunun KIMLIGI -> o daldaki tum YAPRAK etiket yollari */
+  const labelPathsByBranch = new Map<string, string[][]>();
+  let leafCount = 0;
+
+  /** `branchId` daldaki DEPTH-1 atanin kimligi; kimlikten kesilerek bulunamaz. */
+  const emit = (node: CatalogSourceNode, branchId: string): CatalogWire => {
+    const kids = childrenOf.get(node.id) ?? [];
+    const branch = node.depth === 1 ? node.id : branchId;
+    if (kids.length === 0) {
+      leafCount += 1;
+      if (node.depth >= 2 && branch) {
+        if (!labelPathsByBranch.has(branch)) labelPathsByBranch.set(branch, []);
+        labelPathsByBranch.get(branch)!.push(node.pathSegments);
+      }
+      return [node.id, node.name, node.totalListingCount];
+    }
+    return [
+      node.id,
+      node.name,
+      node.totalListingCount,
+      kids.map((kid) => emit(kid, branch)),
+    ];
+  };
+
+  const wire = (childrenOf.get(null) ?? []).map((root) => emit(root, ''));
+  return { wire, labelPathsByBranch, leafCount };
+}
+
+function countCatalog(wire: CatalogWire[]): { nodes: number; leaves: number } {
+  let nodes = 0;
+  let leaves = 0;
+  const walk = (list: CatalogWire[]): void => {
+    for (const entry of list) {
+      nodes += 1;
+      const kids = entry[3];
+      if (kids && kids.length > 0) walk(kids);
+      else leaves += 1;
+    }
+  };
+  walk(wire);
+  return { nodes, leaves };
+}
+
 function main(): void {
   const backendRoot = path.resolve(__dirname, '../..');
   const publishedDir = path.join(
@@ -213,6 +321,47 @@ function main(): void {
   const pointer = JSON.parse(
     fs.readFileSync(path.join(publishedDir, 'current.json'), 'utf-8'),
   ) as { release: string; hierarchyVersion: string };
+
+  /**
+   * KATALOG KAYNAGI: YAYINLANAN HIYERARSI.
+   *
+   * `resolveArtifactPath()` isaretciyi okur; kokteki eski `hierarchy.json`
+   * degil, yayinlanan surum alinir.
+   */
+  const hierarchyPath = resolveArtifactPath();
+  const artifact = loadArtifact(hierarchyPath);
+  if (!artifact) {
+    throw new Error(`Hiyerarsi artefakti okunamadi: ${hierarchyPath}`);
+  }
+  const hierarchyPointer = JSON.parse(
+    fs.readFileSync(
+      path.join(backendRoot, 'data/vehicle-hierarchy/current.json'),
+      'utf-8',
+    ),
+  ) as { hierarchyVersion: string };
+
+  /**
+   * TAZELIK KAPISI. Piyasa dosyasi hangi hiyerarsi surumune gore toplandiysa
+   * katalog da O surumden gelmelidir; yoksa havuz kimlikleri katalogda
+   * bulunmayan dugumlere isaret eder ve sessizce yetim kalirlar.
+   */
+  if (hierarchyPointer.hierarchyVersion !== pointer.hierarchyVersion) {
+    throw new Error(
+      'Hiyerarsi surumu piyasa yayiniyla ortusmuyor:\n' +
+        `  piyasa   : ${pointer.hierarchyVersion}\n` +
+        `  hiyerarsi: ${hierarchyPointer.hierarchyVersion}\n` +
+        'Once hiyerarsiyi yeniden yayinlayin (hierarchy:build).',
+    );
+  }
+
+  const catalog = buildCatalogWire(artifact.nodes as CatalogSourceNode[]);
+  const catalogPaths = new Map(
+    artifact.nodes.map((n) => [n.id, n.pathSegments] as const),
+  );
+  process.stdout.write(
+    `Katalog: ${artifact.nodes.length} dugum, ${catalog.leafCount} yaprak ` +
+      `(${hierarchyPath})\n`,
+  );
   process.stdout.write(`Yayin dosyasi okunuyor: ${pointer.release}\n`);
   const release = JSON.parse(
     fs.readFileSync(
@@ -229,15 +378,13 @@ function main(): void {
 
   const pools: Record<
     string,
-    { path: string[]; n: number; km: number; years: Record<string, number[]> }
+    { n: number; km: number; years: Record<string, number[]> }
   > = {};
-  /** marka/model dali -> o dalda gorulmus tum etiket yollari */
-  const branchPaths = new Map<string, string[][]>();
 
   let listingTotal = 0;
   let yearRows = 0;
   let skipped = 0;
-  let noLabelPath = 0;
+  let orphanPools = 0;
   let done = 0;
 
   for (const node of poolNames) {
@@ -259,19 +406,20 @@ function main(): void {
     }
 
     /**
-     * ETIKETLER KAYNAKTAN GELIR, SLUG'DAN DEGIL.
+     * ETIKET KATALOGDAN GELIR — HAVUZ ONU TASIMAZ.
      *
-     * Havuz kimligi slug'dir ve noktalama kaybeder: "1-5-tfsi". Slug'i
-     * guzellestirmek "1 5 Tfsi" gibi UYDURMA bir ad uretir. Yayin dosyasi her
-     * ilanla birlikte Sahibinden'in KENDI etiket yolunu tasir; gosterilen ad
-     * odur. Yol uzunlugu havuz kimliginin segment sayisiyla birebir ortusur
-     * (3557/3557 olculdu); ortusmezse havuz alinmaz, tahmin edilmez.
+     * Eskiden gosterilen ad her havuza kopyalaniyordu (`pool.path`). Ayni
+     * bilginin iki kopyasi zamanla birbirinden sapabilir; ustelik katalog
+     * zaten kaynagin kendi yazimini tasir ve olculdu: 3577/3577 havuzda iki
+     * kopya birebir ayniydi. Bu yuzden kimlik TEK yerde durur: katalog.
+     *
+     * Katalogda karsiligi olmayan bir havuz YETIMDIR — gosterilemez. Bu
+     * normalde imkansizdir (havuz kimlikleri hiyerarsi yapraklaridir) ve
+     * olursa gurultusuzce yutulmaz, sayilir ve rapor edilir.
      */
-    const labelPath = observations.find((o) =>
-      Array.isArray(o.requestedTargetPath),
-    )?.requestedTargetPath;
-    if (!labelPath || labelPath.length !== node.split('/').length) {
-      noLabelPath += 1;
+    const labelPath = catalogPaths.get(node);
+    if (!labelPath) {
+      orphanPools += 1;
       skipped += 1;
       continue;
     }
@@ -481,32 +629,39 @@ function main(): void {
     }
 
     pools[node] = {
-      path: labelPath,
       n: observations.length,
       km: Math.round(learnKmDecayPer10k(observations) * 10_000) / 10_000,
       years,
     };
     listingTotal += observations.length;
-
-    const branchKey = node.split('/').slice(0, 2).join('/');
-    if (!branchPaths.has(branchKey)) branchPaths.set(branchKey, []);
-    branchPaths.get(branchKey)!.push(labelPath);
   }
 
+  /**
+   * SEVIYE ADLARI KATALOGDAN CIKAR — HAVUZLARDAN DEGIL.
+   *
+   * Eskiden yalnizca fiyat havuzu olan dallar siniflandiriliyordu; havuzu
+   * olmayan dalin dropdown basligi "Seri / Tip" diye notr kaliyordu. Katalog
+   * tum dallari tasidigi icin siniflandirma da tum dallari kapsar.
+   */
   const levels: Record<string, LevelKind[]> = {};
-  for (const [branchKey, paths] of branchPaths) {
+  for (const [branchKey, paths] of catalog.labelPathsByBranch) {
     const kinds = classifyBranchLevels(paths, paths[0][1] || '');
     if (kinds.length > 0) levels[branchKey] = kinds;
   }
 
+  const counted = countCatalog(catalog.wire);
   const payload = {
     generatedAt: new Date().toISOString(),
     hierarchyVersion: pointer.hierarchyVersion,
+    marketRelease: pointer.release,
     source: 'sahibinden',
+    catalogNodeCount: counted.nodes,
+    catalogLeafCount: counted.leaves,
     poolCount: Object.keys(pools).length,
     listingCount: listingTotal,
     yearRowCount: yearRows,
     levels,
+    catalog: catalog.wire,
     pools,
   };
 
@@ -522,14 +677,30 @@ function main(): void {
   process.stdout.write('\nDEMO VERI SETI HAZIR\n');
   process.stdout.write(`  dosya        : ${outPath}\n`);
   process.stdout.write(`  boyut        : ${(bytes / 1048576).toFixed(2)} MB\n`);
-  process.stdout.write(`  havuz        : ${payload.poolCount}\n`);
+  process.stdout.write(
+    `  katalog      : ${payload.catalogNodeCount} dugum, ` +
+      `${payload.catalogLeafCount} yaprak\n`,
+  );
+  process.stdout.write(
+    `  fiyat havuzu : ${payload.poolCount} ` +
+      `(katalog yapraklarinin %${(
+        (payload.poolCount / Math.max(1, payload.catalogLeafCount)) *
+        100
+      ).toFixed(1)}'i)\n`,
+  );
   process.stdout.write(`  yil satiri   : ${payload.yearRowCount}\n`);
   process.stdout.write(`  temsil ilan  : ${payload.listingCount}\n`);
   process.stdout.write(`  marka/model  : ${Object.keys(levels).length} dal\n`);
   process.stdout.write(`  seviye tipi  : ${JSON.stringify(kindCount)}\n`);
   process.stdout.write(
-    `  atlanan havuz: ${skipped} (etiket yolu yok: ${noLabelPath})\n`,
+    `  fiyatsiz havuz: ${skipped} (katalog disi: ${orphanPools})\n`,
   );
+  if (orphanPools > 0) {
+    throw new Error(
+      `${orphanPools} fiyat havuzu katalogda yok — hiyerarsi ile piyasa ` +
+        'yayini ayni surumden gelmiyor.',
+    );
+  }
 }
 
 main();

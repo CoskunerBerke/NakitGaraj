@@ -1,13 +1,17 @@
 /**
  * DEMO ARAC SECIMI — REGRESYON.
  *
- * Sabitlenen hata: demo veri seti kategori yolunu ilk DORT segmente kirpiyordu.
- * Bes seviyeli markalarda (Audi) bu, kasayi "Motor", motoru "Paket" diye
- * gosteriyor ve paket seviyesini tamamen dusuruyordu. Ustelik ayni dort etiketi
- * paylasan farkli paketler tek gorunur yola indirgendigi icin sayfa ETIKETE
- * gore ILK eslesen havuzu aliyor, kullaniciya yalnizca o havuzun yillari
- * gorunuyordu (Audi A3 Sedan 1.5 TFSI -> sadece 2026; Sport Line'in 2018'i hic
- * acilmiyordu).
+ * SABITLENEN HATA (bu tur): dropdown'lar FIYAT HAVUZLARINDAN kuruluyordu.
+ * Havuzlar haftalik taramanin o ana kadar ziyaret ettigi hedeflerden gelir ve
+ * tarama alfabetiktir; yayin dosyasi `opel/corsa/...` hedefinde kesilince Opel
+ * dropdown'i Corsa-e'de bitiyor, marka listesi Opel'de duruyordu. Insignia
+ * (2.008 ilan), Vectra (2.548), Peugeot, Renault, Toyota, Volkswagen, Volvo —
+ * hepsi SESSIZCE kayboluyordu. Artik secim KATALOGDAN surulur; fiyat havuzu
+ * yalnizca sayinin gosterilip gosterilmeyecegini belirler.
+ *
+ * ONCEKI TUR: veri seti kategori yolunu ilk DORT segmente kirpiyordu; bes
+ * seviyeli markalarda paket seviyesi tamamen dusuyor, ayni dort etiketi
+ * paylasan paketler tek havuza iniyordu. O regresyonlar da burada durur.
  *
  *   node --test src/lib/demo-selection.test.ts
  */
@@ -17,14 +21,16 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import {
   applyChoice,
-  branchKeyIndex,
+  availabilityOf,
+  buildCatalog,
   buildChain,
   headingFor,
+  labelPathOf,
   optionsAt,
-  poolEntries,
   resolvePool,
   yearEvidenceOf,
   yearsOf,
+  type CatalogWire,
   type DemoData,
   type YearRow,
 } from './demo-selection.ts';
@@ -36,6 +42,7 @@ import {
 const row = (
   direct: number,
   borrowed = 0,
+  manualCode = 0,
   effective = direct + borrowed * 0.75,
 ): YearRow => [
   50_000,
@@ -49,76 +56,149 @@ const row = (
   effective,
   0.1,
   80,
-  0,
+  manualCode,
 ];
+
+const leaf = (id: string, label: string, listings: number): CatalogWire => [
+  id,
+  label,
+  listings,
+];
+const branch = (
+  id: string,
+  label: string,
+  listings: number,
+  kids: CatalogWire[],
+): CatalogWire => [id, label, listings, kids];
 
 /**
  * Gercek veri setinin kucuk bir kopyasi. Tarama surdugu icin canli veri
  * buyuyup degisir; davranis burada SABIT bir ornek uzerinde sinanir.
+ *
+ * Kasitli olarak FIYATSIZ dallar icerir (Opel Insignia, Opel Manta): katalog
+ * ile fiyatin ayri oldugunu ancak boyle sinayabiliriz.
  */
+const CATALOG: CatalogWire[] = [
+  branch('alfa-romeo', 'Alfa Romeo', 5, [
+    branch('alfa-romeo/146', '146', 5, [
+      branch('alfa-romeo/146/1-4', '1.4', 5, [
+        leaf('alfa-romeo/146/1-4/ts', 'TS', 5),
+      ]),
+    ]),
+  ]),
+  branch('audi', 'Audi', 45, [
+    branch('audi/a3', 'A3', 45, [
+      branch('audi/a3/a3-cabrio', 'A3 Cabrio', 8, [
+        leaf('audi/a3/a3-cabrio/1-8-tfsi', '1.8 TFSI', 8),
+      ]),
+      branch('audi/a3/a3-sedan', 'A3 Sedan', 28, [
+        branch('audi/a3/a3-sedan/1-5-tfsi', '1.5 TFSI', 16, [
+          leaf('audi/a3/a3-sedan/1-5-tfsi/advanced', 'Advanced', 10),
+          leaf('audi/a3/a3-sedan/1-5-tfsi/design-line', 'Design Line', 1),
+          leaf('audi/a3/a3-sedan/1-5-tfsi/sport-line', 'Sport Line', 5),
+        ]),
+        branch('audi/a3/a3-sedan/1-6-tdi', '1.6 TDI', 12, [
+          leaf('audi/a3/a3-sedan/1-6-tdi/sport-line', 'Sport Line', 12),
+        ]),
+      ]),
+      branch('audi/a3/a3-sportback', 'A3 Sportback', 9, [
+        branch('audi/a3/a3-sportback/1-6-tdi', '1.6 TDI', 9, [
+          leaf('audi/a3/a3-sportback/1-6-tdi/sport-line', 'Sport Line', 9),
+        ]),
+      ]),
+    ]),
+  ]),
+  branch('opel', 'Opel', 2513, [
+    branch('opel/corsa', 'Corsa', 492, [
+      leaf('opel/corsa/1-4', '1.4', 492),
+    ]),
+    // Tarama buraya HENUZ GELMEDI: 2.008 ilanlik model, fiyat havuzu yok.
+    branch('opel/insignia', 'Insignia', 2008, [
+      leaf('opel/insignia/1-6-cdti', '1.6 CDTI', 1200),
+      leaf('opel/insignia/2-0-cdti', '2.0 CDTI', 808),
+    ]),
+    // Kaynakta var, ilani HIC yok. Yine de secilebilir olmali.
+    branch('opel/manta', 'Manta', 0, [leaf('opel/manta/1-9', '1.9', 0)]),
+    // Tek ilanli havuz: fiyatlanir ama uzman kontrolu ister.
+    branch('opel/tigra', 'Tigra', 13, [leaf('opel/tigra/1-4', '1.4', 13)]),
+  ]),
+  /**
+   * "206" ve "206 +" ayri modeldir ve ikisi de `peugeot/206` slug'ina duser;
+   * ikincisi `peugeot/206-2` olur ama cocuklari etiket slug'indan uretildigi
+   * icin `peugeot/206/1-4` olarak kalir — cocugun kimligi ebeveyninin
+   * kimligiyle BASLAMAZ. Kimligi yol sanan kod burada bozulur.
+   */
+  branch('peugeot', 'Peugeot', 2266, [
+    branch('peugeot/206', '206 +', 413, [
+      leaf('peugeot/206/1-4-2', '1.4', 413),
+    ]),
+    branch('peugeot/206-2', '206', 1853, [
+      leaf('peugeot/206/1-4', '1.4', 1000),
+    ]),
+  ]),
+];
+
 const FIXTURE: DemoData = {
-  generatedAt: '2026-09-17T00:00:00.000Z',
+  generatedAt: '2026-09-18T00:00:00.000Z',
   hierarchyVersion: 'test',
-  poolCount: 5,
-  listingCount: 40,
-  yearRowCount: 6,
+  catalogNodeCount: 34,
+  catalogLeafCount: 13,
+  poolCount: 9,
+  listingCount: 3000,
+  yearRowCount: 11,
   levels: {
     'audi/a3': ['body', 'engine', 'package'],
     'alfa-romeo/146': ['engine', 'package'],
   },
+  catalog: CATALOG,
   pools: {
     'audi/a3/a3-sedan/1-5-tfsi/advanced': {
-      path: ['Audi', 'A3', 'A3 Sedan', '1.5 TFSI', 'Advanced'],
       n: 10,
       km: 0.015,
       years: { '2026': row(10) },
     },
     'audi/a3/a3-sedan/1-5-tfsi/sport-line': {
-      path: ['Audi', 'A3', 'A3 Sedan', '1.5 TFSI', 'Sport Line'],
       n: 5,
       km: 0.015,
       years: { '2017': row(2, 3), '2018': row(3, 2) },
     },
+    'audi/a3/a3-sedan/1-5-tfsi/design-line': {
+      n: 1,
+      km: 0.015,
+      years: { '2018': row(1) },
+    },
     'audi/a3/a3-sedan/1-6-tdi/sport-line': {
-      path: ['Audi', 'A3', 'A3 Sedan', '1.6 TDI', 'Sport Line'],
       n: 12,
       km: 0.015,
       years: { '2015': row(12) },
     },
     'audi/a3/a3-sportback/1-6-tdi/sport-line': {
-      path: ['Audi', 'A3', 'A3 Sportback', '1.6 TDI', 'Sport Line'],
       n: 9,
       km: 0.015,
       years: { '2016': row(9) },
     },
     'audi/a3/a3-cabrio/1-8-tfsi': {
-      path: ['Audi', 'A3', 'A3 Cabrio', '1.8 TFSI'],
       n: 8,
       km: 0.015,
       years: { '2009': row(8) },
     },
-    'audi/a3/a3-sedan/1-5-tfsi/design-line': {
-      path: ['Audi', 'A3', 'A3 Sedan', '1.5 TFSI', 'Design Line'],
-      n: 1,
-      km: 0.015,
-      years: { '2018': row(1) },
-    },
-    'alfa-romeo/146/1-4/ts': {
-      path: ['Alfa Romeo', '146', '1.4', 'TS'],
-      n: 5,
-      km: 0.015,
-      years: { '1998': row(5) },
-    },
+    'alfa-romeo/146/1-4/ts': { n: 5, km: 0.015, years: { '1998': row(5) } },
+    'opel/corsa/1-4': { n: 492, km: 0.015, years: { '2015': row(40) } },
+    // Motor "uzman baksin" dedi; satir yine de veri setinde ve secilebilir.
+    'opel/tigra/1-4': { n: 13, km: 0.015, years: { '2003': row(1, 2, 1) } },
+    'peugeot/206/1-4': { n: 1000, km: 0.015, years: { '2005': row(60) } },
   },
 };
 
-const ENTRIES = poolEntries(FIXTURE);
-const BRANCHES = branchKeyIndex(ENTRIES);
-const AUDI_SEDAN_15 = ['Audi', 'A3', 'A3 Sedan', '1.5 TFSI'];
+const CAT = buildCatalog(FIXTURE);
+const A3 = 'audi/a3';
+const SEDAN_15 = ['audi', A3, 'audi/a3/a3-sedan', 'audi/a3/a3-sedan/1-5-tfsi'];
+const labelsAt = (selection: string[], depth: number) =>
+  optionsAt(CAT, selection, depth).map((o) => o.label);
 
-describe('Audi > A3 > A3 Sedan > 1.5 TFSI (asil regresyon)', () => {
+describe('Audi > A3 > A3 Sedan > 1.5 TFSI (onceki regresyon)', () => {
   test('Kasa seviyesi kasa etiketlerini tasir', () => {
-    assert.deepEqual(optionsAt(ENTRIES, 2, ['Audi', 'A3']), [
+    assert.deepEqual(labelsAt(['audi', A3], 2), [
       'A3 Cabrio',
       'A3 Sedan',
       'A3 Sportback',
@@ -126,57 +206,89 @@ describe('Audi > A3 > A3 Sedan > 1.5 TFSI (asil regresyon)', () => {
   });
 
   test('Motor seviyesinde KASA etiketi gorunmez', () => {
-    const engines = optionsAt(ENTRIES, 3, ['Audi', 'A3', 'A3 Sedan']);
+    const engines = labelsAt(['audi', A3, 'audi/a3/a3-sedan'], 3);
     assert.deepEqual(engines, ['1.5 TFSI', '1.6 TDI']);
     assert.equal(engines.includes('A3 Sedan'), false);
   });
 
-  test('Paket seviyesi geri geldi ve MOTOR etiketi tasimaz', () => {
-    const packages = optionsAt(ENTRIES, 4, AUDI_SEDAN_15);
+  test('Paket seviyesi gorunur ve MOTOR etiketi tasimaz', () => {
+    const packages = labelsAt(SEDAN_15, 4);
     assert.deepEqual(packages, ['Advanced', 'Design Line', 'Sport Line']);
     assert.equal(packages.includes('1.5 TFSI'), false);
   });
 
-  test('her paket KENDI fiyat havuzudur', () => {
-    const advanced = resolvePool(ENTRIES, [...AUDI_SEDAN_15, 'Advanced']);
-    const sportLine = resolvePool(ENTRIES, [...AUDI_SEDAN_15, 'Sport Line']);
-
-    assert.equal(advanced?.key, 'audi/a3/a3-sedan/1-5-tfsi/advanced');
-    assert.equal(sportLine?.key, 'audi/a3/a3-sedan/1-5-tfsi/sport-line');
-    assert.notEqual(advanced?.pool.n, sportLine?.pool.n);
+  test('her paket KENDI fiyat havuzudur (F)', () => {
+    const advanced = resolvePool(FIXTURE, [
+      ...SEDAN_15,
+      'audi/a3/a3-sedan/1-5-tfsi/advanced',
+    ]);
+    const sportLine = resolvePool(FIXTURE, [
+      ...SEDAN_15,
+      'audi/a3/a3-sedan/1-5-tfsi/sport-line',
+    ]);
+    assert.equal(advanced?.n, 10);
+    assert.equal(sportLine?.n, 5);
   });
 
   test('yillar secilen pakete aittir — tek bir yila kilitlenmez', () => {
-    assert.deepEqual(yearsOf(resolvePool(ENTRIES, [...AUDI_SEDAN_15, 'Advanced'])), [2026]);
-    assert.deepEqual(yearsOf(resolvePool(ENTRIES, [...AUDI_SEDAN_15, 'Sport Line'])), [
-      2018, 2017,
-    ]);
-  });
-
-  test('paket secilmeden havuz cozulmez (yanlis havuza dusulmez)', () => {
-    assert.equal(resolvePool(ENTRIES, AUDI_SEDAN_15), null);
-  });
-});
-
-describe('Zincir derinligi veriden gelir', () => {
-  test('paket seviyesi olmayan dal motorda biter', () => {
-    const selection = ['Audi', 'A3', 'A3 Cabrio', '1.8 TFSI'];
-    assert.equal(optionsAt(ENTRIES, 4, selection).length, 0);
-    assert.equal(resolvePool(ENTRIES, selection)?.key, 'audi/a3/a3-cabrio/1-8-tfsi');
-    assert.equal(buildChain(ENTRIES, selection).length, 4);
-  });
-
-  test('kasa seviyesi olmayan markada zincir kisadir', () => {
-    assert.deepEqual(optionsAt(ENTRIES, 2, ['Alfa Romeo', '146']), ['1.4']);
-    assert.deepEqual(optionsAt(ENTRIES, 3, ['Alfa Romeo', '146', '1.4']), ['TS']);
-    assert.equal(
-      resolvePool(ENTRIES, ['Alfa Romeo', '146', '1.4', 'TS'])?.key,
-      'alfa-romeo/146/1-4/ts',
+    assert.deepEqual(
+      yearsOf(
+        resolvePool(FIXTURE, [
+          ...SEDAN_15,
+          'audi/a3/a3-sedan/1-5-tfsi/advanced',
+        ]),
+      ),
+      [2026],
+    );
+    assert.deepEqual(
+      yearsOf(
+        resolvePool(FIXTURE, [
+          ...SEDAN_15,
+          'audi/a3/a3-sedan/1-5-tfsi/sport-line',
+        ]),
+      ),
+      [2018, 2017],
     );
   });
 
+  test('paket secilmeden secim TAMAMLANMAMIS sayilir', () => {
+    assert.equal(resolvePool(FIXTURE, SEDAN_15), null);
+    assert.equal(availabilityOf(CAT, FIXTURE, SEDAN_15), 'INCOMPLETE');
+  });
+});
+
+describe('Zincir derinligi KATALOGDAN gelir (G)', () => {
+  test('paket seviyesi olmayan dal motorda biter', () => {
+    const selection = [
+      'audi',
+      A3,
+      'audi/a3/a3-cabrio',
+      'audi/a3/a3-cabrio/1-8-tfsi',
+    ];
+    assert.equal(optionsAt(CAT, selection, 4).length, 0);
+    assert.equal(resolvePool(FIXTURE, selection)?.n, 8);
+    assert.equal(buildChain(CAT, selection).length, 4);
+  });
+
+  test('kasa seviyesi olmayan markada zincir kisadir', () => {
+    assert.deepEqual(labelsAt(['alfa-romeo', 'alfa-romeo/146'], 2), ['1.4']);
+    const selection = [
+      'alfa-romeo',
+      'alfa-romeo/146',
+      'alfa-romeo/146/1-4',
+      'alfa-romeo/146/1-4/ts',
+    ];
+    assert.equal(resolvePool(FIXTURE, selection)?.n, 5);
+  });
+
+  test('iki seviyeli dal yaprak sayilir', () => {
+    const selection = ['opel', 'opel/corsa', 'opel/corsa/1-4'];
+    assert.equal(buildChain(CAT, selection).length, 3);
+    assert.equal(availabilityOf(CAT, FIXTURE, selection), 'PRICEABLE');
+  });
+
   test('secim yarim kaldiginda yalnizca bir sonraki seviye acilir', () => {
-    const chain = buildChain(ENTRIES, ['Audi', 'A3']);
+    const chain = buildChain(CAT, ['audi', A3]);
     assert.equal(chain.length, 3);
     assert.equal(chain[2].value, '');
   });
@@ -184,98 +296,217 @@ describe('Zincir derinligi veriden gelir', () => {
 
 describe('Basliklar veri setinin sinifllandirmasindan okunur', () => {
   const heading = (selection: string[], depth: number) =>
-    headingFor(FIXTURE, BRANCHES, selection, depth);
+    headingFor(FIXTURE, selection, depth);
 
   test('Audi: kasa / motor / paket', () => {
-    assert.equal(heading(AUDI_SEDAN_15, 2), 'Kasa / Gövde');
-    assert.equal(heading(AUDI_SEDAN_15, 3), 'Motor');
-    assert.equal(heading(AUDI_SEDAN_15, 4), 'Paket / Donanım');
+    assert.equal(heading(SEDAN_15, 2), 'Kasa / Gövde');
+    assert.equal(heading(SEDAN_15, 3), 'Motor');
+    assert.equal(heading(SEDAN_15, 4), 'Paket / Donanım');
   });
 
   test('Alfa Romeo: kasa seviyesi YOKTUR, 3. seviye motordur', () => {
-    const selection = ['Alfa Romeo', '146', '1.4', 'TS'];
+    const selection = ['alfa-romeo', 'alfa-romeo/146', 'alfa-romeo/146/1-4'];
     assert.equal(heading(selection, 2), 'Motor');
     assert.equal(heading(selection, 3), 'Paket / Donanım');
+  });
+
+  test('siniflandirmasi olmayan dal notr kalir, cokmez', () => {
+    assert.equal(heading(['opel', 'opel/corsa'], 2), 'Seri / Tip');
   });
 });
 
 describe('Ust secim degisince alt secim gereksiz yere dusmez', () => {
-  test('hala gecerli olan alt secim korunur', () => {
-    const before = ['Audi', 'A3', 'A3 Sedan', '1.6 TDI', 'Sport Line'];
-    const after = applyChoice(ENTRIES, before, 2, 'A3 Sportback');
-    assert.deepEqual(after, ['Audi', 'A3', 'A3 Sportback', '1.6 TDI', 'Sport Line']);
+  test('hala gecerli olan alt secim ETIKETE gore korunur', () => {
+    const before = [
+      'audi',
+      A3,
+      'audi/a3/a3-sedan',
+      'audi/a3/a3-sedan/1-6-tdi',
+      'audi/a3/a3-sedan/1-6-tdi/sport-line',
+    ];
+    assert.deepEqual(
+      applyChoice(CAT, before, 2, 'audi/a3/a3-sportback'),
+      [
+        'audi',
+        A3,
+        'audi/a3/a3-sportback',
+        'audi/a3/a3-sportback/1-6-tdi',
+        'audi/a3/a3-sportback/1-6-tdi/sport-line',
+      ],
+    );
   });
 
   test('gecersiz kalan alt secim ve altindakiler dusurulur', () => {
-    const before = ['Audi', 'A3', 'A3 Sedan', '1.5 TFSI', 'Advanced'];
-    const after = applyChoice(ENTRIES, before, 2, 'A3 Cabrio');
-    assert.deepEqual(after, ['Audi', 'A3', 'A3 Cabrio']);
+    const before = [
+      'audi',
+      A3,
+      'audi/a3/a3-sedan',
+      'audi/a3/a3-sedan/1-5-tfsi',
+      'audi/a3/a3-sedan/1-5-tfsi/advanced',
+    ];
+    assert.deepEqual(applyChoice(CAT, before, 2, 'audi/a3/a3-cabrio'), [
+      'audi',
+      A3,
+      'audi/a3/a3-cabrio',
+    ]);
   });
 
   test('bos secim o seviyeden itibaren temizler', () => {
-    const before = ['Audi', 'A3', 'A3 Sedan', '1.5 TFSI', 'Advanced'];
-    assert.deepEqual(applyChoice(ENTRIES, before, 3, ''), ['Audi', 'A3', 'A3 Sedan']);
+    const before = [...SEDAN_15, 'audi/a3/a3-sedan/1-5-tfsi/advanced'];
+    assert.deepEqual(applyChoice(CAT, before, 3, ''), [
+      'audi',
+      A3,
+      'audi/a3/a3-sedan',
+    ]);
   });
 });
 
+/**
+ * KATALOG ile FIYAT AYRI SEYLERDIR — bu turun asil regresyonu.
+ *
+ * Bir arac, fiyat havuzu yok diye dropdown'dan DUSMEZ. Dusmesi icin kaynakta
+ * hic var olmamasi gerekir.
+ */
+describe('Fiyat havuzu olmayan arac SECILEBILIR kalir', () => {
+  const INSIGNIA = ['opel', 'opel/insignia', 'opel/insignia/1-6-cdti'];
+
+  test('cok ilanli model fiyat havuzu yok diye kaybolmaz (A)', () => {
+    const models = labelsAt(['opel'], 1);
+    assert.ok(models.includes('Insignia'), 'Insignia dropdown\'da yok');
+    assert.equal(FIXTURE.pools['opel/insignia/1-6-cdti'], undefined);
+    assert.equal(availabilityOf(CAT, FIXTURE, INSIGNIA), 'NO_PRICE_DATA');
+    assert.equal(CAT.byId.get('opel/insignia')!.listings, 2008);
+  });
+
+  test('guncel teklifi olmayan arac yine de secilebilir (D)', () => {
+    assert.equal(resolvePool(FIXTURE, INSIGNIA), null);
+    assert.equal(buildChain(CAT, INSIGNIA).length, 3);
+    assert.deepEqual(labelPathOf(CAT, INSIGNIA), [
+      'Opel',
+      'Insignia',
+      '1.6 CDTI',
+    ]);
+  });
+
+  test('kaynakta hic ilani olmayan model de secilebilir', () => {
+    const manta = ['opel', 'opel/manta', 'opel/manta/1-9'];
+    assert.ok(labelsAt(['opel'], 1).includes('Manta'));
+    assert.equal(CAT.byId.get('opel/manta')!.listings, 0);
+    assert.equal(availabilityOf(CAT, FIXTURE, manta), 'NO_PRICE_DATA');
+  });
+
+  test('havuz kanit varsa ORTAYA CIKAR (E)', () => {
+    const corsa = ['opel', 'opel/corsa', 'opel/corsa/1-4'];
+    assert.equal(availabilityOf(CAT, FIXTURE, corsa), 'PRICEABLE');
+    assert.equal(resolvePool(FIXTURE, corsa)?.n, 492);
+    assert.deepEqual(yearsOf(resolvePool(FIXTURE, corsa)), [2015]);
+  });
+});
 
 /**
  * VARLIK ile FIYATLANABILIRLIK AYRI SEYLERDIR.
  *
- * Sabitlenen hata: veri seti, yilin kendi ilani 3 un altindaysa o yili HIC
- * yazmiyordu; havuz 5 ilanin altindaysa paket bile gorunmuyordu. Gercekte
- * var olan model yillari (Sport Line 2017, 2 ilan) ekranda yoktu. Dropdown
- * VARLIKTAN turer; kanitin yeterliligi fiyat katmaninin isidir.
+ * Onceki tur: veri seti, yilin kendi ilani 3 un altindaysa o yili HIC
+ * yazmiyordu; havuz 5 ilanin altindaysa paket bile gorunmuyordu.
  */
 describe('Yil listesi kanit esigine gore FILTRELENMEZ', () => {
-  test('1 ilanli yil gorunur (A)', () => {
-    const selection = ['Audi', 'A3', 'A3 Sedan', '1.5 TFSI', 'Design Line'];
-    const pool = resolvePool(ENTRIES, selection);
+  test('tek ilanli havuz secilebilir ve yili gorunur (B)', () => {
+    const selection = [...SEDAN_15, 'audi/a3/a3-sedan/1-5-tfsi/design-line'];
+    const pool = resolvePool(FIXTURE, selection);
+    assert.equal(pool?.n, 1);
     assert.deepEqual(yearsOf(pool), [2018]);
-    assert.equal(yearEvidenceOf(pool!.pool.years["2018"]).directComparables, 1);
+    assert.equal(yearEvidenceOf(pool!.years['2018']).directComparables, 1);
+    assert.equal(availabilityOf(CAT, FIXTURE, selection), 'PRICEABLE');
   });
 
-  test('2 ilanli yil gorunur (B)', () => {
-    const pool = resolvePool(ENTRIES, [...AUDI_SEDAN_15, 'Sport Line']);
+  test('2 ilanli yil gorunur', () => {
+    const pool = resolvePool(FIXTURE, [
+      ...SEDAN_15,
+      'audi/a3/a3-sedan/1-5-tfsi/sport-line',
+    ]);
     assert.ok(yearsOf(pool).includes(2017));
-    assert.equal(yearEvidenceOf(pool!.pool.years["2017"]).directComparables, 2);
+    assert.equal(yearEvidenceOf(pool!.years['2017']).directComparables, 2);
   });
 
-  test('3 ilanli yil gorunur (C)', () => {
-    const pool = resolvePool(ENTRIES, [...AUDI_SEDAN_15, 'Sport Line']);
-    assert.ok(yearsOf(pool).includes(2018));
-    assert.equal(yearEvidenceOf(pool!.pool.years["2018"]).directComparables, 3);
-  });
-
-  test('tek ilanli paket yine de secilebilir', () => {
-    const packages = optionsAt(ENTRIES, 4, AUDI_SEDAN_15);
-    assert.ok(packages.includes('Design Line'));
+  test('manuel degerlendirme isteyen arac secilebilir kalir (C)', () => {
+    const tigra = ['opel', 'opel/tigra', 'opel/tigra/1-4'];
+    const pool = resolvePool(FIXTURE, tigra);
+    assert.equal(availabilityOf(CAT, FIXTURE, tigra), 'PRICEABLE');
+    assert.notEqual(yearEvidenceOf(pool!.years['2003']).engineManualCode, 0);
   });
 });
+
+/**
+ * KIMLIK, YOL DEGILDIR. Kimligi '/' ile kesip birlestiren kod "206" ile
+ * "206 +" dallarini birbirine karistirir; olculen zarar 59 sessiz dusustu.
+ */
+describe('Ilk etiket cakismasi dallari karistirmaz (H)', () => {
+  test('ayni etiketli iki model AYRI dugumdur', () => {
+    const models = optionsAt(CAT, ['peugeot'], 1);
+    assert.deepEqual(
+      models.map((m) => [m.id, m.label]),
+      [
+        ['peugeot/206-2', '206'],
+        ['peugeot/206', '206 +'],
+      ],
+    );
+  });
+
+  test('kimligi ebeveyninin oneki olmayan dal dogru havuza cozulur', () => {
+    const plain = ['peugeot', 'peugeot/206-2', 'peugeot/206/1-4'];
+    const plus = ['peugeot', 'peugeot/206', 'peugeot/206/1-4-2'];
+
+    assert.deepEqual(labelPathOf(CAT, plain), ['Peugeot', '206', '1.4']);
+    assert.deepEqual(labelPathOf(CAT, plus), ['Peugeot', '206 +', '1.4']);
+    assert.equal(resolvePool(FIXTURE, plain)?.n, 1000);
+    assert.equal(availabilityOf(CAT, FIXTURE, plain), 'PRICEABLE');
+    assert.equal(availabilityOf(CAT, FIXTURE, plus), 'NO_PRICE_DATA');
+  });
+
+  test('kimlik yol gibi birlestirilse YANLIS dugume duserdi', () => {
+    // 'peugeot' + '/' + '206' -> 'peugeot/206' = "206 +", oysa secilen "206".
+    assert.equal(CAT.byId.get('peugeot/206')!.label, '206 +');
+    assert.equal(CAT.byId.get('peugeot/206-2')!.label, '206');
+  });
+});
+
 /**
  * Canli veri seti buyudugu icin burada MARKA/MODEL adi degil, SOZLESME
- * sinanir: yol kirpilmamis mi, etiketler kaynaktan mi geliyor, her dalin
- * seviye tipi var mi.
+ * sinanir. Tek istisna Opel: hatanin gorundugu yer orasiydi (I).
  */
 describe('Yayinlanan veri seti sozlesmesi', () => {
   const file = path.resolve(import.meta.dirname, '../../public/demo-market.json');
   const data = JSON.parse(fs.readFileSync(file, 'utf-8')) as DemoData;
-  const entries = poolEntries(data);
+  const catalog = buildCatalog(data);
 
-  test('her havuzun etiket yolu, kimliginin segment sayisi kadardir', () => {
-    const broken = entries.filter(
-      ({ key, pool }) => pool.path.length !== key.split('/').length,
+  const leaves = [...catalog.byId.values()].filter(
+    (n) => n.children.length === 0,
+  );
+
+  test('katalog fiyat havuzlarindan GENISTIR (J)', () => {
+    assert.ok(
+      leaves.length > Object.keys(data.pools).length,
+      'katalog havuz sayisina esit — yine fiyattan tureniyor olabilir',
     );
-    assert.deepEqual(broken.map((e) => e.key), []);
+    assert.equal(leaves.length, data.catalogLeafCount);
+    assert.equal(catalog.byId.size, data.catalogNodeCount);
+  });
+
+  test('her fiyat havuzunun katalogda bir YAPRAGI vardir', () => {
+    const orphan = Object.keys(data.pools).filter((key) => {
+      const node = catalog.byId.get(key);
+      return !node || node.children.length > 0;
+    });
+    assert.deepEqual(orphan, []);
   });
 
   test('etiketler slug guzellestirmesi degil, kaynagin kendi yazimidir', () => {
     // "1-5-tfsi" slug'ini baslik harfe cevirmek "1 5 Tfsi" uretirdi.
     const mangled = new Set<string>();
-    for (const { pool } of entries) {
-      for (const segment of pool.path) {
-        if (/^\d\s\d(\s|$)/.test(segment)) mangled.add(segment);
-        if (/\b(Tfsi|Tdi|Tsi|Cdi|Dci|Fsi)\b/.test(segment)) mangled.add(segment);
+    for (const node of catalog.byId.values()) {
+      if (/^\d\s\d(\s|$)/.test(node.label)) mangled.add(node.label);
+      if (/\b(Tfsi|Tdi|Tsi|Cdi|Dci|Fsi)\b/.test(node.label)) {
+        mangled.add(node.label);
       }
     }
     assert.deepEqual([...mangled], []);
@@ -283,29 +514,51 @@ describe('Yayinlanan veri seti sozlesmesi', () => {
 
   test('iki seviyeden derin her dalin seviye tipleri vardir', () => {
     const missing = new Set<string>();
-    for (const { key, pool } of entries) {
-      if (pool.path.length < 3) continue;
-      const branch = key.split('/').slice(0, 2).join('/');
-      const kinds = data.levels[branch];
-      if (!kinds || kinds.length < pool.path.length - 2) missing.add(branch);
-    }
+    const walk = (node: typeof catalog.roots[number], chain: string[]) => {
+      const next = [...chain, node.id];
+      if (node.children.length === 0) {
+        if (next.length < 3) return;
+        const kinds = data.levels[next[1]];
+        if (!kinds || kinds.length < next.length - 2) missing.add(next[1]);
+        return;
+      }
+      for (const child of node.children) walk(child, next);
+    };
+    for (const root of catalog.roots) walk(root, []);
     assert.deepEqual([...missing], []);
+  });
+
+  test('etiket yollari BENZERSIZDIR — iki arac ayni gorunmez', () => {
+    const seen = new Map<string, string>();
+    const clashes: string[] = [];
+    const walk = (node: typeof catalog.roots[number], labels: string[]) => {
+      const next = [...labels, node.label];
+      const key = next.join(String.fromCharCode(0));
+      const prior = seen.get(key);
+      if (prior) clashes.push(`${prior} == ${node.id}`);
+      else seen.set(key, node.id);
+      for (const child of node.children) walk(child, next);
+    };
+    for (const root of catalog.roots) walk(root, []);
+    assert.deepEqual(clashes, []);
   });
 
   /**
    * Odunc kanit PAKET SINIRINI GECMEZ: her yil satirinin kullandigi emsal
-   * sayisi, o havuzun KENDI ilan sayisini asamaz. Advanced ile Sport Line
-   * birbirinin kanitini kullanamaz.
+   * sayisi, o havuzun KENDI ilan sayisini asamaz.
    */
-  test('odunc alinan kanit havuzun disina cikmaz (G)', () => {
+  test('odunc alinan kanit havuzun disina cikmaz', () => {
     const leaks: string[] = [];
-    for (const { key, pool } of entries) {
-      for (const [year, row] of Object.entries(pool.years)) {
-        const e = yearEvidenceOf(row);
+    for (const [key, pool] of Object.entries(data.pools)) {
+      for (const [year, yearRow] of Object.entries(pool.years)) {
+        const e = yearEvidenceOf(yearRow);
         if (e.directComparables + e.borrowedComparables > pool.n) {
           leaks.push(`${key} ${year}`);
         }
-        if (e.effectiveComparables > e.directComparables + e.borrowedComparables) {
+        if (
+          e.effectiveComparables >
+          e.directComparables + e.borrowedComparables
+        ) {
           leaks.push(`${key} ${year} (etkin > toplam)`);
         }
       }
@@ -313,22 +566,55 @@ describe('Yayinlanan veri seti sozlesmesi', () => {
     assert.deepEqual(leaks, []);
   });
 
-  test('ayni ilk dort etiketi paylasan havuzlar ayri cozulur', () => {
-    const byPrefix = new Map<string, string[]>();
-    for (const { key, pool } of entries) {
-      if (pool.path.length < 5) continue;
-      const prefix = pool.path.slice(0, 4).join(' / ');
-      byPrefix.set(prefix, [...(byPrefix.get(prefix) ?? []), key]);
-    }
-    const shared = [...byPrefix.values()].filter((keys) => keys.length > 1);
-    // Boyle bir ornek bulunmali; hata tam olarak burada gizleniyordu.
-    assert.ok(shared.length > 0, 'ayni oneki paylasan paket bulunamadi');
+  /**
+   * OPEL KABUL TESTI (I). Liste koda GOMULU DEGILDIR; kaynakta gorulen Opel
+   * modellerinin tamaminin katalogda oldugu, hicbirinin fiyat havuzu yok diye
+   * dusmedigi sinanir. Referans adlar yalnizca "gercekten oradalar mi"
+   * sorusunu somutlastirir.
+   */
+  test('Opel dropdown\'i kaynaktaki tum modelleri gosterir (I)', () => {
+    const opel = catalog.byId.get('opel');
+    assert.ok(opel, 'Opel markasi katalogda yok');
+    const labels = opel!.children.map((m) => m.label);
 
-    for (const keys of shared) {
-      for (const key of keys) {
-        const resolved = resolvePool(entries, data.pools[key].path);
-        assert.equal(resolved?.key, key);
-      }
+    for (const expected of [
+      'Adam',
+      'Agila',
+      'Ascona',
+      'Astra',
+      'Astra-e',
+      'Calibra',
+      'Cascada',
+      'Corsa',
+      'Corsa-e',
+      'GT (Roadster)',
+      'Insignia',
+      'Kadett',
+      'Manta',
+      'Meriva',
+      'Omega',
+      'Rekord',
+      'Signum',
+      'Tigra',
+      'Vectra',
+      'Zafira',
+    ]) {
+      assert.ok(labels.includes(expected), `Opel ${expected} dropdown'da yok`);
     }
+
+    // Fiyat havuzu olmayan modeller de listede olmali — asil hata buydu.
+    const unpriced = opel!.children.filter((model) => {
+      const stack = [model];
+      while (stack.length > 0) {
+        const node = stack.pop()!;
+        if (node.children.length === 0 && data.pools[node.id]) return false;
+        stack.push(...node.children);
+      }
+      return true;
+    });
+    assert.ok(
+      unpriced.length > 0,
+      'fiyatsiz Opel modeli yok — test bir sey kanitlamiyor',
+    );
   });
 });

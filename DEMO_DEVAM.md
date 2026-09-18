@@ -67,7 +67,54 @@ Link: `https://<proje>.vercel.app` — artık kök adres de demoyu açar.
 
 ---
 
-## Kapatılan iki karar
+## Kapatılan kararlar
+
+### 0) Katalog ile fiyat ayrıldı — dropdown artık taramanın nerede olduğunu yansıtmıyor
+
+**Belirti:** Opel dropdown'ı Corsa-e'de bitiyordu. Marka listesi Opel'de
+duruyordu. Kaynakta 2.008 ilanı olan Insignia, 2.548 ilanlı Vectra, 439 ilanlı
+Meriva; Peugeot, Renault, Toyota, Volkswagen, Volvo, Škoda, Seat, Porsche —
+hiçbiri seçilemiyordu.
+
+**Kök neden:** `build_demo_dataset.ts` secim ağacını **yayınlanan piyasa
+dosyasından** türetiyordu. O dosya haftalık taramanın *o ana kadar ziyaret
+ettiği* hedeflerden oluşur ve tarama alfabetiktir; yayın
+`opel/corsa/1-3-cdti/enjoy-111` hedefinde kesilmişti. Yani demo, kaynağın değil
+**tarayıcının konumunun** fotoğrafıydı. Araç vardı, ilanı vardı, hiyerarşide
+vardı — sadece sıra oraya gelmemişti.
+
+| aşama | marka | model | yaprak |
+| --- | --- | --- | --- |
+| korpus / DB / hiyerarşi | 97 | 722 | 7.092 |
+| uygun hedef evreni | 81 | — | 6.205 |
+| **yayınlanan piyasa dosyası** | **50** | **354** | **3.585** |
+| eski demo | 50 | 352 | 3.577 |
+| **yeni demo** | **97** | **722** | **7.092** |
+
+**Çözüm:** iki kaynak ayrıldı.
+
+```
+KATALOG  <- yayınlanan HİYERARŞİ artefaktı   (neyin SEÇİLEBİLİR olduğu)
+FİYAT    <- yayınlanan PİYASA dosyası         (neyin FİYATLANABİLİR olduğu)
+```
+
+Havuzu olmayan araç ekranda kalır, fiyat yerine gerekçe gösterilir. Veri seti
+`catalog` + `pools` taşır; `pools[].path` kalktı — görünen ad ve fiyat kimliği
+artık tek yerde (katalog düğümü) durur, birbirinden sapamaz. 1,23 MB → 1,43 MB.
+
+**Yan bulgu — kimlik yol değildir.** Denetim yazılırken çıktı: Sahibinden'de
+"206" ve "206 +" ayrı modeldir, ikisi de `peugeot/206` slug'ına düşer; ikincisi
+`peugeot/206-2` olur **ama çocukları etiket slug'ından üretildiği için**
+`peugeot/206/1-4` kalır. 14 düğümde çocuğun kimliği ebeveyninin kimliğiyle
+başlamaz. Kimliği '/' ile kesen ilk katalog sürümü bu dalları yanlış ebeveyne
+bağlayıp 1.000 ilanlık "206 1.4"ü yetim bırakmıştı (59 sessiz düşüş). Kimlik
+artık **opak anahtar**: ağaç `parentId`den, ad `etiket`ten, havuz kimlikten.
+
+**Neden önceki denetim kaçırdı:** `audit_demo_pools.ts` demo dosyasında *zaten
+olan* havuzları inceliyordu. Orada olmayan araç hakkında hiçbir şey söyleyemez.
+Bir kümeyi kendisiyle karşılaştırmak kapsama ölçmez. Yeni denetim
+(`audit_source_to_demo_coverage.ts`) **tersinden** çalışır: kaynaktan başlar,
+her dalın demoda ne olduğunu sorar, sessiz düşüş > 0 ise hata koduyla çıkar.
 
 ### A) Kimlik kayması — içe aktarım düzeltildi + test bağımsızlaştırıldı · `0ef653a`
 
@@ -115,10 +162,17 @@ yazmalı, yoksa aynı yığılma tekrar eder.
 
 ## Bilinen bayatlık (demoyu etkilemiyor)
 
-`data/vehicle-hierarchy/` artefaktları **4 Eylül** tarihli, korpus ise 5 Eylül'de
-büyüdü — bu bayatlık bu oturumdan önce de vardı. Demo etkilenmiyor: veri seti
-yayınlanan hiyerarşi sürümüne (`89fe05a8…`) birebir bağlı. Bir noktada
-`hierarchy:build` + `listings:build` + `coverage:manifest` tazelenmeli.
+`data/vehicle-hierarchy/` **kökündeki** `hierarchy.json` 4 Eylül tarihli ve
+artık okunmuyor: `current.json` işaretçisi 7 Eylül sürümüne
+(`versions/2026-09-07T14-45-34-906Z-89fe05a83f13/`, `89fe05a8…`) bakar ve
+`resolveArtifactPath()` onu çözer. Katalog da oradan gelir; piyasa yayınının
+`hierarchyVersion`'ı ile eşleşmezse veri seti üretimi **hata verir** (sessizce
+yanlış katalog üretmez).
+
+Kalan bayatlık: korpus 5 Eylül'de büyüdü, hiyerarşi 7 Eylül'de yayınlandı ama
+**tarama sürdükçe yeni dallar çıkabilir**. Yeni dal göründüğünde
+`hierarchy:build` + `listings:build` + `coverage:manifest` tazelenmeli; katalog
+ancak o zaman yeni dalı gösterir.
 
 ---
 ## Sonraki işler
@@ -143,6 +197,12 @@ yayınlanan hiyerarşi sürümüne (`89fe05a8…`) birebir bağlı. Bir noktada
 
 ```bash
 cd /c/dev/NakitGaraj-market-refresh/backend
-npx ts-node --transpile-only src/scripts/verify_demo_dataset.ts      # demo <-> motor: medyan km'de 168/168 birebir
-npx ts-node --transpile-only src/scripts/sweep_demo_invariants.ts    # gösterilen her fiyat tutarlı mı
+npx ts-node --transpile-only src/scripts/audit_source_to_demo_coverage.ts  # kaynaktan başlar: sessiz düşüş 0 mı
+npx ts-node --transpile-only src/scripts/audit_demo_pools.ts              # her havuz seçilebilir/çözülür/tutarlı mı
+npx ts-node --transpile-only src/scripts/verify_demo_dataset.ts           # demo <-> motor: medyan km'de birebir
+npx ts-node --transpile-only src/scripts/sweep_demo_invariants.ts         # gösterilen her fiyat tutarlı mı
 ```
+
+İlki kapsama, diğerleri doğruluk sorar. **Demo veri seti yeniden üretildiğinde
+dördü de çalıştırılmalı**; ilki olmadan "tüm havuzlar doğrulandı" cümlesi yine
+sadece orada olanlar hakkında olur.

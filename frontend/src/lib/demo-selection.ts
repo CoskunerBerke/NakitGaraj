@@ -1,5 +1,5 @@
 /**
- * DEMO ARAC SECIMI — DEGISKEN DERINLIKTE ZINCIR.
+ * DEMO ARAC SECIMI — KATALOGDAN SURULUR, FIYATTAN DEGIL.
  *
  * Kategori yolu markadan markaya farkli derinliktedir ve seviyelerin ANLAMI
  * da sabit degildir:
@@ -8,15 +8,23 @@
  *   Alfa Romeo  > 146       > 1.4      > TS                     (motor + paket)
  *   BMW         > i Serisi  > i4       > eDrive 40 > M Sport    (alt tip + motor + paket)
  *
- * Demo eskiden yolu ilk DORT segmente kirpiyordu; bes seviyeli markalarda bu,
- * kasayi "Motor", motoru "Paket" diye gosteriyor ve paket seviyesini tamamen
- * dusuruyordu. Ayni gorunen yolu paylasan farkli paketler (Advanced / Sport
- * Line) tek bir havuza indirgeniyor, kullaniciya yalnizca ilk havuzun yillari
- * gosteriliyordu.
+ * SABITLENEN HATA: zincir eskiden FIYAT HAVUZLARINDAN turetiliyordu. Havuzlar
+ * ise haftalik taramanin o ana kadar ziyaret ettigi hedeflerden gelir ve tarama
+ * alfabetiktir. Dosya `opel/corsa/...` hedefinde kesilince Opel dropdown'i
+ * Corsa-e'de bitiyor, marka listesi Opel'de duruyordu: Insignia (2.186 ilan),
+ * Vectra (2.706), Peugeot, Renault, Toyota, Volkswagen, Volvo... hepsi SESSIZCE
+ * kayboluyordu. Arac vardi, ilani vardi, hiyerarside vardi — sadece taramanin
+ * sirasi oraya gelmemisti.
  *
- * Bu yuzden zincir burada VERIDEN turer: her seviyenin secenekleri o ana
- * kadarki secimle eslesen havuzlardan gelir, havuz ise yolun TAMAMI birebir
- * eslestiginde cozulur. Fiyat kimligi hicbir yerde kirpilmaz.
+ * Bu yuzden iki sey birbirinden AYRILDI:
+ *
+ *   KATALOG (`catalog`) — kaynak hiyerarsinin tamami. Neyin SECILEBILIR
+ *                         oldugunu bu belirler.
+ *   FIYAT   (`pools`)   — o ana kadarki emsal kaniti. Neyin FIYATLANABILIR
+ *                         oldugunu bu belirler.
+ *
+ * Katalogda olup havuzu olmayan arac ekranda KALIR; fiyat yerine nedeni
+ * gosterilir. Bir aracin gizlenmesi icin kaynakta hic var olmamasi gerekir.
  */
 
 /**
@@ -74,9 +82,42 @@ export const yearEvidenceOf = (row: YearRow): YearEvidence => ({
  */
 export type LevelKind = 'body' | 'engine' | 'package' | 'series';
 
+/**
+ * KATALOGUN TEL BICIMI: `[kimlik, etiket, ilan]`, cocuklu dugumlerde dorduncu
+ * alanda cocuklar.
+ *
+ * KIMLIK TAM YAZILIR, EBEVEYNDEN TURETILMEZ. Ilk surumde yalnizca son segment
+ * tasiniyor ve kimlik "ebeveyn + '/' + segment" diye kuruluyordu. Hiyerarside
+ * 14 dugumde bu KURAL GECERSIZDIR: Sahibinden'de "206" ile "206 +" ayri
+ * modellerdir ve ikisi de `peugeot/206` slug'ina duser; ikinciye `peugeot/206-2`
+ * verilir ama COCUKLARI etiket slug'indan uretildigi icin `peugeot/206/1-4`
+ * olarak kalir — yani cocugun kimligi ebeveyninin kimligiyle baslamaz.
+ * Segmentten kimlik turetmek bu dugumleri yanlis dala baglayip 1.000 ilanlik
+ * "206 1.4"i yetim birakiyordu (denetim yakaladi: 59 sessiz dusus).
+ *
+ * Kimlik burada ARTIK BIR YOL DEGIL, opak bir anahtardir: agac `parentId`
+ * iliskisinden, gosterilen ad `etiket`ten, fiyat havuzu da bu anahtardan
+ * cozulur. Uclu ayni dugumde durdugu icin birbirinden sapamaz.
+ */
+export type CatalogWire =
+  | [string, string, number]
+  | [string, string, number, CatalogWire[]];
+
+export interface CatalogNode {
+  /** Kaynak hiyerarsi kimligi — fiyat havuzu anahtari. Yol DEGILDIR. */
+  id: string;
+  label: string;
+  /** Kaynak hiyerarsinin bu dalda saydigi ilan (fiyat havuzundan bagimsiz). */
+  listings: number;
+  children: CatalogNode[];
+}
+
+export interface Catalog {
+  roots: CatalogNode[];
+  byId: Map<string, CatalogNode>;
+}
+
 export interface DemoPool {
-  /** Sahibinden'in kendi etiketleri: ["Audi","A3","A3 Sedan","1.5 TFSI","Advanced"] */
-  path: string[];
   n: number;
   km: number;
   years: Record<string, YearRow>;
@@ -85,24 +126,36 @@ export interface DemoPool {
 export interface DemoData {
   generatedAt: string;
   hierarchyVersion: string;
+  marketRelease?: string;
+  catalogNodeCount: number;
+  catalogLeafCount: number;
   poolCount: number;
   listingCount: number;
   yearRowCount: number;
   /** "audi/a3" -> ["body","engine","package"] (2. seviyeden itibaren) */
   levels: Record<string, LevelKind[]>;
+  catalog: CatalogWire[];
   pools: Record<string, DemoPool>;
-}
-
-export interface PoolEntry {
-  key: string;
-  pool: DemoPool;
 }
 
 export interface ChainRow {
   depth: number;
-  options: string[];
+  options: CatalogNode[];
+  /** O seviyede secili dugumun kimligi, secilmediyse ''. */
   value: string;
 }
+
+/**
+ * Bir secimin fiyat karsisindaki durumu.
+ *
+ *   INCOMPLETE     — zincir bitmedi, daha alt seviye var.
+ *   PRICEABLE      — arac katalogda var ve fiyat havuzu var.
+ *   NO_PRICE_DATA  — arac katalogda var, guncel emsal kaniti YOK.
+ *
+ * NO_PRICE_DATA bir hata degildir: ya tarama o hedefe henuz gelmemistir, ya da
+ * dalda gecerli ilan yoktur. Her iki halde de arac secilebilir kalir.
+ */
+export type SelectionAvailability = 'INCOMPLETE' | 'PRICEABLE' | 'NO_PRICE_DATA';
 
 export const LEVEL_HEADING: Record<LevelKind, string> = {
   body: 'Kasa / Gövde',
@@ -111,58 +164,66 @@ export const LEVEL_HEADING: Record<LevelKind, string> = {
   series: 'Seri / Tip',
 };
 
-/** Marka/model dallarini eslestirmek icin etiket cifti. */
-const BRANCH_SEPARATOR = String.fromCharCode(0);
+const byTr = (a: CatalogNode, b: CatalogNode) =>
+  a.label.localeCompare(b.label, 'tr');
 
-const byTr = (a: string, b: string) => a.localeCompare(b, 'tr');
+/** Tel bicimini gezilebilir agaca acar ve her dugumu kimligiyle indeksler. */
+export function buildCatalog(data: DemoData): Catalog {
+  const byId = new Map<string, CatalogNode>();
 
-export const poolEntries = (data: DemoData): PoolEntry[] =>
-  Object.entries(data.pools).map(([key, pool]) => ({ key, pool }));
+  const expand = (wire: CatalogWire): CatalogNode => {
+    const [id, label, listings] = wire;
+    const node: CatalogNode = {
+      id,
+      label,
+      listings,
+      children: (wire[3] ?? []).map(expand),
+    };
+    node.children.sort(byTr);
+    byId.set(id, node);
+    return node;
+  };
 
-/** Marka+model ETIKETI -> veri setindeki "audi/a3" dal anahtari. */
-export function branchKeyIndex(entries: PoolEntry[]): Map<string, string> {
-  const index = new Map<string, string>();
-  for (const { key, pool } of entries) {
-    if (pool.path.length < 2) continue;
-    const label = pool.path[0] + BRANCH_SEPARATOR + pool.path[1];
-    if (!index.has(label)) index.set(label, key.split('/').slice(0, 2).join('/'));
-  }
-  return index;
-}
-
-/** Verilen onekle eslesen havuzlarin o derinlikteki secenekleri. */
-export function optionsAt(
-  entries: PoolEntry[],
-  depth: number,
-  prefix: string[],
-): string[] {
-  const seen = new Set<string>();
-  for (const { pool } of entries) {
-    const path = pool.path;
-    if (path.length <= depth) continue;
-    let matches = true;
-    for (let i = 0; i < depth; i++) {
-      if (path[i] !== prefix[i]) {
-        matches = false;
-        break;
-      }
-    }
-    if (matches) seen.add(path[depth]);
-  }
-  return [...seen].sort(byTr);
+  const roots = (data.catalog ?? []).map(expand);
+  roots.sort(byTr);
+  return { roots, byId };
 }
 
 /**
- * Gosterilecek dropdown'lar. Bir seviyede secenek kalmadiysa dal ORADA biter
+ * Secimin `depth` seviyesindeki dugumu. Secim kimlikleri dogrudan tasidigi
+ * icin arama yapilmaz; kimligin yol gibi birlestirilmesi 14 dugumde yanlis
+ * dala duserdi (bkz. CatalogWire).
+ */
+export function nodeAt(
+  catalog: Catalog,
+  selection: string[],
+  depth: number,
+): CatalogNode | null {
+  if (depth <= 0 || selection.length < depth) return null;
+  const id = selection[depth - 1];
+  return id ? catalog.byId.get(id) ?? null : null;
+}
+
+/** Verilen onekin o derinlikteki secenekleri. */
+export function optionsAt(
+  catalog: Catalog,
+  selection: string[],
+  depth: number,
+): CatalogNode[] {
+  if (depth === 0) return catalog.roots;
+  const parent = nodeAt(catalog, selection, depth);
+  return parent ? parent.children : [];
+}
+
+/**
+ * Gosterilecek dropdown'lar. Bir dalin alti yoksa zincir ORADA biter
  * ("A3 Cabrio > 1.8 TFSI" altinda paket seviyesi yoktur) ve dogrudan yila
  * gecilir; secim sayisi hicbir yerde sabitlenmez.
  */
-export function buildChain(entries: PoolEntry[], selection: string[]): ChainRow[] {
+export function buildChain(catalog: Catalog, selection: string[]): ChainRow[] {
   const rows: ChainRow[] = [];
-  const maxDepth = entries.reduce((m, e) => Math.max(m, e.pool.path.length), 0);
-
-  for (let depth = 0; depth < maxDepth; depth++) {
-    const options = optionsAt(entries, depth, selection);
+  for (let depth = 0; ; depth++) {
+    const options = optionsAt(catalog, selection, depth);
     if (options.length === 0) break;
     rows.push({ depth, options, value: selection[depth] ?? '' });
     if (!selection[depth]) break;
@@ -171,38 +232,62 @@ export function buildChain(entries: PoolEntry[], selection: string[]): ChainRow[
 }
 
 /**
- * FIYAT HAVUZU TAM YOLDAN COZULUR.
+ * FIYAT HAVUZU TAM KIMLIKTEN COZULUR.
  *
- * Eskiden anahtar secimden yeniden slug'lastirilip bulunamayinca ETIKETE gore
- * ilk eslesen havuz aliniyordu; ayni dort etiketi paylasan paketlerde hep ilki
- * donuyordu. Artik yol birebir esitlenir: her paket kendi havuzudur.
+ * Secim segment kimligi tasidigi icin havuz dogrudan okunur; etikete gore
+ * arama yapilmaz, dolayisiyla ayni etiketi paylasan iki dal birbirine
+ * karisamaz.
  */
 export function resolvePool(
-  entries: PoolEntry[],
+  data: DemoData,
   selection: string[],
-): PoolEntry | null {
-  if (selection.length === 0) return null;
-  return (
-    entries.find(
-      ({ pool }) =>
-        pool.path.length === selection.length &&
-        pool.path.every((segment, i) => segment === selection[i]),
-    ) ?? null
-  );
+): DemoPool | null {
+  const id = selection[selection.length - 1];
+  return id ? data.pools[id] ?? null : null;
+}
+
+/** Secimin ekranda gorunen yolu: ["Opel","Insignia","1.6 CDTI"]. */
+export function labelPathOf(catalog: Catalog, selection: string[]): string[] {
+  const labels: string[] = [];
+  for (let depth = 1; depth <= selection.length; depth++) {
+    const node = nodeAt(catalog, selection, depth);
+    if (!node) break;
+    labels.push(node.label);
+  }
+  return labels;
+}
+
+/**
+ * SECILEBILIRLIK ile FIYATLANABILIRLIK AYRI SORULARDIR.
+ *
+ * Zincirin sonuna gelinmisse arac secilmis demektir. Fiyat havuzunun olup
+ * olmadigi bunu DEGISTIRMEZ; yalnizca ekranda sayi mi yoksa gerekce mi
+ * gosterilecegini belirler.
+ */
+export function availabilityOf(
+  catalog: Catalog,
+  data: DemoData,
+  selection: string[],
+): SelectionAvailability {
+  const node = nodeAt(catalog, selection, selection.length);
+  if (!node || node.children.length > 0) return 'INCOMPLETE';
+  const pool = data.pools[node.id];
+  return pool && Object.keys(pool.years).length > 0
+    ? 'PRICEABLE'
+    : 'NO_PRICE_DATA';
 }
 
 /** Seviye basligi: ilk ikisi sabit, gerisi veri setinin sinifllandirmasindan. */
 export function headingFor(
   data: DemoData,
-  branchKeys: Map<string, string>,
   selection: string[],
   depth: number,
 ): string {
   if (depth === 0) return 'Marka';
   if (depth === 1) return 'Model';
-  if (selection.length < 2) return LEVEL_HEADING.series;
-
-  const branch = branchKeys.get(selection[0] + BRANCH_SEPARATOR + selection[1]);
+  // Dal anahtari MODEL DUGUMUNUN KIMLIGIDIR; marka/model'i kimlikten kesmek
+  // "206 +" gibi dugumlerde baska bir dalin siniflandirmasini okurdu.
+  const branch = selection[1];
   const kinds = branch ? data.levels[branch] : undefined;
   return LEVEL_HEADING[kinds?.[depth - 2] ?? 'series'];
 }
@@ -214,7 +299,7 @@ export function headingFor(
  * altinda zincir kesilir.
  */
 export function applyChoice(
-  entries: PoolEntry[],
+  catalog: Catalog,
   selection: string[],
   depth: number,
   value: string,
@@ -223,18 +308,25 @@ export function applyChoice(
   if (!value) return next;
   next[depth] = value;
 
+  // Korunan secim ETIKETE gore tasinir: "1.6 TDI" Sedan'da ve Sportback'te
+  // AYRI dugumlerdir, kimlikleri esit degildir. Kimlige gore eslemek kasa
+  // degistiren kullaniciya ayni motoru bastan sectirirdi.
   for (let i = depth + 1; i < selection.length; i++) {
-    const kept = selection[i];
-    if (!kept || !optionsAt(entries, i, next).includes(kept)) break;
-    next[i] = kept;
+    const keptLabel = catalog.byId.get(selection[i])?.label;
+    if (!keptLabel) break;
+    const match = optionsAt(catalog, next, i).find(
+      (option) => option.label === keptLabel,
+    );
+    if (!match) break;
+    next[i] = match.id;
   }
   return next;
 }
 
 /** Havuzun yillari, yeniden eskiye. */
-export function yearsOf(entry: PoolEntry | null): number[] {
-  if (!entry) return [];
-  return Object.keys(entry.pool.years)
+export function yearsOf(pool: DemoPool | null): number[] {
+  if (!pool) return [];
+  return Object.keys(pool.years)
     .map(Number)
     .sort((a, b) => b - a);
 }

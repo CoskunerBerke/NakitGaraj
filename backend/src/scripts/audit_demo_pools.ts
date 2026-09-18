@@ -25,16 +25,18 @@ import {
   quote,
 } from '../../../frontend/src/lib/demo-pricing';
 import {
+  availabilityOf,
+  buildCatalog,
   buildChain,
-  branchKeyIndex,
   headingFor,
+  labelPathOf,
   optionsAt,
-  poolEntries,
   resolvePool,
   yearEvidenceOf,
   yearsOf,
+  type Catalog,
+  type CatalogNode,
   type DemoData,
-  type PoolEntry,
 } from '../../../frontend/src/lib/demo-selection';
 
 /** Etiketleri birlestirirken kullanilan ayirac; etiket metninde gecemez. */
@@ -92,8 +94,20 @@ function main(): void {
     sourceYears.set(node, years);
   }
 
-  const entries: PoolEntry[] = poolEntries(data);
-  const branches = branchKeyIndex(entries);
+  const catalog: Catalog = buildCatalog(data);
+
+  /**
+   * Her dugumun KOKTEN kendisine kadarki secim zinciri. Kimlikler yol
+   * degildir (bkz. demo-selection.ts > CatalogWire), bu yuzden zincir
+   * agactan cikarilir, kimlik kesilerek degil.
+   */
+  const chainOf = new Map<string, string[]>();
+  const collect = (node: CatalogNode, prefix: string[]): void => {
+    const chain = [...prefix, node.id];
+    chainOf.set(node.id, chain);
+    for (const child of node.children) collect(child, chain);
+  };
+  for (const root of catalog.roots) collect(root, []);
 
   // Ayni onek icin secenekler bir kez hesaplanir; fonksiyon GERCEK olanidir.
   const optionCache = new Map<string, Set<string>>();
@@ -101,7 +115,9 @@ function main(): void {
     const key = prefix.join(SEPARATOR);
     let hit = optionCache.get(key);
     if (!hit) {
-      hit = new Set(optionsAt(entries, prefix.length, prefix));
+      hit = new Set(
+        optionsAt(catalog, prefix, prefix.length).map((o) => o.id),
+      );
       optionCache.set(key, hit);
     }
     return hit;
@@ -126,8 +142,12 @@ function main(): void {
   let quoted = 0;
   let manualReview = 0;
 
-  for (const { key, pool } of entries) {
-    const path_ = pool.path;
+  for (const [key, pool] of Object.entries(data.pools)) {
+    const path_ = chainOf.get(key);
+    if (!path_) {
+      unreachable.push(`${key}: katalogda yok`);
+      continue;
+    }
     depthHistogram[path_.length] = (depthHistogram[path_.length] ?? 0) + 1;
 
     for (let d = 0; d < path_.length; d += 1) {
@@ -137,14 +157,17 @@ function main(): void {
       }
     }
 
-    const identity = path_.join(SEPARATOR);
+    const identity = labelPathOf(catalog, path_).join(SEPARATOR);
     const seen = identitySeen.get(identity);
     if (seen) identityCollisions.push(`${seen} == ${key}`);
     else identitySeen.set(identity, key);
 
-    const resolved = resolvePool(entries, path_);
-    if (!resolved || resolved.key !== key) {
-      unresolvable.push(`${key} -> ${resolved ? resolved.key : 'null'}`);
+    const resolved = resolvePool(data, path_);
+    if (resolved !== pool) {
+      unresolvable.push(`${key} -> ${resolved ? 'baska havuz' : 'null'}`);
+    }
+    if (availabilityOf(catalog, data, path_) !== 'PRICEABLE') {
+      unresolvable.push(`${key}: fiyatli havuz PRICEABLE saymiyor`);
     }
 
     // Bir havuzun yolu baska bir havuzun oneki olamaz: kisa olan secildiginde
@@ -153,20 +176,20 @@ function main(): void {
       prefixShadowed.push(`${key} (derinlik ${path_.length})`);
     }
 
-    const chain = buildChain(entries, path_);
+    const chain = buildChain(catalog, path_);
     if (chain.length < path_.length) {
       chainMismatch.push(
         `${key}: zincir ${chain.length} < yol ${path_.length}`,
       );
     }
     for (let d = 0; d < path_.length; d += 1) {
-      if (!headingFor(data, branches, path_, d)) {
+      if (!headingFor(data, path_, d)) {
         chainMismatch.push(`${key} @${d}: baslik yok`);
       }
     }
 
     const src = sourceYears.get(key) ?? new Map<number, Observation[]>();
-    const shown = new Set(yearsOf({ key, pool }));
+    const shown = new Set(yearsOf(pool));
     for (const [year, rows] of src) {
       if (rows.length >= 1 && !shown.has(year)) {
         hiddenYears.push(`${key} ${year} (${rows.length} ilan)`);
@@ -304,7 +327,10 @@ function main(): void {
     `  yayin                           : ${pointer.release}\n`,
   );
   process.stdout.write(
-    `  havuz                           : ${entries.length}\n`,
+    `  katalog dugumu                  : ${catalog.byId.size}\n`,
+  );
+  process.stdout.write(
+    `  fiyat havuzu                    : ${Object.keys(data.pools).length}\n`,
   );
   process.stdout.write(`  yil satiri                      : ${yearRows}\n`);
   process.stdout.write(`  fiyat uretilen                  : ${quoted}\n`);

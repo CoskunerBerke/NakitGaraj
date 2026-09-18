@@ -11,6 +11,11 @@
  * Secim zinciri sabit derinlikte DEGILDIR ve mantigi `lib/demo-selection.ts`
  * icinde, arayuzden bagimsiz sinanabilir halde durur.
  *
+ * DROPDOWN'LAR KATALOGDAN GELIR, FIYAT HAVUZLARINDAN DEGIL. Fiyat havuzu
+ * haftalik taramanin nereye kadar geldigini yansitir; secim agaci onu
+ * yansitmamalidir. Havuzu olmayan arac secilebilir kalir ve fiyat yerine
+ * nedeni gosterilir.
+ *
  * HAREKET: tamami CSS (`globals.css` -> "DEMO — HAREKET KATMANI"). Tek
  * istisna fiyat sayaci; o da tek bir requestAnimationFrame dongusudur
  * (`lib/use-count-up.ts`). Sayfaya animasyon icin ek bagimlilik girmez ve
@@ -32,10 +37,11 @@ import { quote, hasEnoughEvidence, formatTL, DemoQuote } from '../../lib/demo-pr
 import { useCountUp } from '../../lib/use-count-up';
 import {
   applyChoice,
-  branchKeyIndex,
+  availabilityOf,
+  buildCatalog,
   buildChain,
   headingFor,
-  poolEntries,
+  labelPathOf,
   resolvePool,
   yearEvidenceOf,
   yearsOf,
@@ -57,7 +63,7 @@ export default function DemoPage() {
   const [data, setData] = useState<DemoData | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  /** Secilen etiketler, koktan asagi: ["Audi","A3","A3 Sedan", ...] */
+  /** Secilen dugum kimlikleri, koktan asagi: ["audi","audi/a3","audi/a3/a3-sedan", ...] */
   const [selection, setSelection] = useState<string[]>([]);
   const [year, setYear] = useState('');
   const [km, setKm] = useState('');
@@ -72,11 +78,28 @@ export default function DemoPage() {
       .catch((e: Error) => setLoadError(e.message));
   }, []);
 
-  const entries = useMemo(() => (data ? poolEntries(data) : []), [data]);
-  const branchKeys = useMemo(() => branchKeyIndex(entries), [entries]);
-  const chain = useMemo(() => buildChain(entries, selection), [entries, selection]);
-  const pool = useMemo(() => resolvePool(entries, selection), [entries, selection]);
+  const catalog = useMemo(
+    () => (data ? buildCatalog(data) : { roots: [], byId: new Map() }),
+    [data],
+  );
+  const chain = useMemo(
+    () => buildChain(catalog, selection),
+    [catalog, selection],
+  );
+  const pool = useMemo(
+    () => (data ? resolvePool(data, selection) : null),
+    [data, selection],
+  );
   const years = useMemo(() => yearsOf(pool), [pool]);
+  const labelPath = useMemo(
+    () => labelPathOf(catalog, selection),
+    [catalog, selection],
+  );
+  /** 'INCOMPLETE' | 'PRICEABLE' | 'NO_PRICE_DATA' */
+  const availability = useMemo(
+    () => (data ? availabilityOf(catalog, data, selection) : 'INCOMPLETE'),
+    [catalog, data, selection],
+  );
 
   /**
    * Ust secim degisince yil KOR RESETLENMEZ: secili yil yeni havuzda da
@@ -84,13 +107,13 @@ export default function DemoPage() {
    * bir effect icinden setState cagirmak zincirleme render uretir.
    */
   const activeYear = useMemo(
-    () => (pool && year && pool.pool.years[year] ? year : ''),
+    () => (pool && year && pool.years[year] ? year : ''),
     [pool, year],
   );
 
   const result: DemoQuote | null = useMemo(() => {
     if (!pool || !activeYear) return null;
-    const row = pool.pool.years[activeYear];
+    const row = pool.years[activeYear];
     if (!row) return null;
 
     const evidence = yearEvidenceOf(row);
@@ -117,7 +140,7 @@ export default function DemoPage() {
     });
   }, [pool, activeYear, km]);
 
-  const yearRow = pool && activeYear ? pool.pool.years[activeYear] : null;
+  const yearRow = pool && activeYear ? pool.years[activeYear] : null;
 
   /**
    * Sayilar yerinden ziplamaz, yeni degere sayarak gider. Fiyat ortadan
@@ -164,9 +187,10 @@ export default function DemoPage() {
             Aracınız ne eder?
           </h1>
           <p className="mt-2 max-w-2xl text-sm leading-relaxed text-[var(--text-secondary)]">
-            {formatTL(data.listingCount)} gerçek ilandan türetilmiş{' '}
-            {formatTL(data.poolCount)} araç havuzu. Aracınızı seçin; nakit alım teklifini
-            ve konsinye ile eline geçecek tutarı anında görün.
+            {formatTL(data.catalogLeafCount)} araç donanımının tamamı seçilebilir;{' '}
+            {formatTL(data.poolCount)} tanesi için {formatTL(data.listingCount)} gerçek
+            ilandan türetilmiş güncel fiyat var. Aracınızı seçin; nakit alım
+            teklifini ve konsinye ile eline geçecek tutarı anında görün.
           </p>
         </header>
 
@@ -184,24 +208,24 @@ export default function DemoPage() {
               // kullanici kendi sectigi alanda hicbir hareket gormez.
               <label
                 className="demo-refresh block"
-                key={`${depth}:${options.join('|')}`}
+                key={`${depth}:${options.map((o) => o.id).join('|')}`}
               >
                 <span className="mb-1.5 block text-xs text-[var(--text-secondary)]">
-                  {headingFor(data, branchKeys, selection, depth)}
+                  {headingFor(data, selection, depth)}
                 </span>
                 <select
                   className={selectClass}
                   value={value}
                   onChange={(e) =>
                     setSelection((previous) =>
-                      applyChoice(entries, previous, depth, e.target.value),
+                      applyChoice(catalog, previous, depth, e.target.value),
                     )
                   }
                 >
                   <option value="">Seçiniz</option>
                   {options.map((option) => (
-                    <option key={option} value={option}>
-                      {option}
+                    <option key={option.id} value={option.id}>
+                      {option.label}
                     </option>
                   ))}
                 </select>
@@ -210,7 +234,10 @@ export default function DemoPage() {
           </div>
 
           <div className="mt-3 grid gap-3 sm:grid-cols-2">
-            <label className="demo-refresh block" key={`yil:${pool?.key ?? ''}`}>
+            <label
+              className="demo-refresh block"
+              key={`yil:${selection.join('/')}`}
+            >
               <span className="mb-1.5 block text-xs text-[var(--text-secondary)]">Yıl</span>
               <select
                 className={selectClass}
@@ -221,7 +248,7 @@ export default function DemoPage() {
                 <option value="">Seçiniz</option>
                 {years.map((y) => (
                   <option key={y} value={String(y)}>
-                    {y} ({pool?.pool.years[String(y)][6]} ilan)
+                    {y} ({pool?.years[String(y)][6]} ilan)
                   </option>
                 ))}
               </select>
@@ -253,19 +280,44 @@ export default function DemoPage() {
             </label>
           </div>
 
-          {pool && (
+          {availability === 'PRICEABLE' && pool && (
             <p
               className="demo-fade mt-3 text-xs text-[var(--text-secondary)]"
-              key={pool.key}
+              key={selection.join('/')}
             >
               Fiyat havuzu:{' '}
               <span className="font-medium text-[var(--text-primary)]">
-                {pool.pool.path.join(' › ')}
+                {labelPath.join(' › ')}
               </span>{' '}
-              — {formatTL(pool.pool.n)} emsal ilan
+              — {formatTL(pool.n)} emsal ilan
             </p>
           )}
         </section>
+
+        {/*
+          ARAC VAR, FIYAT YOK.
+
+          Kaynakta var olan ama guncel emsal kaniti bulunmayan arac GIZLENMEZ.
+          Eskiden dropdown yalnizca fiyat havuzlarindan kuruldugu icin bu
+          araclar hic gorunmuyordu ve kullanici kendi arabasini bulamiyordu —
+          sanki hic yokmus gibi. Artik secilebilir, ve neden fiyat
+          gosterilmedigi aciklanir.
+        */}
+        {availability === 'NO_PRICE_DATA' && (
+          <div className="demo-rise mt-5 flex items-start gap-3 rounded-xl border border-amber-300/60 bg-amber-50 p-4 text-sm">
+            <AlertTriangle size={18} className="mt-0.5 shrink-0 text-amber-600" />
+            <div>
+              <p className="font-medium text-amber-900">
+                {labelPath.join(' › ')}
+              </p>
+              <p className="mt-0.5 text-amber-900/80">
+                Bu araç için fiyat hesaplamak için yeterli güncel emsal
+                bulunamadı. Yanlış bir fiyat göstermektense göstermiyoruz —
+                aracınız uzmanımız tarafından değerlendirilecektir.
+              </p>
+            </div>
+          </div>
+        )}
 
         {pool && activeYear && !result && (
           <div className="demo-rise mt-5 flex items-start gap-3 rounded-xl border border-amber-300/60 bg-amber-50 p-4 text-sm">
