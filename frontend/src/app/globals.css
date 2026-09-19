@@ -242,8 +242,38 @@ body {
    sonmez, yalnizca kisa bir tazelenme hissi birakir. */
 @keyframes demo-refresh {
   from {
-    opacity: 0.4;
-    transform: translate3d(0, -3px, 0);
+    opacity: 0.35;
+    transform: translate3d(0, -4px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/*
+ * SECIM GERI BILDIRIMI. Secilen alan cok kisa bir accent halkasi birakir:
+ * "bu alani sen degistirdin" der, sonra kaybolur. Zipmaz, buyumez, renk
+ * degistirmez — halka disariya acilip soner.
+ */
+@keyframes demo-pulse {
+  from {
+    box-shadow: 0 0 0 0 rgba(163, 0, 34, 0.26);
+  }
+  to {
+    box-shadow: 0 0 0 7px rgba(163, 0, 34, 0);
+  }
+}
+
+/*
+ * SONUC GIRISI. Fiyat bolumu sert bicimde belirmez: asagidan hafifce yukselir
+ * ve olcegi 0.99'dan 1'e oturur. Olcek farki bilerek kucuk; buyuk bir "zoom"
+ * sayiyi reklam gibi gosterirdi.
+ */
+@keyframes demo-result {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 14px, 0) scale(0.99);
   }
   to {
     opacity: 1;
@@ -264,9 +294,26 @@ body {
 }
 
 .demo-refresh {
-  animation: demo-refresh 280ms ease-out;
+  animation: demo-refresh 300ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
+.demo-result {
+  animation: demo-result 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* Kisa accent halkasi; `forwards` yok, iz birakmadan soner. */
+.demo-pulse > .demo-select,
+.demo-pulse > .demo-input {
+  animation: demo-pulse 620ms ease-out;
+}
+
+/*
+ * GIRIS SIRASI. Ogeler ayni anda degil, okuma sirasiyla girer: once ne
+ * baktigini soyleyen baslik, sonra ne yapacagini soyleyen aciklama, en son
+ * yapacagi yer olan kart. Toplam ~460ms; kullaniciyi bekletmez, cunku
+ * gecikmeler yalnizca opacity/transform'u erteler, icerik ilk karede
+ * hazirdir.
+ */
 .demo-delay-1 {
   animation-delay: 60ms;
 }
@@ -275,6 +322,34 @@ body {
 }
 .demo-delay-3 {
   animation-delay: 180ms;
+}
+.demo-delay-4 {
+  animation-delay: 240ms;
+}
+.demo-delay-5 {
+  animation-delay: 300ms;
+}
+
+/*
+ * ALANLAR SIRAYLA UYANIR. Ust secim degisince alt alan hemen degil, cok kisa
+ * bir duraksamadan sonra tazelenir; boylece "sectim -> bir sonraki hazirlandi"
+ * zinciri gorunur olur. Gecikme alanin SIRASINA gore artar, yani zincir
+ * soldan saga akar.
+ */
+.demo-fields > *:nth-child(2) {
+  animation-delay: 45ms;
+}
+.demo-fields > *:nth-child(3) {
+  animation-delay: 90ms;
+}
+.demo-fields > *:nth-child(4) {
+  animation-delay: 135ms;
+}
+.demo-fields > *:nth-child(5) {
+  animation-delay: 180ms;
+}
+.demo-fields > *:nth-child(n + 6) {
+  animation-delay: 225ms;
 }
 
 /* Kart mikro-etkilesimi: yalnizca gercek imlecli cihazlarda. */
@@ -298,29 +373,103 @@ body {
   }
 }
 
-.demo-select {
-  transition:
-    border-color 160ms ease,
-    box-shadow 160ms ease,
-    opacity 160ms ease;
-}
-
-.demo-select:hover:not(:disabled) {
-  border-color: color-mix(in srgb, #a30022 32%, var(--border-gray));
-}
-
-.demo-select:focus-visible,
-.demo-input:focus-visible {
-  border-color: #a30022;
-  box-shadow: 0 0 0 3px rgba(163, 0, 34, 0.18);
-  outline: none;
-}
-
+.demo-select,
 .demo-input {
   transition:
     border-color 160ms ease,
     box-shadow 160ms ease,
+    background-color 160ms ease,
+    color 160ms ease,
     opacity 160ms ease;
+}
+
+.demo-select:hover:not(:disabled),
+.demo-input:hover:not(:disabled) {
+  border-color: color-mix(in srgb, #a30022 32%, var(--border-gray));
+}
+
+/*
+ * DOLU ALAN BOS ALANDAN AYRILIR. "Seciniz" ile secilmis deger ayni agirlikta
+ * yazildiginda, kullanici zincirin neresinde oldugunu ancak okuyarak anliyor.
+ * Dolu alanin yazisi koyulasir ve sol kenari accent alir — zincir bir bakista
+ * gorunur.
+ */
+.demo-select[data-filled='true'] {
+  color: var(--foreground);
+  font-weight: 500;
+  border-color: color-mix(in srgb, #a30022 24%, var(--border-gray));
+  box-shadow: inset 2px 0 0 0 rgba(163, 0, 34, 0.55);
+}
+
+/*
+ * Odak halkasi MARKA KIRMIZISIDIR ve her zaman gorunur. Kontrast, kenarligin
+ * kendisinden degil 3px'lik halkadan gelir; boylece klavye kullanicisi alani
+ * uzaktan da secebilir. Golge bilerek kucuk: "elevation" hissi veriyor ama
+ * kart gibi yuzmuyor.
+ */
+.demo-select:focus-visible,
+.demo-input:focus-visible {
+  border-color: #a30022;
+  box-shadow:
+    0 0 0 3px rgba(163, 0, 34, 0.18),
+    0 4px 12px -8px rgba(15, 17, 21, 0.5);
+  outline: none;
+}
+
+/*
+ * DOLU ALANIN ODAK HALKASI AYRICA YAZILIR.
+ *
+ * `[data-filled]` ile `:focus-visible` ayni ozgullukte (0,2,0); dolayisiyla
+ * sirf sonra geldigi icin dolu alanin `box-shadow`'u odak halkasini EZIYORDU
+ * ve secim yapilmis bir alana Tab'la gelen klavye kullanicisi hicbir halka
+ * gormuyordu. Iki gosterge burada birlikte yazilir: sol accent cizgisi kalir,
+ * halka ustune biner.
+ */
+.demo-select[data-filled='true']:focus-visible {
+  border-color: #a30022;
+  box-shadow:
+    inset 2px 0 0 0 rgba(163, 0, 34, 0.55),
+    0 0 0 3px rgba(163, 0, 34, 0.18),
+    0 4px 12px -8px rgba(15, 17, 21, 0.5);
+}
+
+/* Bekleyen alan geride durur ama okunakli kalir: %40 opaklik metni
+   erisilebilirlik esiginin altina dusuruyordu. */
+.demo-select:disabled,
+.demo-input:disabled {
+  opacity: 1;
+  color: var(--text-secondary);
+  background-color: color-mix(in srgb, var(--accent-gray) 55%, transparent);
+  border-color: color-mix(in srgb, var(--border-gray) 70%, transparent);
+  cursor: not-allowed;
+}
+
+/*
+ * ILERLEME CIZGISI. Sihirbaza cevirmeden "kac adim kaldi" sorusunu yanitlar:
+ * kartin ustunde tek bir sac teli. Genislik bir KEZ gecisle degisir, surekli
+ * animasyon degildir.
+ */
+.demo-progress-track {
+  height: 2px;
+  border-radius: 999px;
+  background: var(--accent-gray);
+  overflow: hidden;
+}
+
+/*
+ * Dolgu bilerek soluk: tamamlandiginda kartin ustunde tam genislikte KOYU bir
+ * kirmizi cizgi olusuyordu ve "ilerleme" degil "uyari" gibi okunuyordu. Ince
+ * ve yari saydam kalinca isini yapiyor, dikkati fiyattan calmiyor.
+ */
+.demo-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    rgba(163, 0, 34, 0.35),
+    rgba(163, 0, 34, 0.7)
+  );
+  transition: width 420ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 /* Secim degisip yeni fiyat hesaplanana kadar cok kisa bir yatisma. */
@@ -332,6 +481,41 @@ body {
 .demo-settled {
   opacity: 1;
   transition: opacity 180ms ease;
+}
+
+/*
+ * SAYFA DERINLIGI. Duz beyaz bir alan yerine cok soluk iki radyal accent:
+ * kart zeminden ayrilsin diye. Blur YOK, glassmorphism YOK — bu bir arac
+ * degerleme sayfasi, tarayici penceresi degil. Renkler markanin kendi
+ * kirmizisindan turer ve %4'un altinda kalir.
+ */
+.demo-page {
+  background-image:
+    radial-gradient(
+      62rem 34rem at 12% -6%,
+      rgba(163, 0, 34, 0.045),
+      transparent 60%
+    ),
+    radial-gradient(
+      48rem 30rem at 92% 4%,
+      rgba(15, 17, 21, 0.035),
+      transparent 62%
+    );
+  background-repeat: no-repeat;
+}
+
+.dark .demo-page {
+  background-image:
+    radial-gradient(
+      62rem 34rem at 12% -6%,
+      rgba(163, 0, 34, 0.1),
+      transparent 60%
+    ),
+    radial-gradient(
+      48rem 30rem at 92% 4%,
+      rgba(255, 255, 255, 0.035),
+      transparent 62%
+    );
 }
 
 /* Guven gostergesi: panoya donusmeyen, tek satirlik ince bir bar. */
@@ -390,16 +574,31 @@ body {
   .demo-rise,
   .demo-fade,
   .demo-pop,
-  .demo-refresh {
+  .demo-refresh,
+  .demo-result,
+  .demo-pulse > .demo-select,
+  .demo-pulse > .demo-input {
     animation: none !important;
     opacity: 1 !important;
     transform: none !important;
+  }
+
+  /* Gecikmeler de kalkar: yoksa animasyonu kapatilmis oge, kendisi icin
+     ayrilmis gecikme boyunca bos yere bekletilmis gibi gorunurdu. */
+  .demo-delay-1,
+  .demo-delay-2,
+  .demo-delay-3,
+  .demo-delay-4,
+  .demo-delay-5,
+  .demo-fields > * {
+    animation-delay: 0ms !important;
   }
 
   .demo-card,
   .demo-select,
   .demo-input,
   .demo-confidence-fill,
+  .demo-progress-fill,
   .nav-cta,
   .demo-settling,
   .demo-settled {

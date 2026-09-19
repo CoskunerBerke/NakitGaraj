@@ -25,7 +25,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Banknote,
+  Check,
   Handshake,
+  Info,
   Loader2,
   Search,
   TrendingUp,
@@ -45,6 +47,7 @@ import {
   resolvePool,
   yearEvidenceOf,
   yearsOf,
+  type CatalogNode,
   type DemoData,
 } from '../../lib/demo-selection';
 
@@ -67,6 +70,22 @@ export default function DemoPage() {
   const [selection, setSelection] = useState<string[]>([]);
   const [year, setYear] = useState('');
   const [km, setKm] = useState('');
+
+  /**
+   * SON DOKUNULAN ALAN — yalnizca gorsel geri bildirim icin.
+   *
+   * Secim mantigiyla ilgisi YOKTUR: hangi alanin kisa accent halkasini
+   * oynatacagini soyler, secimi ne kurar ne degistirir. Bu yuzden `selection`
+   * ile birlestirilmedi; fiyat katmanina hicbir sekilde girmez.
+   *
+   * `-1` yil alanini temsil eder (zincirin disinda, derinligi yok).
+   */
+  const [pulsedDepth, setPulsedDepth] = useState<number | null>(null);
+  useEffect(() => {
+    if (pulsedDepth === null) return;
+    const timer = setTimeout(() => setPulsedDepth(null), 620);
+    return () => clearTimeout(timer);
+  }, [pulsedDepth]);
 
   useEffect(() => {
     fetch('/demo-market.json')
@@ -151,6 +170,47 @@ export default function DemoPage() {
   const shownCashOffer = useCountUp(result?.cashOffer ?? 0);
   const shownConsignmentNet = useCountUp(result?.customerConsignmentNet ?? 0);
 
+  /**
+   * ILERLEME — TURETILIR, SAKLANMAZ.
+   *
+   * Adim sayisi markadan markaya degisir (Alfa Romeo'da 4, Audi'de 6), bu
+   * yuzden sabit bir "1/6" yazmak yanlis olurdu.
+   *
+   * Toplam, GORUNEN zincirden de okunamaz: zincir bir sonraki seviyeyi ancak
+   * secim yapilinca acar, yani payda ilerledikce BUYUR ve cubuk adim
+   * attiginiz anda GERI CEKILIRDI (1/2 = %50 iken 1/3 = %33). Bunun yerine o
+   * ana kadarki secimin altindaki EN DERIN yol olculur: payda ya sabit kalir
+   * ya da kisa bir dala girildiginde kucululur, dolayisiyla oran yalnizca
+   * ileri gider.
+   *
+   * Kilometre sayilmaz: zorunlu degildir, bos birakilirsa o yilin medyani
+   * kullanilir.
+   */
+  const deepestDepth = useMemo(() => {
+    const deepest = (nodes: CatalogNode[], depth: number): number =>
+      nodes.reduce(
+        (max, node) =>
+          Math.max(
+            max,
+            node.children.length === 0
+              ? depth + 1
+              : deepest(node.children, depth + 1),
+          ),
+        depth,
+      );
+    const scope = selection.length
+      ? catalog.byId.get(selection[selection.length - 1])?.children ?? []
+      : catalog.roots;
+    return scope.length === 0 ? selection.length : deepest(scope, selection.length);
+  }, [catalog, selection]);
+
+  /** Zincir + yil. En az bir adim daima vardir. */
+  const totalSteps = Math.max(1, deepestDepth) + 1;
+  const completedSteps = Math.min(
+    totalSteps,
+    selection.filter(Boolean).length + (activeYear ? 1 : 0),
+  );
+
   if (loadError) {
     return (
       <main className="min-h-screen flex items-center justify-center p-6">
@@ -176,17 +236,23 @@ export default function DemoPage() {
     'demo-input w-full rounded-lg border border-[var(--border-gray)] bg-[var(--card-bg)] px-3 py-2.5 text-sm outline-none disabled:opacity-40';
 
   return (
-    <main className="min-h-screen px-4 py-10 md:py-14">
+    <main className="demo-page min-h-screen px-4 py-10 md:py-14">
       <div className="mx-auto max-w-5xl">
-        <header className="demo-rise mb-8">
-          <div className="inline-flex items-center gap-2 rounded-full bg-[#a30022]/10 px-3 py-1 text-xs font-medium text-[#a30022]">
+        {/*
+          Ogeler okuma sirasiyla girer: once ne baktigini soyleyen rozet ve
+          baslik, sonra ne yapacagini soyleyen aciklama, en son yapacagi yer
+          olan kart. Gecikmeler yalnizca opacity/transform'u erteler; icerik
+          ilk karede hazirdir, yani kimse bekletilmez.
+        */}
+        <header className="mb-8">
+          <div className="demo-rise inline-flex items-center gap-2 rounded-full bg-[#a30022]/10 px-3 py-1 text-xs font-medium text-[#a30022]">
             <Database size={13} />
             Canlı piyasa verisi
           </div>
-          <h1 className="mt-3 text-3xl font-semibold tracking-tight md:text-4xl">
+          <h1 className="demo-rise demo-delay-1 mt-3 text-[2rem] font-semibold leading-[1.1] tracking-tight md:text-[2.75rem]">
             Aracınız ne eder?
           </h1>
-          <p className="mt-2 max-w-2xl text-sm leading-relaxed text-[var(--text-secondary)]">
+          <p className="demo-rise demo-delay-2 mt-3 max-w-2xl text-[0.9375rem] leading-relaxed text-[var(--text-secondary)]">
             {formatTL(data.catalogLeafCount)} araç donanımının tamamı seçilebilir;{' '}
             {formatTL(data.poolCount)} tanesi için {formatTL(data.listingCount)} gerçek
             ilandan türetilmiş güncel fiyat var. Aracınızı seçin; nakit alım
@@ -194,33 +260,67 @@ export default function DemoPage() {
           </p>
         </header>
 
-        <section className="demo-rise demo-delay-1 rounded-2xl border border-[var(--border-gray)] bg-[var(--card-bg)] p-5 shadow-sm md:p-6">
-          <div className="mb-4 flex items-center gap-2 text-sm font-medium">
-            <Search size={16} className="text-[#a30022]" />
-            Araç seçimi
+        <section className="demo-rise demo-delay-3 rounded-2xl border border-[var(--border-gray)] bg-[var(--card-bg)] p-5 shadow-[0_1px_2px_rgba(15,17,21,0.04),0_12px_32px_-24px_rgba(15,17,21,0.25)] md:p-6">
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-sm font-medium">
+              <Search size={16} className="text-[#a30022]" />
+              Araç seçimi
+            </div>
+            <span className="text-xs tabular-nums text-[var(--text-secondary)]">
+              {completedSteps} / {totalSteps}
+            </span>
           </div>
 
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {/*
+            Sihirbaza cevrilmedi: tek sayfadaki form aynen duruyor, ustune
+            yalnizca "neredeyim" sorusunu yanitlayan bir sac teli eklendi.
+          */}
+          <div
+            className="demo-progress-track mb-5"
+            role="progressbar"
+            aria-valuemin={0}
+            aria-valuemax={totalSteps}
+            aria-valuenow={completedSteps}
+            aria-label="Araç seçimi ilerlemesi"
+          >
+            <div
+              className="demo-progress-fill"
+              style={{
+                width: `${Math.round((completedSteps / Math.max(1, totalSteps)) * 100)}%`,
+              }}
+            />
+          </div>
+
+          <div className="demo-fields grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {chain.map(({ depth, options, value }) => (
               // Anahtar SECENEK KUMESINI tasir: ust secim degisip bu alanin
               // secenekleri yenilendiginde alan kisa bir tazelenme animasyonu
               // oynatir. Ayni seviyede secim yapmak seti degistirmedigi icin
               // kullanici kendi sectigi alanda hicbir hareket gormez.
               <label
-                className="demo-refresh block"
+                className={`demo-refresh block${
+                  pulsedDepth === depth ? ' demo-pulse' : ''
+                }`}
                 key={`${depth}:${options.map((o) => o.id).join('|')}`}
               >
-                <span className="mb-1.5 block text-xs text-[var(--text-secondary)]">
+                <span className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-[var(--text-secondary)]">
                   {headingFor(data, selection, depth)}
+                  {value && (
+                    // Secildigini soyleyen tek isaret; renk tasimaz, yalnizca
+                    // "bu adim tamam" der.
+                    <Check size={12} className="text-[#a30022]" aria-hidden />
+                  )}
                 </span>
                 <select
                   className={selectClass}
+                  data-filled={value ? 'true' : 'false'}
                   value={value}
-                  onChange={(e) =>
+                  onChange={(e) => {
+                    setPulsedDepth(depth);
                     setSelection((previous) =>
                       applyChoice(catalog, previous, depth, e.target.value),
-                    )
-                  }
+                    );
+                  }}
                 >
                   <option value="">Seçiniz</option>
                   {options.map((option) => (
@@ -235,15 +335,26 @@ export default function DemoPage() {
 
           <div className="mt-3 grid gap-3 sm:grid-cols-2">
             <label
-              className="demo-refresh block"
+              className={`demo-refresh block${
+                pulsedDepth === -1 ? ' demo-pulse' : ''
+              }`}
               key={`yil:${selection.join('/')}`}
             >
-              <span className="mb-1.5 block text-xs text-[var(--text-secondary)]">Yıl</span>
+              <span className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-[var(--text-secondary)]">
+                Yıl
+                {activeYear && (
+                  <Check size={12} className="text-[#a30022]" aria-hidden />
+                )}
+              </span>
               <select
                 className={selectClass}
+                data-filled={activeYear ? 'true' : 'false'}
                 value={activeYear}
                 disabled={!pool}
-                onChange={(e) => setYear(e.target.value)}
+                onChange={(e) => {
+                  setPulsedDepth(-1);
+                  setYear(e.target.value);
+                }}
               >
                 <option value="">Seçiniz</option>
                 {years.map((y) => (
@@ -255,13 +366,16 @@ export default function DemoPage() {
             </label>
 
             <label className="block">
-              <span className="mb-1.5 block text-xs text-[var(--text-secondary)]">
+              <span className="mb-1.5 block text-xs font-medium text-[var(--text-secondary)]">
                 Kilometre{' '}
                 {yearRow ? (
                   // Varsayilan kilometre yil degisince degisir; sessizce
                   // yer degistirmesin diye yumusak girer. Kullanicinin
                   // YAZDIGI deger buradan etkilenmez.
-                  <span className="demo-fade opacity-60" key={yearRow[1]}>
+                  <span
+                    className="demo-fade font-normal opacity-60"
+                    key={yearRow[1]}
+                  >
                     — boş bırakılırsa {formatTL(yearRow[1])} km varsayılır
                   </span>
                 ) : null}
@@ -282,11 +396,11 @@ export default function DemoPage() {
 
           {availability === 'PRICEABLE' && pool && (
             <p
-              className="demo-fade mt-3 text-xs text-[var(--text-secondary)]"
+              className="demo-fade mt-4 border-t border-[var(--border-gray)] pt-3 text-xs text-[var(--text-secondary)]"
               key={selection.join('/')}
             >
               Fiyat havuzu:{' '}
-              <span className="font-medium text-[var(--text-primary)]">
+              <span className="font-medium text-[var(--foreground)]">
                 {labelPath.join(' › ')}
               </span>{' '}
               — {formatTL(pool.n)} emsal ilan
@@ -303,14 +417,28 @@ export default function DemoPage() {
           sanki hic yokmus gibi. Artik secilebilir, ve neden fiyat
           gosterilmedigi aciklanir.
         */}
+        {/*
+          IKI DURUM AYRI GORUNUR.
+
+          "Fiyat yok" ile "fiyat var ama uzman baksin" ayni kehribar kutuda
+          gosteriliyordu; kullanici ikisini ayirt edemiyordu. Fiyatin HIC
+          olmadigi durum artik notr/bilgilendirici bir kutudur — bir sey ters
+          gitmedi, elimizde emsal yok. Uyari rengi, fiyatin EKRANDA OLDUGU ama
+          uzman onayi istendigi duruma birakildi (asagida).
+
+          Metinler ve kosullar degismedi; yalnizca sunum ayrildi.
+        */}
         {availability === 'NO_PRICE_DATA' && (
-          <div className="demo-rise mt-5 flex items-start gap-3 rounded-xl border border-amber-300/60 bg-amber-50 p-4 text-sm">
-            <AlertTriangle size={18} className="mt-0.5 shrink-0 text-amber-600" />
+          <div className="demo-rise mt-5 flex items-start gap-3 rounded-xl border border-[var(--border-gray)] bg-[var(--accent-gray)] p-4 text-sm">
+            <Info
+              size={18}
+              className="mt-0.5 shrink-0 text-[var(--text-secondary)]"
+            />
             <div>
-              <p className="font-medium text-amber-900">
+              <p className="font-medium text-[var(--foreground)]">
                 {labelPath.join(' › ')}
               </p>
-              <p className="mt-0.5 text-amber-900/80">
+              <p className="mt-1 leading-relaxed text-[var(--text-secondary)]">
                 Bu araç için fiyat hesaplamak için yeterli güncel emsal
                 bulunamadı. Yanlış bir fiyat göstermektense göstermiyoruz —
                 aracınız uzmanımız tarafından değerlendirilecektir.
@@ -320,9 +448,12 @@ export default function DemoPage() {
         )}
 
         {pool && activeYear && !result && (
-          <div className="demo-rise mt-5 flex items-start gap-3 rounded-xl border border-amber-300/60 bg-amber-50 p-4 text-sm">
-            <AlertTriangle size={18} className="mt-0.5 shrink-0 text-amber-600" />
-            <p>
+          <div className="demo-rise mt-5 flex items-start gap-3 rounded-xl border border-[var(--border-gray)] bg-[var(--accent-gray)] p-4 text-sm">
+            <Info
+              size={18}
+              className="mt-0.5 shrink-0 text-[var(--text-secondary)]"
+            />
+            <p className="leading-relaxed text-[var(--text-secondary)]">
               Bu yıl için yeterli emsal yok. Yanlış bir fiyat göstermektense fiyat
               göstermiyoruz — bu araç manuel değerlendirmeye gider.
             </p>
@@ -337,32 +468,42 @@ export default function DemoPage() {
             `result` null olur, bolum ayni karede kalkar: yanlis araca
             takili eski fiyat ekranda kalmaz.
           */
-          <section className="mt-5 space-y-4">
-            <div className="demo-rise demo-card rounded-2xl border border-[var(--border-gray)] bg-[var(--card-bg)] p-5 shadow-sm">
-              <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <section className="demo-result mt-5 space-y-4">
+            <div className="demo-card rounded-2xl border border-[var(--border-gray)] bg-[var(--card-bg)] p-5 shadow-[0_1px_2px_rgba(15,17,21,0.04),0_12px_32px_-24px_rgba(15,17,21,0.25)] md:p-6">
+              <div className="flex flex-wrap items-end justify-between gap-4">
                 <div>
-                  <div className="text-xs text-[var(--text-secondary)]">
-                    Piyasa değeri (emsal merkezi)
+                  <div className="text-xs font-medium uppercase tracking-wide text-[var(--text-secondary)]">
+                    Tahmini piyasa değeri
                   </div>
-                  <div className="mt-0.5 text-3xl font-semibold tracking-tight tabular-nums">
+                  <div className="mt-1 text-[2.25rem] font-semibold leading-none tracking-tight tabular-nums md:text-[2.75rem]">
                     {formatTL(shownMarketValue)}{' '}
-                    <span className="text-lg font-normal opacity-60">TL</span>
+                    <span className="text-xl font-normal opacity-50">TL</span>
+                  </div>
+                  <div className="mt-1.5 text-xs text-[var(--text-secondary)]">
+                    Emsal merkezi, girilen kilometreye göre düzeltilmiş
                   </div>
                 </div>
 
                 {/* Kanit bloku sayidan AYRI, biraz gecikmeli girer. */}
-                <div className="demo-fade demo-delay-2 text-right text-xs text-[var(--text-secondary)]">
-                  <div className="flex items-center justify-end gap-1.5">
-                    <TrendingUp size={13} />
-                    {formatTL(result.directComparables)} doğrudan emsal
+                <div className="demo-fade demo-delay-2 text-xs text-[var(--text-secondary)] sm:text-right">
+                  <div className="flex items-center gap-1.5 sm:justify-end">
+                    <TrendingUp size={13} className="shrink-0" />
+                    {/*
+                      Turkcede sayidan sonra cogul eki GELMEZ: "1 gerçek emsal",
+                      "20 gerçek emsal". Ayrim tekil/cogulda degil, kanitin
+                      DOGRUDAN mi yoksa yakin yildan mi geldigindedir.
+                    */}
+                    <span className="font-medium text-[var(--foreground)]">
+                      {formatTL(result.directComparables)} gerçek emsal
+                    </span>
                   </div>
                   {result.borrowedComparables > 0 && (
-                    <div className="mt-0.5">
+                    <div className="mt-1 sm:pr-[18px]">
                       + {formatTL(result.borrowedComparables)} yakın yıl emsali
                     </div>
                   )}
-                  <div className="mt-1 flex items-center justify-end gap-2">
-                    <span>veri güveni %{result.confidencePct}</span>
+                  <div className="mt-2 flex items-center gap-2 sm:justify-end">
+                    <span>Güven: %{result.confidencePct}</span>
                     <span
                       className="demo-confidence-track"
                       role="img"
@@ -472,12 +613,21 @@ export default function DemoPage() {
 
             {result.requiresManualApproval && (
               // Fiyat EKRANDA KALIR; uyari altina bilgilendirme olarak girer.
-              // Hata ekrani degil, "bu araca uzman baksin" notudur.
-              <div className="demo-rise demo-delay-3 flex items-start gap-3 rounded-xl border border-amber-300/60 bg-amber-50 p-4 text-sm">
-                <AlertTriangle size={18} className="mt-0.5 shrink-0 text-amber-600" />
+              // Hata ekrani degil, "bu araca uzman baksin" notudur. Kehribar
+              // tonu KIRMIZI ALARMA cevrilmez: burada ters giden bir sey yok,
+              // yalnizca sayinin arkasindaki kanit ince.
+              <div className="demo-rise demo-delay-3 flex items-start gap-3 rounded-xl border border-amber-300/50 bg-amber-50/70 p-4 text-sm dark:border-amber-500/25 dark:bg-amber-500/[0.07]">
+                <AlertTriangle
+                  size={18}
+                  className="mt-0.5 shrink-0 text-amber-600 dark:text-amber-400"
+                />
                 <div>
-                  <p className="font-medium text-amber-900">Uzman kontrolü önerilir</p>
-                  <p className="mt-0.5 text-amber-900/80">{result.manualApprovalReason}</p>
+                  <p className="font-medium text-amber-900 dark:text-amber-200">
+                    Uzman kontrolü önerilir
+                  </p>
+                  <p className="mt-1 leading-relaxed text-amber-900/80 dark:text-amber-200/75">
+                    {result.manualApprovalReason}
+                  </p>
                 </div>
               </div>
             )}

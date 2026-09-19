@@ -26,26 +26,16 @@ export default function Footer() {
               NAKİT<span className="text-brand-orange">GARAJ</span>
             </span>
           </div>
+          {/*
+            Instagram rozeti KALDIRILDI. Mor-pembe-amber gradyan marka
+            paletinin (siyah / beyaz / NakitGaraj kirmizisi) disindaydi ve
+            sutunun tek renkli ogesi oldugu icin gozu kendine cekiyordu.
+            Rozetle birlikte onun icin ayrilan bosluk da kalkti; sutun artik
+            logo + aciklama olarak dengeli duruyor.
+          */}
           <p className="text-xs text-zinc-400 leading-relaxed">
             {t('footer.desc')}
           </p>
-
-          {/* Instagram Button */}
-          <div className="flex items-center gap-3 mt-1">
-            <a
-              href="https://www.instagram.com/nakit_garaj/"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-gradient-to-r from-purple-600 via-pink-600 to-amber-500 text-white text-xs font-semibold hover:opacity-90 transition-opacity shadow-sm"
-            >
-              <svg className="w-4 h-4 fill-none stroke-current" viewBox="0 0 24 24" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="2" y="2" width="20" height="20" rx="5" ry="5"></rect>
-                <path d="M16 11.37A4 4 0 1 1 12.63 8 4 4 0 0 1 16 11.37z"></path>
-                <line x1="17.5" y1="6.5" x2="17.51" y2="6.5"></line>
-              </svg>
-              <span>@nakit_garaj</span>
-            </a>
-          </div>
         </div>
 
         <div>
