@@ -34,6 +34,7 @@ import {
   type DemoData,
   type YearRow,
 } from './demo-selection.ts';
+import { hasEnoughEvidence, quote } from './demo-pricing.ts';
 
 /**
  * [km1, km2, km3, fmv1, fmv2, fmv3, dogrudan, odunc, etkin,
@@ -108,9 +109,16 @@ const CATALOG: CatalogWire[] = [
       ]),
     ]),
   ]),
-  branch('opel', 'Opel', 2513, [
-    branch('opel/corsa', 'Corsa', 492, [
+  branch('opel', 'Opel', 2533, [
+    branch('opel/corsa', 'Corsa', 512, [
       leaf('opel/corsa/1-4', '1.4', 492),
+      /**
+       * Haftalik tarama buraya HENUZ gelmedi; fiyat korpus/DB kanitindan
+       * gelir. Gercek vakanin ta kendisi: 20 ilan, tek model yili.
+       */
+      branch('opel/corsa/1-5-td', '1.5 TD', 20, [
+        leaf('opel/corsa/1-5-td/eco', 'ECO', 20),
+      ]),
     ]),
     // Tarama buraya HENUZ GELMEDI: 2.008 ilanlik model, fiyat havuzu yok.
     branch('opel/insignia', 'Insignia', 2008, [
@@ -184,6 +192,7 @@ const FIXTURE: DemoData = {
     },
     'alfa-romeo/146/1-4/ts': { n: 5, km: 0.015, years: { '1998': row(5) } },
     'opel/corsa/1-4': { n: 492, km: 0.015, years: { '2015': row(40) } },
+    'opel/corsa/1-5-td/eco': { n: 20, km: 0.0137, years: { '2000': row(20) } },
     // Motor "uzman baksin" dedi; satir yine de veri setinde ve secilebilir.
     'opel/tigra/1-4': { n: 13, km: 0.015, years: { '2003': row(1, 2, 1) } },
     'peugeot/206/1-4': { n: 1000, km: 0.015, years: { '2005': row(60) } },
@@ -433,6 +442,111 @@ describe('Yil listesi kanit esigine gore FILTRELENMEZ', () => {
     const pool = resolvePool(FIXTURE, tigra);
     assert.equal(availabilityOf(CAT, FIXTURE, tigra), 'PRICEABLE');
     assert.notEqual(yearEvidenceOf(pool!.years['2003']).engineManualCode, 0);
+  });
+});
+
+/**
+ * SEYREK KANIT — "az ilan" ile "ilan yok" AYNI SEY DEGILDIR.
+ *
+ * Sabitlenen hata: demo fiyati yalnizca haftalik yayindan uretiyordu, o yayin
+ * da alfabetik taramanin geldigi yere kadardi. `opel/corsa/1-5-td/eco`
+ * korpusta 20 gecerli ilani oldugu halde yil alani KAPALI, mesaj "yeterli
+ * guncel emsal bulunamadi" idi. Degismez kural: tam yaprakta >=1
+ * kullanilabilir gozlem varsa en az bir fiyatlanabilir yil gorunur.
+ */
+describe('Seyrek kanit yine de fiyat uretir', () => {
+  const ECO = ['opel', 'opel/corsa', 'opel/corsa/1-5-td', 'opel/corsa/1-5-td/eco'];
+  const DESIGN_LINE = [...SEDAN_15, 'audi/a3/a3-sedan/1-5-tfsi/design-line'];
+  const SPORT_LINE = [...SEDAN_15, 'audi/a3/a3-sedan/1-5-tfsi/sport-line'];
+
+  const quoteFor = (selection: string[], year: string) => {
+    const pool = resolvePool(FIXTURE, selection)!;
+    const e = yearEvidenceOf(pool.years[year]);
+    assert.equal(
+      hasEnoughEvidence(e.directComparables, e.borrowedComparables),
+      true,
+      'kanit kapisi bu satiri elemis',
+    );
+    return {
+      evidence: e,
+      result: quote({
+        kmPoints: e.kmPoints,
+        fmvPoints: e.fmvPoints,
+        mileageKm: e.kmPoints[1],
+        directComparables: e.directComparables,
+        borrowedComparables: e.borrowedComparables,
+        effectiveComparables: e.effectiveComparables,
+        engineConfidencePct: e.engineConfidencePct,
+        dispersion: e.dispersion,
+        engineManualCode: e.engineManualCode,
+      }),
+    };
+  };
+
+  test('TEK dogrudan ilan fiyat uretir ve uzman kontrolu ister (A)', () => {
+    assert.equal(availabilityOf(CAT, FIXTURE, DESIGN_LINE), 'PRICEABLE');
+    assert.deepEqual(yearsOf(resolvePool(FIXTURE, DESIGN_LINE)), [2018]);
+
+    const { evidence, result } = quoteFor(DESIGN_LINE, '2018');
+    assert.equal(evidence.directComparables, 1);
+    assert.equal(evidence.borrowedComparables, 0);
+    assert.ok(result.fairMarketValue > 0, 'FMV uretilmedi');
+    assert.ok(result.cashOffer > 0);
+    assert.ok(result.customerConsignmentNet > 0);
+    // Tek gozlem KESIN gibi sunulamaz.
+    assert.equal(result.requiresManualApproval, true);
+    assert.match(result.manualApprovalReason ?? '', /tek ilan/i);
+  });
+
+  test('IKI dogrudan ilan fiyat uretir, kanit sayisi dogru (B)', () => {
+    const { evidence, result } = quoteFor(SPORT_LINE, '2017');
+    assert.equal(evidence.directComparables, 2);
+    assert.ok(result.fairMarketValue > 0);
+    assert.equal(result.matchedListingCount, 5); // 2 dogrudan + 3 odunc
+  });
+
+  /**
+   * Odunc kanit AYNI yolun komsu yillarindan gelir. Kardes pakete gecmez:
+   * Sport Line'in odunc sayisi kendi havuzunun ilan adedini asamaz.
+   */
+  test('komsu yil oduncu ayni yol icinde kalir, kardese sizmaz (C)', () => {
+    const pool = resolvePool(FIXTURE, SPORT_LINE)!;
+    for (const [year, yearRow] of Object.entries(pool.years)) {
+      const e = yearEvidenceOf(yearRow);
+      assert.ok(
+        e.directComparables + e.borrowedComparables <= pool.n,
+        `${year}: odunc kanit havuzun disina tasmis`,
+      );
+    }
+    // Advanced'in 2026 havuzu Sport Line'in yillarina hicbir sey eklemedi.
+    const advanced = resolvePool(FIXTURE, [
+      ...SEDAN_15,
+      'audi/a3/a3-sedan/1-5-tfsi/advanced',
+    ])!;
+    assert.deepEqual(yearsOf(advanced), [2026]);
+    assert.equal(yearEvidenceOf(advanced.years['2026']).borrowedComparables, 0);
+  });
+
+  test('kaniti sifir olan yaprak fiyatsiz durumda kalir (D)', () => {
+    const insignia = ['opel', 'opel/insignia', 'opel/insignia/1-6-cdti'];
+    assert.equal(availabilityOf(CAT, FIXTURE, insignia), 'NO_PRICE_DATA');
+    assert.equal(resolvePool(FIXTURE, insignia), null);
+    assert.deepEqual(yearsOf(resolvePool(FIXTURE, insignia)), []);
+  });
+
+  /**
+   * ASIL VAKA. Haftalik yayin bu yapraga hic ulasmadi; fiyat korpus/DB
+   * kanitindan gelir. Yil alani ACIK olmali.
+   */
+  test('yayin ulasmamis yaprak fiyatlanir — Opel Corsa 1.5 TD ECO', () => {
+    assert.equal(availabilityOf(CAT, FIXTURE, ECO), 'PRICEABLE');
+    assert.deepEqual(yearsOf(resolvePool(FIXTURE, ECO)), [2000]);
+    assert.deepEqual(labelPathOf(CAT, ECO), ['Opel', 'Corsa', '1.5 TD', 'ECO']);
+
+    const { evidence, result } = quoteFor(ECO, '2000');
+    assert.equal(evidence.directComparables, 20);
+    assert.ok(result.fairMarketValue > 0);
+    assert.ok(result.cashOffer > 0);
   });
 });
 

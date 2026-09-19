@@ -62,6 +62,14 @@ import {
   loadArtifact,
   resolveArtifactPath,
 } from '../vehicle-hierarchy/hierarchy-source';
+import { activeHierarchyReleaseDir } from '../vehicle-hierarchy/artifact-release';
+
+import {
+  loadDemoEvidence,
+  type EvidenceResult,
+  type Observation,
+  type ReleaseArtifact,
+} from '../vehicle-hierarchy/demo-evidence';
 
 /**
  * VARLIK ile FIYATLANABILIRLIK AYRI SEYLERDIR.
@@ -86,15 +94,6 @@ const MIN_LISTINGS_PER_POOL = 1;
  * %2,0 / p90 %8,1 / p99 %19,6. Bu esik normal degiskenligin disindadir.
  */
 const MAX_EVIDENCE_GAP = 0.35;
-
-interface Observation {
-  year: number;
-  mileage: number;
-  price: number;
-  listingDate?: string;
-  /** Sahibinden'in kendi etiketleri: ["Audi","A3","A3 Sedan","1.5 TFSI","Advanced"] */
-  requestedTargetPath?: string[];
-}
 
 /**
  * Bir secim seviyesinin ne oldugu. Kaynakta seviye TIPI YAZMAZ; bu yuzden
@@ -293,6 +292,23 @@ function buildCatalogWire(nodes: CatalogSourceNode[]): {
   return { wire, labelPathsByBranch, leafCount };
 }
 
+/** Kanit: hiyerarsi atamalari (korpus/DB) + haftalik yayin, motorun onceligiyle. */
+function collectEvidence(
+  backendRoot: string,
+  nodes: CatalogSourceNode[],
+): EvidenceResult {
+  return loadDemoEvidence(
+    {
+      fs,
+      path,
+      hierarchyReleaseDir: activeHierarchyReleaseDir(backendRoot),
+      backendRoot,
+    },
+    nodes,
+    { required: true, minListingsPerPool: MIN_LISTINGS_PER_POOL },
+  ) as EvidenceResult;
+}
+
 function countCatalog(wire: CatalogWire[]): { nodes: number; leaves: number } {
   let nodes = 0;
   let leaves = 0;
@@ -368,13 +384,15 @@ function main(): void {
       path.join(publishedDir, 'versions', pointer.release),
       'utf-8',
     ),
-  ) as {
-    pools: Record<string, string[]>;
-    assignments: Record<string, { sourceObservation?: Observation }>;
-  };
+  ) as ReleaseArtifact;
 
-  const poolNames = Object.keys(release.pools).sort();
-  process.stdout.write(`${poolNames.length} havuz bulundu\n`);
+  const evidence = collectEvidence(backendRoot, artifact.nodes as CatalogSourceNode[]);
+  const poolNames = [...evidence.byNode.keys()].sort();
+  process.stdout.write(
+    `Kanit: ${poolNames.length} yaprak ` +
+      `(yayin ${evidence.fromRelease}, korpus/DB ${evidence.fromDatabase}, ` +
+      `ikisi birden ${evidence.fromBoth})\n`,
+  );
 
   const pools: Record<
     string,
@@ -395,10 +413,7 @@ function main(): void {
       );
     }
 
-    const observations: Observation[] = (release.pools[node] || [])
-      .map((id) => release.assignments[id]?.sourceObservation)
-      .filter((o): o is Observation => Boolean(o))
-      .filter((o) => o.year > 1980 && o.price > 0 && o.mileage != null);
+    const observations: Observation[] = evidence.byNode.get(node) ?? [];
 
     if (observations.length < MIN_LISTINGS_PER_POOL) {
       skipped += 1;

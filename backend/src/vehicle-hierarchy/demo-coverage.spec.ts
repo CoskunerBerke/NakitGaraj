@@ -240,6 +240,105 @@ describe('kapsama kurali', () => {
 });
 
 /**
+ * ASAMA 2 — KAYNAK KANITI -> FIYAT (E).
+ *
+ * Secilebilir olmak yetmez. `opel/corsa/1-5-td/eco` katalogda GORUNUYORDU;
+ * korpusta 20 gecerli ilani vardi ve yine de yil alani kapali, "yeterli
+ * guncel emsal bulunamadi" diyordu. Kullanici icin bu, aracin hic olmamasindan
+ * pek farkli degildir. Degismez kural:
+ *
+ *   TAM yaprakta >=1 kullanilabilir gozlem  =>  veri setinde >=1 fiyatli yil
+ */
+describe('kanit -> fiyat degismezi', () => {
+  const source: CoverageSourceNode[] = [
+    node('opel', 'Opel', null, ['Opel'], 20),
+    node('opel/corsa', 'Corsa', 'opel', ['Opel', 'Corsa'], 20),
+    node('opel/corsa/1-5-td', '1.5 TD', 'opel/corsa', ['Opel', 'Corsa', '1.5 TD'], 20),
+    node(
+      'opel/corsa/1-5-td/eco',
+      'ECO',
+      'opel/corsa/1-5-td',
+      ['Opel', 'Corsa', '1.5 TD', 'ECO'],
+      20,
+    ),
+  ];
+  const catalog: CoverageDemo['catalog'] = [
+    [
+      'opel',
+      'Opel',
+      20,
+      [
+        [
+          'opel/corsa',
+          'Corsa',
+          20,
+          [
+            [
+              'opel/corsa/1-5-td',
+              '1.5 TD',
+              20,
+              [['opel/corsa/1-5-td/eco', 'ECO', 20]],
+            ],
+          ],
+        ],
+      ],
+    ],
+  ];
+  const evidence = new Map([
+    ['opel/corsa/1-5-td/eco', [{ year: 2000 }, { year: 2000 }]],
+  ]);
+
+  it('kaniti olup fiyati olmayan yaprak HATADIR', () => {
+    const report = compareSourceToDemo(source, { catalog, pools: {} }, evidence);
+
+    expect(report.evidenceChecked).toBe(true);
+    expect(report.unpricedLeavesWithUsableEvidence).toEqual([
+      'opel/corsa/1-5-td/eco (2 gozlem)',
+    ]);
+    expect(coverageFailures(report)).toContain(
+      '1 yaprak kaniti oldugu halde fiyatsiz',
+    );
+  });
+
+  it('kanit fiyata donusmusse bulgu yoktur', () => {
+    const report = compareSourceToDemo(
+      source,
+      {
+        catalog,
+        pools: { 'opel/corsa/1-5-td/eco': { n: 20, years: { '2000': [] } } },
+      },
+      evidence,
+    );
+    expect(report.unpricedLeavesWithUsableEvidence).toEqual([]);
+    expect(report.droppedYears).toEqual([]);
+    expect(coverageFailures(report)).toEqual([]);
+  });
+
+  it('kendi kaniti olan bir yilin veri setinden dusmesi HATADIR', () => {
+    const report = compareSourceToDemo(
+      source,
+      {
+        catalog,
+        // 2000 var, 2003 kaniti oldugu halde yok.
+        pools: { 'opel/corsa/1-5-td/eco': { n: 20, years: { '2000': [] } } },
+      },
+      new Map([['opel/corsa/1-5-td/eco', [{ year: 2000 }, { year: 2003 }]]]),
+    );
+    expect(report.droppedYears).toEqual(['opel/corsa/1-5-td/eco 2003']);
+    expect(coverageFailures(report)).toContain(
+      '1 yil kaniti oldugu halde veri setinde yok',
+    );
+  });
+
+  it('kanit verilmediyse asama ATLANIR, sessizce gecmez', () => {
+    const report = compareSourceToDemo(source, { catalog, pools: {} });
+    expect(report.evidenceChecked).toBe(false);
+    expect(report.unpricedLeavesWithUsableEvidence).toEqual([]);
+    expect(coverageFailures(report)).toEqual([]);
+  });
+});
+
+/**
  * ASAMA 0 — KORPUS/DB -> HIYERARSI.
  *
  * Hiyerarsi artefakti YETKILI OLDUGU ICIN degil, TAZE OLDUGU DOGRULANDIGI icin
@@ -411,5 +510,13 @@ runOrSkip('yayinlanan demo veri seti', () => {
   it('katalog fiyat havuzlarindan genistir', () => {
     expect(report.demoLeaves).toBeGreaterThan(report.priceableLeaves);
     expect(report.unpricedLeaves.length).toBeGreaterThan(0);
+  });
+
+  /**
+   * Fiyatsiz kalan her yaprak, kaynakta ilani OLMADIGI icin fiyatsiz olmali —
+   * tarama oraya gelmedigi icin degil. Bu ayrimi sabitleyen sey budur.
+   */
+  it('fiyatsiz yapraklarin hicbirinde kaynak ilani yok', () => {
+    expect(report.unpricedLeavesWithListings).toEqual([]);
   });
 });

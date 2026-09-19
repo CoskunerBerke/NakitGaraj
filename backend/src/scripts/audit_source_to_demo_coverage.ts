@@ -37,6 +37,11 @@ import {
   type CoverageSourceNode,
 } from '../vehicle-hierarchy/demo-coverage';
 import { resolveCorpusRoot, listAllHtmlFiles } from '../vehicle-hierarchy/hierarchy-source';
+import { activeHierarchyReleaseDir } from '../vehicle-hierarchy/artifact-release';
+import {
+  loadDemoEvidence,
+  type Observation,
+} from '../vehicle-hierarchy/demo-evidence';
 
 /**
  * Korpus ve veritabani bu makinede varsa okur; yoksa null doner.
@@ -95,6 +100,31 @@ function readUpstream(
   }
 }
 
+/**
+ * Yapraga dusen KULLANILABILIR fiyat kaniti — veri setini ureten script ile
+ * AYNI koddan (`demo-evidence.ts`). Denetim baska bir tanim kullansaydi,
+ * olctugu sey uretilen seyden farkli olur ve kendi kendini onaylardi.
+ *
+ * Atamalar veya veritabani yoksa undefined doner: asama atlanir ve atlandigi
+ * rapora yazilir.
+ */
+function readEvidence(
+  backendRoot: string,
+  nodes: CoverageSourceNode[],
+): Map<string, Observation[]> | undefined {
+  return (
+    loadDemoEvidence(
+      {
+        fs,
+        path,
+        hierarchyReleaseDir: activeHierarchyReleaseDir(backendRoot),
+        backendRoot,
+      },
+      nodes,
+    )?.byNode ?? undefined
+  );
+}
+
 function sample(values: string[], limit = 15): string {
   if (values.length === 0) return '';
   const shown = values.slice(0, limit).join('\n      ');
@@ -121,7 +151,7 @@ function main(): void {
 
   const demo = JSON.parse(fs.readFileSync(demoPath, 'utf-8')) as CoverageDemo;
   const nodes = artifact.nodes as unknown as CoverageSourceNode[];
-  const report = compareSourceToDemo(nodes, demo);
+  const report = compareSourceToDemo(nodes, demo, readEvidence(backendRoot, nodes));
 
   const out = process.stdout;
   out.write('\nSOURCE_TO_DEMO_COVERAGE\n');
@@ -231,7 +261,24 @@ function main(): void {
     `  orphan pools       : ${report.orphanPools.length}${sample(report.orphanPools)}\n\n`,
   );
 
-  out.write(`  priceable leaves   : ${report.priceableLeaves}\n`);
+  out.write('\n  ASAMA 2 — kaynak kaniti -> fiyat\n');
+  if (!report.evidenceChecked) {
+    out.write(
+      '    ATLANDI: listing-assignments veya veritabani bu makinede yok.\n' +
+        '    Kaniti olup fiyatsiz kalan yaprak DOGRULANMADI.\n',
+    );
+  } else {
+    out.write(
+      `    kaniti oldugu halde FIYATSIZ yaprak : ${report.unpricedLeavesWithUsableEvidence.length}` +
+        `${sample(report.unpricedLeavesWithUsableEvidence, 8)}\n`,
+    );
+    out.write(
+      `    kaniti oldugu halde DUSEN yil       : ${report.droppedYears.length}` +
+        `${sample(report.droppedYears, 8)}\n`,
+    );
+  }
+
+  out.write(`\n  priceable leaves   : ${report.priceableLeaves}\n`);
   out.write(
     `  pricing-unavailable-but-selectable : ${report.unpricedLeaves.length}` +
       ` (kaynakta ilani olan: ${report.unpricedLeavesWithListings.length})\n\n`,

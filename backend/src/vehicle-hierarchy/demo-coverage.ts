@@ -75,6 +75,20 @@ export interface CoverageReport {
   /** Katalogda gorunen ama guncel emsali olmayan yapraklar. */
   unpricedLeaves: string[];
   unpricedLeavesWithListings: string[];
+  /**
+   * HATA: kaynakta KULLANILABILIR fiyat kaniti olan ama veri setinde havuzu
+   * olmayan yaprak. Tam olarak `opel/corsa/1-5-td/eco` vakasi — korpusta 20
+   * gecerli ilan, ekranda "yeterli guncel emsal bulunamadi".
+   *
+   * `unpricedLeavesWithListings` bunun ZAYIF halidir: hiyerarsinin saydigi
+   * ilan adedine bakar, oysa o sayi hasarli/fiyatsiz/kilometresiz satirlari da
+   * icerir. Buradaki olcut motorun kendi suzgecinden gecmis gozlemdir.
+   */
+  unpricedLeavesWithUsableEvidence: string[];
+  /** HATA: kaynakta kaniti olan bir yilin veri setinden dusmesi. */
+  droppedYears: string[];
+  /** Kanit olcusu calistirilamadiysa (DB/atama yok) bu asama atlanir. */
+  evidenceChecked: boolean;
 }
 
 /**
@@ -313,6 +327,12 @@ function identityCollisionsOf(nodes: FlatNode[]): string[] {
 export function compareSourceToDemo(
   sourceNodes: CoverageSourceNode[],
   demo: CoverageDemo,
+  /**
+   * Yaprak -> motorun suzgecinden gecmis gozlemler. Verilirse KANIT ASAMASI
+   * calisir: kaniti olup fiyati olmayan yaprak ve dusen yil hata sayilir.
+   * Verilmezse asama atlanir ve rapor bunu soyler — sessizce "gecti" demez.
+   */
+  evidenceByNode?: Map<string, Array<{ year: number }>>,
 ): CoverageReport {
   const source = flattenHierarchy(sourceNodes);
   const target = flattenCatalog(demo.catalog ?? []);
@@ -395,6 +415,64 @@ export function compareSourceToDemo(
     unpricedLeavesWithListings: unpricedLeaves
       .filter((n) => n.listings > 0)
       .map((n) => n.id),
+    ...evidenceFindings(demo, targetById, evidenceByNode),
+  };
+}
+
+/**
+ * KANIT ASAMASI — "kaynakta ilan var" ile "ekranda fiyat var" arasindaki
+ * bosluk. Degismez kural:
+ *
+ *   TAM yaprakta >=1 kullanilabilir gozlem  =>  veri setinde >=1 fiyatli yil
+ *
+ * Bu kural olmadan denetim yalnizca SECILEBILIRLIGI olcer; arac dropdown'da
+ * gorunur ama yil alani kapali kalir ve "yeterli emsal yok" der. Kullanici
+ * icin bu, aracin hic olmamasindan pek farkli degildir.
+ */
+function evidenceFindings(
+  demo: CoverageDemo,
+  targetById: Map<string, FlatNode>,
+  evidenceByNode?: Map<string, Array<{ year: number }>>,
+): Pick<
+  CoverageReport,
+  'unpricedLeavesWithUsableEvidence' | 'droppedYears' | 'evidenceChecked'
+> {
+  if (!evidenceByNode) {
+    return {
+      unpricedLeavesWithUsableEvidence: [],
+      droppedYears: [],
+      evidenceChecked: false,
+    };
+  }
+
+  const unpricedWithEvidence: string[] = [];
+  const droppedYears: string[] = [];
+  for (const [nodeId, observations] of evidenceByNode) {
+    if (observations.length === 0) continue;
+    // Katalogda olmayan dugumun kaniti zaten `orphanPools` tarafindan yakalanir.
+    if (!targetById.has(nodeId)) continue;
+    const pool = demo.pools?.[nodeId];
+    const years = pool ? Object.keys(pool.years) : [];
+    if (years.length === 0) {
+      unpricedWithEvidence.push(`${nodeId} (${observations.length} gozlem)`);
+      continue;
+    }
+    /**
+     * Bir yil, KENDI gozlemi varken veri setinden dusemez. Komsu yildan
+     * kanit odunc almak sayiyi iyilestirir; hic satir yazmamak ise o yili
+     * ekrandan siler.
+     */
+    const shown = new Set(years);
+    for (const year of new Set(observations.map((o) => o.year))) {
+      if (!shown.has(String(year))) {
+        droppedYears.push(`${nodeId} ${year}`);
+      }
+    }
+  }
+  return {
+    unpricedLeavesWithUsableEvidence: unpricedWithEvidence,
+    droppedYears,
+    evidenceChecked: true,
   };
 }
 
@@ -413,5 +491,13 @@ export function coverageFailures(report: CoverageReport): string[] {
     failures.push(`${report.duplicateIds.length} tekrarlanan kimlik`);
   if (report.labelMismatches.length > 0)
     failures.push(`${report.labelMismatches.length} etiket sapmasi`);
+  if (report.unpricedLeavesWithUsableEvidence.length > 0)
+    failures.push(
+      `${report.unpricedLeavesWithUsableEvidence.length} yaprak kaniti oldugu halde fiyatsiz`,
+    );
+  if (report.droppedYears.length > 0)
+    failures.push(
+      `${report.droppedYears.length} yil kaniti oldugu halde veri setinde yok`,
+    );
   return failures;
 }

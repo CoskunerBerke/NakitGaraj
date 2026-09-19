@@ -14,19 +14,19 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { PRICING_LIMITS } from '../evaluation/pricing-config';
+import { loadArtifact, resolveArtifactPath } from '../vehicle-hierarchy/hierarchy-source';
+import { activeHierarchyReleaseDir } from '../vehicle-hierarchy/artifact-release';
+import {
+  loadDemoEvidence,
+  type EvidenceResult,
+  type Observation,
+} from '../vehicle-hierarchy/demo-evidence';
 import { RobustPricingCalculator } from '../evaluation/robust-pricing-calculator';
 import {
   buildYearCurve,
   learnAnnualDepreciation,
   selectYearEvidence,
 } from '../evaluation/year-evidence';
-
-interface Observation {
-  year: number;
-  mileage: number;
-  price: number;
-  listingDate?: string;
-}
 
 const clamp = (v: number, a: number, b: number) => Math.min(b, Math.max(a, v));
 
@@ -40,7 +40,7 @@ function main(): void {
   ) as {
     pools: Record<
       string,
-      { path: string[]; n: number; km: number; years: Record<string, number[]> }
+      { n: number; km: number; years: Record<string, number[]> }
     >;
   };
 
@@ -51,15 +51,27 @@ function main(): void {
   const pointer = JSON.parse(
     fs.readFileSync(path.join(publishedDir, 'current.json'), 'utf-8'),
   ) as { release: string };
-  const release = JSON.parse(
-    fs.readFileSync(
-      path.join(publishedDir, 'versions', pointer.release),
-      'utf-8',
-    ),
-  ) as {
-    pools: Record<string, string[]>;
-    assignments: Record<string, { sourceObservation?: Observation }>;
-  };
+
+  /**
+   * Kanit URETICININ kanitidir: hiyerarsi atamalari (korpus/DB) + haftalik
+   * yayin. Yalnizca yayini okumak, korpustan fiyatlanan her havuzu bu
+   * dogrulamanin disinda birakirdi — yani tam da duzeltilen hatanin
+   * dogrulanmadan gecmesi anlamina gelirdi.
+   */
+  const artifact = loadArtifact(resolveArtifactPath());
+  if (!artifact) throw new Error('Hiyerarsi artefakti okunamadi.');
+  const evidenceByNode = (
+    loadDemoEvidence(
+      {
+        fs,
+        path,
+        hierarchyReleaseDir: activeHierarchyReleaseDir(backendRoot),
+        backendRoot,
+      },
+      artifact.nodes,
+      { required: true },
+    ) as EvidenceResult
+  ).byNode;
 
   const poolNames = Object.keys(demo.pools);
   // Deterministik ornek: veri setine yayilmis 60 havuz.
@@ -71,10 +83,7 @@ function main(): void {
   let checked = 0;
 
   for (const node of sample) {
-    const observations: Observation[] = (release.pools[node] || [])
-      .map((id) => release.assignments[id]?.sourceObservation)
-      .filter((o): o is Observation => Boolean(o))
-      .filter((o) => o.year > 1980 && o.price > 0 && o.mileage != null);
+    const observations: Observation[] = evidenceByNode.get(node) ?? [];
     if (observations.length === 0) continue;
 
     // Kanit secimi veri setiyle AYNI kaynaktan gelir; dogrulama, saklanan

@@ -24,6 +24,13 @@ import {
   hasEnoughEvidence,
   quote,
 } from '../../../frontend/src/lib/demo-pricing';
+import { loadArtifact, resolveArtifactPath } from '../vehicle-hierarchy/hierarchy-source';
+import { activeHierarchyReleaseDir } from '../vehicle-hierarchy/artifact-release';
+import {
+  loadDemoEvidence,
+  type EvidenceResult,
+  type Observation,
+} from '../vehicle-hierarchy/demo-evidence';
 import {
   availabilityOf,
   buildCatalog,
@@ -41,12 +48,6 @@ import {
 
 /** Etiketleri birlestirirken kullanilan ayirac; etiket metninde gecemez. */
 const SEPARATOR = String.fromCharCode(1);
-
-interface Observation {
-  year: number;
-  price: number;
-  mileage: number;
-}
 
 const median = (values: number[]): number => {
   if (values.length === 0) return 0;
@@ -70,24 +71,33 @@ function main(): void {
   const pointer = JSON.parse(
     fs.readFileSync(path.join(publishedDir, 'current.json'), 'utf-8'),
   ) as { release: string };
-  const release = JSON.parse(
-    fs.readFileSync(
-      path.join(publishedDir, 'versions', pointer.release),
-      'utf-8',
-    ),
-  ) as {
-    pools: Record<string, string[]>;
-    assignments: Record<string, { sourceObservation?: Observation }>;
-  };
 
-  /** Kaynak: havuz -> yil -> ilanlar (builder ile AYNI gecerlilik filtresi). */
+  /**
+   * KAYNAK KANITI URETICININ KANITIDIR — yalnizca haftalik yayin DEGIL.
+   *
+   * Bu script eskiden kaynagi sadece yayin dosyasindan kuruyordu. Uretici iki
+   * kaynagi birlestirmeye baslayinca (korpus/DB + yayin) ayni sayiyi olcmez
+   * oldular: korpustan fiyatlanan her havuz burada "kaynakta yok" gorunurdu.
+   * Ayni fonksiyon cagrilir ki denetim uretilen seyi olcsun.
+   */
+  const artifact = loadArtifact(resolveArtifactPath());
+  if (!artifact) throw new Error('Hiyerarsi artefakti okunamadi.');
+  const sourceEvidence = loadDemoEvidence(
+    {
+      fs,
+      path,
+      hierarchyReleaseDir: activeHierarchyReleaseDir(backendRoot),
+      backendRoot,
+    },
+    artifact.nodes,
+    { required: true },
+  ) as EvidenceResult;
+
+  /** Kaynak: havuz -> yil -> ilanlar. */
   const sourceYears = new Map<string, Map<number, Observation[]>>();
-  for (const [node, ids] of Object.entries(release.pools)) {
+  for (const [node, observations] of sourceEvidence.byNode) {
     const years = new Map<number, Observation[]>();
-    for (const id of ids) {
-      const o = release.assignments[id]?.sourceObservation;
-      if (!o) continue;
-      if (!(o.year > 1980 && o.price > 0 && o.mileage != null)) continue;
+    for (const o of observations) {
       if (!years.has(o.year)) years.set(o.year, []);
       years.get(o.year)!.push(o);
     }

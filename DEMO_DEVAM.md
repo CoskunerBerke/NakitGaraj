@@ -69,6 +69,57 @@ Link: `https://<proje>.vercel.app` — artık kök adres de demoyu açar.
 
 ## Kapatılan kararlar
 
+### -1) Fiyat kanıtı da taramaya bağlıydı — Opel Corsa 1.5 TD ECO
+
+**Belirti:** `Opel → Corsa → 1.5 TD → ECO` seçiliyordu (katalog düzeltmesi
+çalışıyordu) ama yıl alanı **disabled** kalıyor ve "yeterli güncel emsal
+bulunamadı" yazıyordu. Korpusta o yaprağa ait **20 geçerli ilan** vardı.
+
+**Kök neden:** katalog hiyerarşiden geliyordu ama **fiyat hâlâ yalnızca
+yayınlanan piyasa dosyasından** üretiliyordu. O dosya alfabetik taramanın
+geldiği yere kadar; Corsa'da `1-3-cdti`de durmuştu, `1-5-td` sıraya girmemişti.
+Yani bir önceki tur aracı görünür yaptı, fiyatlanabilir yapmadı.
+
+**Çözüm:** kanıt artık **canlı motorla aynı iki kaynaktan, aynı öncelikle**
+toplanıyor (`vehicle-hierarchy.service.ts` > `pools()` neyi yapıyorsa o):
+
+```
+TABAN  <- hiyerarşi listing-assignments (korpus/DB, KESİN evidence)
+ÜSTÜNE <- haftalık yayın; aynı ilan kimliği için TAZE gözlem eskisini EZER
+```
+
+Süzgeçler motorun süzgeçleri: `parseStatus VALID`, fiyat akıl aralığında,
+hasar işareti yok, ilan kimliğine göre tekilleştirme. **Fiyat matematiği hiç
+değişmedi** — yıl kanıtı, tahminci, güven, manuel onay aynı.
+
+| | önce | sonra |
+| --- | --- | --- |
+| fiyat havuzu | 3.577 | **6.288** (yaprakların %88,7'si) |
+| yıl satırı | 11.953 | **20.281** |
+| temsil ilan | 189.766 | **416.983** |
+| kanıtı olduğu hâlde fiyatsız yaprak | 2.703 | **0** |
+| dosya | 1,43 MB | 2,14 MB |
+
+`opel/corsa/1-5-td/eco`: 20 ilan, 2000 modeli, FMV 225.000 TL, nakit
+190.000 TL, güven %88, motor manuel inceleme istiyor (dağılım 0,24 — fiyatlar
+163.000–385.000 arası).
+
+**Dal sızıntısı yok:** kanıt düğüm kimliğine bağlı, yani yalnızca tam o
+yaprağın kendi ilanları. Yıl ödünçlemesi de havuzun içinde kalır.
+
+**Denetim artık bunu ZORLUYOR.** `audit_source_to_demo_coverage.ts`'e ASAMA 2
+eklendi ve değişmez kural hata koduyla korunuyor:
+
+```
+TAM yaprakta >=1 kullanılabilir gözlem  =>  veri setinde >=1 fiyatlı yıl
+```
+
+Dört script (üretici, havuz denetimi, motor doğrulaması, kapsama denetimi)
+artık **aynı** `loadDemoEvidence()` çağrısını kullanıyor. Dört kopya olsaydı
+biri ötekinden sessizce ayrılırdı — nitekim hatanın kendisi tam olarak buydu:
+üretici yayını okuyor, denetim de yayını okuyor, ikisi de "her şey yerinde"
+diyordu.
+
 ### 0) Katalog ile fiyat ayrıldı — dropdown artık taramanın nerede olduğunu yansıtmıyor
 
 **Belirti:** Opel dropdown'ı Corsa-e'de bitiyordu. Marka listesi Opel'de
