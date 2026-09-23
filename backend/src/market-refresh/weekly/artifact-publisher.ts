@@ -14,6 +14,12 @@ import {
   WeeklyListingAssignment,
 } from './assignment-stage';
 import { MarketTarget } from './hierarchy-gate';
+import {
+  RetentionOutcome,
+  RetentionPolicy,
+  prunePublishedReleases,
+  resolveRetentionPolicy,
+} from './published-retention';
 
 export const WEEKLY_MARKET_ARTIFACT_VERSION = 'weekly-market-artifact-v1';
 export const WEEKLY_MARKET_POINTER_VERSION = 'weekly-market-pointer-v1';
@@ -51,6 +57,11 @@ export interface PublishResult {
   releaseFile: string;
   /** Birlesik icerik yayindakiyle AYNI: yeni surum dosyasi yazilmadi, isaretci degismedi. */
   unchanged: boolean;
+  /**
+   * Yayin BASARIYLA tamamlandiktan sonra calisan saklama sonucu. Yeni dosya
+   * yazilmadiysa (`unchanged`) veya saklama kapatildiysa null.
+   */
+  retention: RetentionOutcome | null;
 }
 
 export interface BaselineExactAssignment {
@@ -170,7 +181,18 @@ function marketFingerprint(
         a.nodeId ?? '',
         a.evidence ?? '',
         [...a.requestedTargetIds].sort().join(','),
-        o ? [o.listingDate, o.price, o.year, o.mileage, o.currency, o.title, o.location, o.modelCells.join('|')].join('') : '',
+        o
+          ? [
+              o.listingDate,
+              o.price,
+              o.year,
+              o.mileage,
+              o.currency,
+              o.title,
+              o.location,
+              o.modelCells.join('|'),
+            ].join('')
+          : '',
       ].join('');
     });
   return sha256(rows.join('\n'));
@@ -214,13 +236,20 @@ function mergeAssignment(
 export class AtomicWeeklyMarketPublisher {
   private readonly versionsDir: string;
   private readonly pointerFile: string;
+  /** null = saklama kapali (testler ve tek seferlik araclar icin). */
+  private readonly retentionPolicy: RetentionPolicy | null;
 
   constructor(
     private readonly rootDir: string,
     private readonly now: () => Date = () => new Date(),
+    options: { retention?: RetentionPolicy | null } = {},
   ) {
     this.versionsDir = path.join(rootDir, 'versions');
     this.pointerFile = path.join(rootDir, 'current.json');
+    this.retentionPolicy =
+      options.retention === undefined
+        ? resolveRetentionPolicy()
+        : options.retention;
   }
 
   /**
@@ -233,7 +262,8 @@ export class AtomicWeeklyMarketPublisher {
     if (!fs.existsSync(this.pointerFile)) return null;
     const pointerRaw = fs.readFileSync(this.pointerFile, 'utf-8');
     const revision = sha256(pointerRaw);
-    if (this.cache && this.cache.revision === revision) return this.cache.artifact;
+    if (this.cache && this.cache.revision === revision)
+      return this.cache.artifact;
     const pointer = JSON.parse(pointerRaw) as CurrentPointer;
     if (
       pointer.version !== WEEKLY_MARKET_POINTER_VERSION ||
@@ -256,7 +286,8 @@ export class AtomicWeeklyMarketPublisher {
     return artifact;
   }
 
-  private cache: { revision: string; artifact: WeeklyMarketArtifact } | null = null;
+  private cache: { revision: string; artifact: WeeklyMarketArtifact } | null =
+    null;
 
   /** Stable cache key; changes only when the atomic live pointer changes. */
   revision(): string | null {
@@ -404,15 +435,29 @@ export class AtomicWeeklyMarketPublisher {
     if (
       current &&
       current.hierarchyVersion === input.hierarchyVersion &&
-      marketFingerprint(current.assignments) === marketFingerprint(assignments) &&
+      marketFingerprint(current.assignments) ===
+        marketFingerprint(assignments) &&
       JSON.stringify(current.pools) === JSON.stringify(merged.pools)
     ) {
-      const pointer = JSON.parse(fs.readFileSync(this.pointerFile, 'utf-8')) as CurrentPointer;
+      const pointer = JSON.parse(
+        fs.readFileSync(this.pointerFile, 'utf-8'),
+      ) as CurrentPointer;
+      /**
+       * Yeni dosya yazilmadi, dolayisiyla BUDAMA YAPILMAZ. Yine de dizinin
+       * gercek durumu okunur (yalnizca plan): kosu ozeti "0 surum, 0 B"
+       * demesin diye — dizinde 65 dosya dururken bu yanlis guven verirdi.
+       */
       return {
         artifact: current,
         validation: mergedValidation,
         releaseFile: path.join(this.versionsDir, pointer.release),
         unchanged: true,
+        retention: this.retentionPolicy
+          ? prunePublishedReleases(this.rootDir, {
+              policy: this.retentionPolicy,
+              dryRun: true,
+            })
+          : null,
       };
     }
 
@@ -438,6 +483,57 @@ export class AtomicWeeklyMarketPublisher {
       hierarchyVersion: input.hierarchyVersion,
     };
     atomicWrite(this.pointerFile, JSON.stringify(pointer));
-    return { artifact, validation: mergedValidation, releaseFile, unchanged: false };
+
+    /**
+     * SAKLAMA EN SONDA VE YUTULARAK. Buraya gelindiginde surum yazilmis ve
+     * isaretci degismistir: yayin BASARILIDIR. Eski dosyalari budarken cikan
+     * bir hata (kilitli dosya, izin) basarili yayini gecersiz kilmamali;
+     * bu yuzden sonuc dondurulur, atilmaz. Dogrulama basarisiz olsaydi
+     * yukarida atilirdi ve buraya hic gelinmezdi.
+     */
+    let retention: RetentionOutcome | null = null;
+    if (this.retentionPolicy) {
+      try {
+        /**
+         * SAKLAMA GERCEK SAATI KULLANIR — `this.now` DEGIL. Enjekte edilen
+         * saat surum ADLARINI belirlenebilir kilmak icindir; saklama ise
+         * dosya sistemi zaman damgalariyla karsilastirma yapar. Sahte saat
+         * verilseydi her dosya "az once yazildi" gorunur ve budama hic
+         * calismazdi.
+         */
+        retention = prunePublishedReleases(this.rootDir, {
+          policy: this.retentionPolicy,
+        });
+      } catch (error) {
+        retention = {
+          ok: false,
+          dryRun: false,
+          plan: {
+            versionsDir: this.versionsDir,
+            policy: this.retentionPolicy,
+            currentRelease: release,
+            totalFiles: 0,
+            totalBytes: 0,
+            retained: [],
+            retainedBytes: 0,
+            deletable: [],
+            reclaimableBytes: 0,
+            refusals: [String(error)],
+          },
+          deleted: [],
+          freedBytes: 0,
+          failed: [],
+          error: String(error),
+        };
+      }
+    }
+
+    return {
+      artifact,
+      validation: mergedValidation,
+      releaseFile,
+      unchanged: false,
+      retention,
+    };
   }
 }

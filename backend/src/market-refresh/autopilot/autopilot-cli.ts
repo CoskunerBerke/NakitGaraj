@@ -96,6 +96,8 @@ import { buildMarketTargetSnapshot } from '../weekly/hierarchy-gate';
 import { TargetStateStore } from '../weekly/target-state-store';
 import { WeeklyEvidenceStore } from '../weekly/evidence-store';
 import { AtomicWeeklyMarketPublisher } from '../weekly/artifact-publisher';
+import { assertEnoughDisk } from '../weekly/disk-guard';
+import { formatBytes } from '../weekly/published-retention';
 import {
   DEFAULT_WEEKLY_JITTER,
   DEFAULT_WEEKLY_PACE_MS,
@@ -915,6 +917,13 @@ async function runWeekly(args: CliArgs): Promise<void> {
   )!;
 
   const weeklyRoot = path.join(root, 'data', 'market-refresh', 'weekly');
+  /**
+   * DISK MUHAFIZI — yazmaya baslamadan once. Kosu ortasinda dolan bir disk
+   * yarim ham sayfa ve yarim ilerlemis bir kosu birakir; burada durmak
+   * ucuzdur. Muhafiz hicbir sey silmez, yalnizca reddeder.
+   */
+  const disk = assertEnoughDisk(weeklyRoot);
+  console.log(`[weekly] ${disk.message}`);
   const runDir = path.join(weeklyRoot, 'runs', args.runId);
   fs.mkdirSync(runDir, { recursive: true });
   const checkpointFile = new AtomicChecksummedFile<WeeklyCheckpointPayload>(
@@ -1038,6 +1047,18 @@ async function runWeekly(args: CliArgs): Promise<void> {
       console.log(
         `  watermarks       advanced ${sum.watermarksAdvanced}, held ${sum.watermarksHeld}`,
       );
+      console.log(
+        `  published        ${sum.releasesTotal} release(s) on disk ` +
+          `(${formatBytes(sum.releaseBytesTotal)}), ${sum.releasesRetained} retained ` +
+          `(${formatBytes(sum.releaseBytesRetained)}), ${sum.releasesDeleted} obsolete deleted ` +
+          `(${formatBytes(sum.releaseBytesFreed)} freed)`,
+      );
+      if (sum.currentRelease) {
+        console.log(`  current release  ${sum.currentRelease}`);
+      }
+      for (const warning of sum.retentionWarnings) {
+        console.log(`  retention warn   ${warning}`);
+      }
       if (sum.redirectEquivalenceAccepted > 0) {
         console.log(
           `  redirects        ${sum.redirectEquivalenceAccepted} accepted by proven equivalence:`,
@@ -1123,6 +1144,12 @@ export async function main(
   argv: string[] = process.argv.slice(2),
 ): Promise<void> {
   const args = parseArgs(argv);
+  /**
+   * DISK MUHAFIZI HER MODDA. Yapi toplayicisi da ham sayfa yazar (olculdu:
+   * runs/ 2,9 GB); dolu diskte baslayan hangi kosu olursa olsun yarim
+   * dosya birakir. Muhafiz hicbir sey silmez, yalnizca reddeder.
+   */
+  assertEnoughDisk(path.join(backendRoot(), 'data', 'market-refresh'));
   if (args.mode === 'structure') return runStructure(args);
   if (args.mode === 'weekly') return runWeekly(args);
   return runMarket(args);

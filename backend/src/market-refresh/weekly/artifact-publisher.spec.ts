@@ -275,4 +275,162 @@ describe('atomic weekly artifact publish', () => {
       nodeId: advanced.targetId,
     });
   });
+
+  /**
+   * SAKLAMA YAYINA BAGLI. Her hedef bitisinde tam anlik goruntu yazildigi
+   * icin dizin ancak basarili yayindan SONRA budanirsa sinirli kalir;
+   * basarisiz yayindan sonra budamak, dogrulamayi gecemeyen bir kosunun
+   * gecmisi silmesi demek olurdu.
+   */
+  describe('retention runs with publishing', () => {
+    const tree = testTree();
+    const snapshot = buildMarketTargetSnapshot(tree);
+    const target = snapshot.targets.find((item) =>
+      item.targetId.endsWith('/advanced'),
+    )!;
+    const row = (id: string, tick: number): WeeklyRawObservation => ({
+      source: 'sahibinden',
+      sourceListingId: id,
+      sourceUrl: '',
+      title: '',
+      modelCells: [],
+      listingDate: '2026-09-04',
+      listingDateText: '4 Eylül 2026',
+      year: null,
+      mileage: null,
+      price: tick,
+      currency: 'TL',
+      location: null,
+      capturedAt: '2026-09-04T00:00:00Z',
+      runId: 'run',
+      requestedTargetId: target.targetId,
+      requestedTargetPath: target.pathSegments,
+      page: 1,
+    });
+    const publishRow = (
+      publisher: AtomicWeeklyMarketPublisher,
+      id: string,
+      tick: number,
+    ) =>
+      publisher.publishTarget({
+        hierarchyVersion: snapshot.hierarchyVersion,
+        tree,
+        targets: snapshot.targets,
+        result: assignWeeklyEvidence(tree, [row(id, tick)]),
+      });
+    const versionsOf = (): string[] =>
+      fs.readdirSync(path.join(dir, 'versions')).sort();
+
+    test('I) a successful publish prunes obsolete releases and keeps the live one', () => {
+      let tick = 0;
+      const publisher = new AtomicWeeklyMarketPublisher(
+        dir,
+        () => new Date(2026, 8, 4, 0, 0, tick++),
+        {
+          retention: {
+            keepCount: 1,
+            anchorHours: 0,
+            graceMs: 0,
+            tempMaxAgeMs: 0,
+          },
+        },
+      );
+
+      for (let index = 0; index < 5; index += 1) {
+        publishRow(publisher, `listing-${index}`, index);
+      }
+      const last = publishRow(publisher, 'listing-final', 99);
+
+      expect(last.unchanged).toBe(false);
+      expect(last.retention?.ok).toBe(true);
+      // Canli surum + 1 gecmis surum kalir; kalanlari silinir.
+      expect(versionsOf()).toHaveLength(2);
+      expect(versionsOf()).toContain(path.basename(last.releaseFile));
+      expect(last.retention!.deleted.length).toBeGreaterThan(0);
+      expect(last.retention!.freedBytes).toBeGreaterThan(0);
+      // Isaretci hala okunabilir ve dosyasi yerinde.
+      expect(
+        publisher.loadCurrent()?.assignments['listing-final'],
+      ).toBeDefined();
+    });
+
+    test('J) a failed publish writes nothing and prunes nothing', () => {
+      const publisher = new AtomicWeeklyMarketPublisher(
+        dir,
+        () => new Date('2026-09-04T00:00:00Z'),
+        {
+          retention: {
+            keepCount: 0,
+            anchorHours: 0,
+            graceMs: 0,
+            tempMaxAgeMs: 0,
+          },
+        },
+      );
+      publishRow(publisher, 'first', 1);
+      const before = versionsOf();
+      const pointerBefore = fs.readFileSync(
+        path.join(dir, 'current.json'),
+        'utf-8',
+      );
+
+      const valid = assignWeeklyEvidence(tree, [row('second', 2)]);
+      expect(() =>
+        publisher.publishTarget({
+          hierarchyVersion: snapshot.hierarchyVersion,
+          tree,
+          targets: snapshot.targets,
+          result: {
+            assignments: valid.assignments,
+            pools: { [target.targetId]: ['missing'] },
+            stats: { ...valid.stats },
+          },
+        }),
+      ).toThrow('VALIDATION_FAIL');
+
+      expect(versionsOf()).toEqual(before);
+      expect(fs.readFileSync(path.join(dir, 'current.json'), 'utf-8')).toBe(
+        pointerBefore,
+      );
+    });
+
+    test('K) an identical refresh writes no duplicate release and prunes nothing', () => {
+      let tick = 0;
+      const publisher = new AtomicWeeklyMarketPublisher(
+        dir,
+        () => new Date(2026, 8, 4, 0, 0, tick++),
+        {
+          retention: {
+            keepCount: 0,
+            anchorHours: 0,
+            graceMs: 0,
+            tempMaxAgeMs: 0,
+          },
+        },
+      );
+      publishRow(publisher, 'only', 1);
+      const after = versionsOf();
+
+      const again = publishRow(publisher, 'only', 1);
+
+      expect(again.unchanged).toBe(true);
+      // Yeni dosya yok: yalnizca durum okunur, silme yapilmaz.
+      expect(again.retention?.dryRun).toBe(true);
+      expect(again.retention?.deleted).toEqual([]);
+      expect(versionsOf()).toEqual(after);
+    });
+
+    test('retention is off by default in tests that pass null, and on otherwise', () => {
+      let tick = 0;
+      const publisher = new AtomicWeeklyMarketPublisher(
+        dir,
+        () => new Date(2026, 8, 4, 0, 0, tick++),
+        { retention: null },
+      );
+      for (let index = 0; index < 4; index += 1) {
+        publishRow(publisher, `row-${index}`, index);
+      }
+      expect(versionsOf()).toHaveLength(4);
+    });
+  });
 });

@@ -49,6 +49,7 @@ import {
   evaluateBoundary,
   validateBoundaryPolicy,
 } from './boundary-rule';
+import { RetentionOutcome } from './published-retention';
 import { WeeklyEvidenceStore, WeeklyRawObservation } from './evidence-store';
 import { MarketTarget, MarketTargetSnapshot } from './hierarchy-gate';
 import { parseListingDate, sourceToday } from './listing-date';
@@ -240,6 +241,21 @@ export interface WeeklyRunSummary {
   /** Kanitlanmis yonlendirme esdegerligiyle kabul edilen hedef sayisi. */
   redirectEquivalenceAccepted: number;
   redirectEquivalenceTargetIds: string[];
+  /**
+   * Bu SUREC boyunca yayin sonrasi saklamanin sildigi surumler. Devam eden
+   * (resume) bir kosuda onceki surecin sildikleri sayilmaz.
+   */
+  releasesDeleted: number;
+  releaseBytesFreed: number;
+  /** Son yayindan sonra yayin dizininde kalan dosya sayisi ve boyutu. */
+  releasesRetained: number;
+  releaseBytesRetained: number;
+  /** Yayin dizininin son olculen toplam durumu ve canli surum. */
+  releasesTotal: number;
+  releaseBytesTotal: number;
+  currentRelease: string | null;
+  /** Saklama hata verdi ama yayin gecerli: uyari olarak tasinir. */
+  retentionWarnings: string[];
 }
 
 export interface WeeklyPageResult {
@@ -397,6 +413,16 @@ export class WeeklyMarketSession {
   private readonly jitter: number;
   /** Uyum saglayan geri cekilme carpani (>= 1). Kalici DEGILDIR: kosu icidir. */
   private paceMultiplier = 1;
+  private retention = {
+    deleted: 0,
+    bytesFreed: 0,
+    retained: 0,
+    bytesRetained: 0,
+    total: 0,
+    bytesTotal: 0,
+    currentRelease: null as string | null,
+    warnings: [] as string[],
+  };
   /** Ardisik temiz hedef sayaci — toparlanma bununla tetiklenir. */
   private cleanStreak = 0;
   private readonly random: () => number;
@@ -854,6 +880,7 @@ export class WeeklyMarketSession {
           baselineAssignments: this.opts.baselineAssignments,
         });
         item.validation = published.validation;
+        this.noteRetention(published.retention);
         item.exact = assignment.stats.exact;
         item.ambiguous = assignment.stats.ambiguous;
         item.unresolved = assignment.stats.unresolved;
@@ -1221,11 +1248,46 @@ export class WeeklyMarketSession {
       redirectEquivalenceTargetIds: equivalent.map(
         (item) => item.target.targetId,
       ),
+      releasesDeleted: this.retention.deleted,
+      releaseBytesFreed: this.retention.bytesFreed,
+      releasesRetained: this.retention.retained,
+      releaseBytesRetained: this.retention.bytesRetained,
+      releasesTotal: this.retention.total,
+      releaseBytesTotal: this.retention.bytesTotal,
+      currentRelease: this.retention.currentRelease,
+      retentionWarnings: [...this.retention.warnings],
       failedTargetIds: failed.map((item) => item.target.targetId),
       failures: failed
         .map((item) => item.failureDetail)
         .filter((detail): detail is TargetFailureDetail => detail !== null),
     };
+  }
+
+  /**
+   * Yayin sonrasi saklama sonucunu kosu ozetine tasir. Saklama basarisiz
+   * olsa bile yayin gecerlidir: burada yalnizca uyari biriktirilir, kosu
+   * durdurulmaz.
+   */
+  private noteRetention(outcome: RetentionOutcome | null): void {
+    if (!outcome) return;
+    this.retention.deleted += outcome.deleted.length;
+    this.retention.bytesFreed += outcome.freedBytes;
+    this.retention.retained = outcome.plan.retained.length;
+    this.retention.bytesRetained = outcome.plan.retainedBytes;
+    // Plan silmeden ONCEKI durumu anlatir; silinenler dususu gosterir.
+    this.retention.total = outcome.plan.totalFiles - outcome.deleted.length;
+    this.retention.bytesTotal = outcome.plan.totalBytes - outcome.freedBytes;
+    this.retention.currentRelease = outcome.plan.currentRelease;
+    const warnings = [
+      ...(outcome.error ? [outcome.error] : []),
+      ...outcome.plan.refusals,
+      ...outcome.failed.map((failure) => `${failure.file}: ${failure.error}`),
+    ];
+    for (const warning of warnings) {
+      if (!this.retention.warnings.includes(warning)) {
+        this.retention.warnings.push(warning);
+      }
+    }
   }
 
   /**

@@ -36,6 +36,8 @@
     "market:refresh:dry-run": "ts-node src/market-refresh/cli.ts dry-run",
     "market:autopilot:bridge": "ts-node src/market-refresh/autopilot/autopilot-cli.ts",
     "market:weekly:bridge": "ts-node src/market-refresh/autopilot/autopilot-cli.ts --mode weekly",
+    "market:published:prune": "ts-node src/market-refresh/weekly/published-prune-cli.ts",
+    "market:published:status": "ts-node src/market-refresh/weekly/published-prune-cli.ts",
     "hierarchy:build": "ts-node src/vehicle-hierarchy/build-hierarchy.ts",
     "listings:build": "node --max-old-space-size=4096 -r ts-node/register src/vehicle-hierarchy/build-listing-assignments.ts",
     "coverage:manifest": "node --max-old-space-size=4096 -r ts-node/register src/vehicle-hierarchy/build-coverage-manifest.ts",
