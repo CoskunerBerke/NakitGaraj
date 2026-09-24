@@ -79,3 +79,6 @@ chrome-extension/**/*.local.json
 
 # Vehicle hierarchy: mevcut veriden TURETILEN artefakt (uretilen, kaynak degil).
 backend/data/vehicle-hierarchy/
+
+# Zamanlanmis piyasa tazeleme: kosu gunlukleri (uretilen, kaynak degil).
+logs/scheduled-market/
