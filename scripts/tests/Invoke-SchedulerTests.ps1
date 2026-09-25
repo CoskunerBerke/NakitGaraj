@@ -277,6 +277,206 @@ It 'K/L) access wall and precheck failure never launch a crawler' {
     Assert-False ($runner.Contains('Start-Sleep -Seconds 300')) 'there must be no retry loop inside one night'
 }
 
+# ------------------------------------------- tek seferlik devralma (bootstrap)
+
+function New-BootstrapConfig {
+    param([string] $Path, [string] $RunId, [string] $Status = 'PENDING')
+    $dir = Split-Path -Parent $Path
+    if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    $obj = [ordered]@{ runId = $RunId }
+    if ($Status -ne 'PENDING') { $obj.status = $Status }
+    Write-JsonAtomic -Path $Path -Object $obj
+    Read-BootstrapRun -Path $Path
+}
+
+It 'BS1) no bootstrap config -> normal market-auto behaviour' {
+    $runs = Join-Path $root 'BS1\runs'; New-Item -ItemType Directory -Path $runs -Force | Out-Null
+    New-RunFixture -RunsDir $runs -RunId 'market-baseline-6205-2026-09-08' -State 'RUNNING' -Pending 2398 -Complete 3800 | Out-Null
+    $cfg = Read-BootstrapRun -Path (Join-Path $root 'BS1\bootstrap-run.json')
+    $d = Get-RunDecision -Runs (Get-WeeklyRuns -RunsDir $runs) -Now ([datetime]'2026-09-24T22:30:00') -Bootstrap $cfg
+    Assert-Equal 'NEW' $d.Action
+    Assert-True ($d.RunId -like 'market-auto-*') 'must open its own run'
+}
+
+It 'BS2) configured bootstrap run that is incomplete -> RESUME_BOOTSTRAP' {
+    $runs = Join-Path $root 'BS2\runs'; New-Item -ItemType Directory -Path $runs -Force | Out-Null
+    New-RunFixture -RunsDir $runs -RunId 'market-baseline-6205-2026-09-08' -State 'RUNNING' -Pending 2398 -Complete 3800 | Out-Null
+    $cfg = New-BootstrapConfig -Path (Join-Path $root 'BS2\bootstrap-run.json') -RunId 'market-baseline-6205-2026-09-08'
+    $d = Get-RunDecision -Runs (Get-WeeklyRuns -RunsDir $runs) -Now ([datetime]'2026-09-24T22:30:00') -Bootstrap $cfg
+    Assert-Equal 'RESUME_BOOTSTRAP' $d.Action
+    Assert-Equal 'market-baseline-6205-2026-09-08' $d.RunId
+    Assert-True $d.Resumed 'bootstrap adoption is a resume'
+}
+
+It 'BS3) bootstrap run COMPLETE -> not resumed, adoption is finished' {
+    $runs = Join-Path $root 'BS3\runs'; New-Item -ItemType Directory -Path $runs -Force | Out-Null
+    New-RunFixture -RunsDir $runs -RunId 'market-baseline-6205-2026-09-08' -State 'COMPLETE' -Complete 6205 | Out-Null
+    $cfg = New-BootstrapConfig -Path (Join-Path $root 'BS3\bootstrap-run.json') -RunId 'market-baseline-6205-2026-09-08'
+    $d = Get-RunDecision -Runs (Get-WeeklyRuns -RunsDir $runs) -Now ([datetime]'2026-09-24T22:30:00') -Bootstrap $cfg
+    Assert-Equal 'BOOTSTRAP_COMPLETED' $d.Action
+    Assert-False $d.Resumed 'a completed bootstrap run is never resumed'
+}
+
+It 'BS4) an arbitrary manual run is still never adopted, even with a bootstrap config for another run' {
+    $runs = Join-Path $root 'BS4\runs'; New-Item -ItemType Directory -Path $runs -Force | Out-Null
+    New-RunFixture -RunsDir $runs -RunId 'market-baseline-6205-2026-09-08' -State 'COMPLETE' -Complete 6205 | Out-Null
+    New-RunFixture -RunsDir $runs -RunId 'someone-elses-run' -State 'RUNNING' -Pending 50 -Complete 5 | Out-Null
+    $cfg = New-BootstrapConfig -Path (Join-Path $root 'BS4\bootstrap-run.json') -RunId 'market-baseline-6205-2026-09-08' -Status 'COMPLETED'
+    $d = Get-RunDecision -Runs (Get-WeeklyRuns -RunsDir $runs) -Now ([datetime]'2026-09-24T22:30:00') -Bootstrap $cfg
+    Assert-Equal 'NEW' $d.Action
+    Assert-True ($d.ForeignResumable.RunId -contains 'someone-elses-run') 'the manual run is reported'
+}
+
+It 'BS5) completing the adoption is atomic and switches behaviour back' {
+    $path = Join-Path $root 'BS5\bootstrap-run.json'
+    $runs = Join-Path $root 'BS5\runs'; New-Item -ItemType Directory -Path $runs -Force | Out-Null
+    New-RunFixture -RunsDir $runs -RunId 'market-baseline-6205-2026-09-08' -State 'COMPLETE' -Complete 6205 | Out-Null
+    New-BootstrapConfig -Path $path -RunId 'market-baseline-6205-2026-09-08' | Out-Null
+    Complete-BootstrapRun -Path $path -RunId 'market-baseline-6205-2026-09-08'
+    $after = Read-BootstrapRun -Path $path
+    Assert-Equal 'COMPLETED' $after.Status
+    Assert-True ([bool]$after.CompletedAt) 'completion is timestamped'
+    Assert-Equal 0 @(Get-ChildItem -LiteralPath (Split-Path $path -Parent) -Filter '*.tmp-*').Count 'atomic write leaves no temp file'
+    $d = Get-RunDecision -Runs (Get-WeeklyRuns -RunsDir $runs) -Now ([datetime]'2026-09-27T22:30:00') -Bootstrap $after
+    Assert-Equal 'NEW' $d.Action
+}
+
+It 'BS6) no fresh market-auto run is opened while the bootstrap run is incomplete' {
+    $runs = Join-Path $root 'BS6\runs'; New-Item -ItemType Directory -Path $runs -Force | Out-Null
+    New-RunFixture -RunsDir $runs -RunId 'market-baseline-6205-2026-09-08' -State 'INCOMPLETE' -Pending 2398 -Complete 3800 | Out-Null
+    $cfg = New-BootstrapConfig -Path (Join-Path $root 'BS6\bootstrap-run.json') -RunId 'market-baseline-6205-2026-09-08'
+    foreach ($night in @('2026-09-24T22:30:00', '2026-09-27T22:30:00', '2026-09-30T22:30:00')) {
+        $d = Get-RunDecision -Runs (Get-WeeklyRuns -RunsDir $runs) -Now ([datetime]$night) -Bootstrap $cfg
+        Assert-Equal 'RESUME_BOOTSTRAP' $d.Action
+        Assert-False ($d.RunId -like 'market-auto-*') "no new auto run on $night"
+    }
+}
+
+It 'BS7) a configured bootstrap run that does not exist refuses instead of guessing' {
+    $runs = Join-Path $root 'BS7\runs'; New-Item -ItemType Directory -Path $runs -Force | Out-Null
+    $cfg = New-BootstrapConfig -Path (Join-Path $root 'BS7\bootstrap-run.json') -RunId 'no-such-run'
+    $d = Get-RunDecision -Runs (Get-WeeklyRuns -RunsDir $runs) -Now ([datetime]'2026-09-24T22:30:00') -Bootstrap $cfg
+    Assert-Equal 'BOOTSTRAP_MISSING' $d.Action
+}
+
+It 'BS8) a bootstrap run with no pending work and no COMPLETE state refuses' {
+    $runs = Join-Path $root 'BS8\runs'; New-Item -ItemType Directory -Path $runs -Force | Out-Null
+    New-RunFixture -RunsDir $runs -RunId 'market-baseline-6205-2026-09-08' -State 'INCOMPLETE' -Complete 6199 -Failed 6 | Out-Null
+    $cfg = New-BootstrapConfig -Path (Join-Path $root 'BS8\bootstrap-run.json') -RunId 'market-baseline-6205-2026-09-08'
+    $d = Get-RunDecision -Runs (Get-WeeklyRuns -RunsDir $runs) -Now ([datetime]'2026-09-24T22:30:00') -Bootstrap $cfg
+    Assert-Equal 'BOOTSTRAP_UNUSABLE' $d.Action
+}
+
+# ------------------------------------------------- ilerleme tespiti (izleme)
+
+It 'PR1) a resumed run whose checkpoint has not moved counts as NO progress' {
+    # Bu, gercek bir hatadan gelen test: devam ettirilen kosunun checkpoint'i
+    # zaten RUNNING yaziyordu ve izleyici uzanti hic baglanmadan "ilerliyor" sandi.
+    $baseline = [datetime]'2026-09-17T08:59:13'
+    $current = [pscustomobject]@{ State = 'RUNNING'; UpdatedAt = [datetime]'2026-09-17T08:59:13' }
+    Assert-False (Test-CheckpointProgressed -Baseline $baseline -Current $current) 'same timestamp is not progress'
+}
+
+It 'PR2) a newer checkpoint timestamp counts as progress' {
+    $baseline = [datetime]'2026-09-17T08:59:13'
+    $current = [pscustomobject]@{ State = 'RUNNING'; UpdatedAt = [datetime]'2026-09-25T22:31:00' }
+    Assert-True (Test-CheckpointProgressed -Baseline $baseline -Current $current) 'a later write is progress'
+}
+
+It 'PR3) a brand new run (no earlier checkpoint) counts its first write as progress' {
+    $current = [pscustomobject]@{ State = 'RUNNING'; UpdatedAt = (Get-Date) }
+    Assert-True (Test-CheckpointProgressed -Baseline $null -Current $current) 'first checkpoint is progress'
+    Assert-False (Test-CheckpointProgressed -Baseline $null -Current $null) 'no checkpoint at all is not progress'
+}
+
+It 'PR4) the runner measures progress by timestamp, never by state alone' {
+    $runner = Get-Content -LiteralPath (Join-Path $scriptsDir 'scheduled-market-refresh.ps1') -Raw
+    Assert-True ($runner.Contains('Test-CheckpointProgressed -Baseline $baselineUpdatedAt')) 'progress is measured against the baseline timestamp'
+    Assert-False ($runner.Contains("if (`$state.State -eq 'RUNNING') { `$sawProgress = `$true }")) 'the old state-only shortcut is gone'
+}
+
+It 'PR5) the bridge stop signal is delivered by a separate process' {
+    # Zamanlayici kendi gonderdigi CTRL+C ile olduyse kosu siniflandirilamaz.
+    $module = Get-Content -LiteralPath (Join-Path $scriptsDir 'MarketScheduler.psm1') -Raw
+    $runner = Get-Content -LiteralPath (Join-Path $scriptsDir 'scheduled-market-refresh.ps1') -Raw
+    Assert-True ($module.Contains('function Stop-BridgeGracefully')) 'a dedicated stop helper exists'
+    Assert-True ($module.Contains('-EncodedCommand')) 'the signal is sent from a separate powershell process'
+    Assert-True ($runner.Contains('Stop-BridgeGracefully -ProcessId $proc.Id')) 'the runner uses it'
+    Assert-False ($runner.Contains('AttachConsole')) 'the scheduler never attaches to the child console itself'
+}
+
+# ----------------------------------------------------------------- chrome
+
+It 'CH1) the automation profile is proven from Chrome own files, or not claimed at all' {
+    $profile = Get-ChromeAutomationProfile
+    if ($profile) {
+        Assert-True ([bool]$profile.ProfileDirectory) 'a profile directory must be named'
+        Assert-True ($profile.ExtensionPath -like '*market-refresh-autopilot*') 'must be proven by the extension path'
+        Assert-True $profile.Unpacked 'the working extension is loaded unpacked'
+        Assert-True ([bool]$profile.ProvenBy) 'the proof must be stated'
+    } else {
+        Write-Host '        (no automation profile on this machine; scheduler would refuse to start)' -ForegroundColor DarkYellow
+    }
+}
+
+It 'CH2) an unknown user-data-dir yields no profile instead of a guess' {
+    $fake = Join-Path $root 'CH2\no-chrome-here'
+    New-Item -ItemType Directory -Path $fake -Force | Out-Null
+    Assert-Equal $null (Get-ChromeAutomationProfile -UserDataDir $fake)
+}
+
+It 'CH3) a chrome running with a different profile is not treated as automation chrome' {
+    $profile = [pscustomobject]@{
+        UserDataDir = 'C:\Users\test\AppData\Local\Google\Chrome\User Data'
+        ProfileDirectory = 'Profile 9'; LastUsedProfile = 'Default'
+    }
+    $state = Test-AutomationChromeRunning -Profile $profile
+    Assert-False $state.Running 'profile 9 does not exist, so automation chrome is not running'
+}
+
+It 'CH4) chrome cleanup only ever targets the pids it was given' {
+    $runner = Get-Content -LiteralPath (Join-Path $scriptsDir 'scheduled-market-refresh.ps1') -Raw
+    Assert-True ($runner.Contains('$script:ChromeStartedByScheduler -and')) 'cleanup is gated on ownership'
+    Assert-True ($runner.Contains('Stop-SchedulerChrome -ProcessIds $script:ChromePids')) 'cleanup passes only its own pids'
+    $module = Get-Content -LiteralPath (Join-Path $scriptsDir 'MarketScheduler.psm1') -Raw
+    Assert-False ($module -match 'Stop-Process[^\r\n]*chrome') 'chrome is never force-killed by name'
+    Assert-True ($module.Contains('CloseMainWindow')) 'chrome is asked to close, not killed'
+}
+
+It 'CH5) a user chrome window is never closed by the scheduler' {
+    $module = Get-Content -LiteralPath (Join-Path $scriptsDir 'MarketScheduler.psm1') -Raw
+    # Stop-SchedulerChrome yalnizca verilen pid listesini dolasir.
+    $fn = [regex]::Match($module, 'function Stop-SchedulerChrome[\s\S]*?\n\}').Value
+    Assert-True ($fn.Contains('foreach ($id in @($ProcessIds))')) 'it iterates only the supplied pids'
+    Assert-False ($fn.Contains('Get-Process chrome')) 'it never enumerates chrome by name'
+}
+
+It 'CH6) the runner classifies a missing extension connection distinctly' {
+    $runner = Get-Content -LiteralPath (Join-Path $scriptsDir 'scheduled-market-refresh.ps1') -Raw
+    Assert-True ($runner.Contains("'CHROME_EXTENSION_NOT_CONNECTED'")) 'classification exists'
+    Assert-True ($runner.Contains('$extensionDeadline')) 'there is a bounded wait'
+    Assert-False ($runner.Contains('while ($true) { Start-Process')) 'no retry spam'
+}
+
+It 'CH7) dry run and preflight never launch chrome or the crawler' {
+    $runner = Get-Content -LiteralPath (Join-Path $scriptsDir 'scheduled-market-refresh.ps1') -Raw
+    $dryIdx = $runner.IndexOf("Classification 'DRY_RUN'")
+    $chromeIdx = $runner.IndexOf('Start-AutomationChrome')
+    $bridgeIdx = $runner.IndexOf('bridge started')
+    Assert-True ($dryIdx -gt 0) 'dry run exits'
+    Assert-True ($chromeIdx -gt $dryIdx) 'chrome launch happens after the dry-run exit'
+    Assert-True ($bridgeIdx -gt $dryIdx) 'bridge start happens after the dry-run exit'
+    $preIdx = $runner.IndexOf("Classification 'PRECHECK_PASSED'")
+    Assert-True ($preIdx -gt 0 -and $chromeIdx -gt $preIdx) 'preflight-only exits before chrome is launched'
+}
+
+It 'CH8) preserved behaviour: lock, disk guard and junction checks still gate the run' {
+    $runner = Get-Content -LiteralPath (Join-Path $scriptsDir 'scheduled-market-refresh.ps1') -Raw
+    foreach ($needle in @('Get-LockDecision', "Classification 'LOW_DISK'", 'data junction (market)', 'data junction (hierarchy)', "Classification 'ACCESS_WALL'", "Classification 'SKIPPED_OUTSIDE_NIGHT_WINDOW'")) {
+        Assert-True ($runner.Contains($needle)) "still present: $needle"
+    }
+}
+
 Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
 
 Write-Host ''

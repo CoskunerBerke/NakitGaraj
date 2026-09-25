@@ -71,10 +71,47 @@ if ($newestAuto) {
 } else {
     Field '  newest auto run' 'none yet'
 }
-$foreign = @($runs | Where-Object { $_.RunId -notlike ((Get-AutoRunPrefix) + '*') -and (Test-RunResumable $_) })
+$bootstrap = Read-BootstrapRun -Path $paths.BootstrapFile
+$adoptedId = if ($bootstrap -and $bootstrap.Status -eq 'PENDING') { $bootstrap.RunId } else { $null }
+$foreign = @($runs | Where-Object { $_.RunId -notlike ((Get-AutoRunPrefix) + '*') -and (Test-RunResumable $_) -and $_.RunId -ne $adoptedId })
 foreach ($f in $foreign) {
     Field '  manual run pending' ('{0} (state {1}, {2} pending) - not adopted automatically' -f $f.RunId, $f.State, $f.Pending)
 }
+Write-Host ''
+
+# ------------------------------------------------- tek seferlik devralma
+Field 'Bootstrap run' $(if ($bootstrap) { $bootstrap.RunId } else { 'none configured' })
+Field 'Bootstrap status' $(if ($bootstrap) { $bootstrap.Status } else { 'n/a' })
+if ($bootstrap -and $bootstrap.RunId) {
+    $bRun = @($runs | Where-Object { $_.RunId -eq $bootstrap.RunId }) | Select-Object -First 1
+    if ($bRun) {
+        Field 'Bootstrap pending' ($bRun.Pending + $bRun.InProgress)
+        Field 'Bootstrap complete' ('{0} / {1} (state {2})' -f $bRun.Complete, $bRun.Total, $bRun.State)
+    } else {
+        Field 'Bootstrap pending' 'run not found under the weekly runs directory'
+        Field 'Bootstrap complete' $null
+    }
+}
+Write-Host ''
+
+# ---------------------------------------------------------------- chrome
+$chromeProfile = Get-ChromeAutomationProfile
+Field 'Chrome automation profile' $(
+    if ($chromeProfile) { "{0}  (extension {1})" -f $chromeProfile.ProfileDirectory, $chromeProfile.ExtensionId }
+    else { 'NOT FOUND - the autopilot extension is not installed in any profile' }
+)
+if ($chromeProfile) {
+    $chromeState = Test-AutomationChromeRunning -Profile $chromeProfile
+    Field 'Chrome running' $(if ($chromeState.Running) { 'yes (pid(s) ' + ($chromeState.MatchingPids -join ',') + ')' } else { 'no' })
+    $active = if (Test-Path -LiteralPath $paths.ActiveRunFile) { Get-Content -LiteralPath $paths.ActiveRunFile -Raw | ConvertFrom-Json } else { $null }
+    Field 'Chrome started by scheduler' $(if ($active) { $active.chromeStartedByScheduler } else { 'no active run' })
+    $ext = Get-AutopilotExtensionState -ProfilePath (Join-Path $chromeProfile.UserDataDir $chromeProfile.ProfileDirectory) -ExtensionId $chromeProfile.ExtensionId
+    Field 'Extension auto-start' $(if ($ext.Found) { "$($ext.AutoStart)  (best effort read)" } else { $ext.Reason })
+    Field 'Extension last state' $(if ($ext.Found) { "$($ext.LastState), bridge $($ext.BridgeUrl)" } else { $null })
+}
+Field 'Extension bridge connected' $(
+    if (Test-BridgePortBusy -Port $Port) { 'bridge port is in use (a run is up)' } else { 'no bridge running right now' }
+)
 Write-Host ''
 
 # ---------------------------------------------------------------- depo

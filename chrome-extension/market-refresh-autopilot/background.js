@@ -40,6 +40,19 @@ const DEFAULTS = {
   sourceOrigin: 'https://www.sahibinden.com',
   tabId: null,
   shouldRun: false,
+  /**
+   * ZAMANLANMIS KOSU ICIN KENDILIGINDEN BASLAMA — VARSAYILAN KAPALI.
+   *
+   * `shouldRun` her bitiste (HALT, erisim duvari, hata, bridge yok) FALSE'a
+   * doner; bu dogrudur, cunku "calismaya devam et" kalici bir niyet degildir.
+   * Ama gece zamanlayicisi koprüyü kendi ayaga kaldiriyorsa, her seferinde
+   * panele basilmasi gerekmesi otomasyonu bozar. Bu bayrak acikken uzanti
+   * YALNIZCA kopru gercekten hazirsa kendiliginden baslar.
+   *
+   * ERISIM DUVARI BUNUN DISINDADIR: ACCESS_RESTRICTED sonrasi kendiliginden
+   * baslanmaz, cunku orada insan mudahalesi gerekir (giris/2FA/CAPTCHA).
+   */
+  autoStart: false,
   lastState: 'IDLE',
   lastError: null,
 };
@@ -476,6 +489,69 @@ async function resolveRootFromTabs(config) {
   };
 }
 
+/**
+ * Kopruyu baslatan ORTAK yol: panel dugmesi de, kendiliginden baslama da
+ * buradan gecer. Iki ayri baslatma yolu olsaydi biri digerinden sapardi.
+ */
+async function startRun(config, opts = {}) {
+  const { tabId, roots } = await resolveRootFromTabs(config);
+  await writeConfig({ tabId });
+  await bridgeFetch(config, '/autopilot/start', {
+    method: 'POST',
+    body: {
+      roots,
+      ...(Number.isFinite(opts.deadlineMs) ? { deadlineMs: opts.deadlineMs } : {}),
+    },
+  });
+  await writeConfig({ shouldRun: true });
+  await setState('RUNNING');
+  runLoop();
+  return roots;
+}
+
+/**
+ * KENDILIGINDEN BASLAMA — yalnizca kopru hazirsa, yalnizca acikca izin
+ * verildiyse.
+ *
+ * Kural dizisi kasitlidir:
+ *   - bayrak kapaliysa hicbir sey yapma (varsayilan budur),
+ *   - zaten calisiyorsa dokunma,
+ *   - son durum ACCESS_RESTRICTED ise BASLAMA: erisim duvarini insan acar,
+ *     yoksa bu dongu her 30 saniyede kaynaga yeniden saldirirdi,
+ *   - kopru ulasilamiyorsa sessizce cik: `shouldRun` DEGISTIRILMEZ, cunku
+ *     burada bir kosu baslatmadik; her yoklamada hata durumu yazmak paneli
+ *     yaniltirdi.
+ */
+async function maybeAutoStart() {
+  if (loopRunning) return;
+  const config = await readConfig();
+  if (!config.autoStart || config.shouldRun) return;
+  if (config.lastState === 'ACCESS_RESTRICTED') return;
+
+  let status = null;
+  try {
+    status = await bridgeFetch(config, '/autopilot/status');
+  } catch {
+    return; // kopru yok: gece henuz baslamadi ya da kosu bitti.
+  }
+  if (!status || !status.state) return;
+
+  try {
+    if (status.state === 'IDLE') {
+      // Kopru yeni ayaga kalkti. Checkpoint varsa START onu DEVAM ETTIRIR.
+      await startRun(config);
+    } else if (status.state === 'PAUSED') {
+      await bridgeFetch(config, '/autopilot/resume', { method: 'POST' });
+      await writeConfig({ shouldRun: true });
+      await setState('RUNNING');
+      runLoop();
+    }
+    // RUNNING/ACCESS_RESTRICTED/COMPLETE: baslatacak bir sey yok.
+  } catch (err) {
+    await setState(config.lastState || 'IDLE', String((err && err.message) || err));
+  }
+}
+
 async function handleCommand(message) {
   const config = await readConfig();
 
@@ -501,6 +577,7 @@ async function handleCommand(message) {
         /** Kopru ulasilabilir mi — panelde BAGLI / BAGLI DEGIL olarak gosterilir. */
         bridgeConnected: bridgeStatus !== null,
         shouldRun: config.shouldRun,
+        autoStart: config.autoStart,
         lastState: config.lastState,
         lastError: config.lastError,
         bridgeStatus,
@@ -522,19 +599,13 @@ async function handleCommand(message) {
     }
 
     case 'START': {
-      const { tabId, roots } = await resolveRootFromTabs(config);
-      await writeConfig({ tabId });
-      await bridgeFetch(config, '/autopilot/start', {
-        method: 'POST',
-        body: {
-          roots,
-          ...(Number.isFinite(message.deadlineMs) ? { deadlineMs: message.deadlineMs } : {}),
-        },
-      });
-      await writeConfig({ shouldRun: true });
-      await setState('RUNNING');
-      runLoop();
+      const roots = await startRun(config, { deadlineMs: message.deadlineMs });
       return { ok: true, roots };
+    }
+
+    case 'SET_AUTO_START': {
+      await writeConfig({ autoStart: Boolean(message.autoStart) });
+      return { ok: true, autoStart: Boolean(message.autoStart) };
     }
 
     case 'RESUME': {
@@ -579,10 +650,12 @@ chrome.alarms.create(KEEPALIVE_ALARM, { periodInMinutes: 0.5 });
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name !== KEEPALIVE_ALARM) return;
   const config = await readConfig();
-  if (config.shouldRun && !loopRunning) runLoop();
+  if (config.shouldRun && !loopRunning) return runLoop();
+  await maybeAutoStart();
 });
 
 chrome.runtime.onStartup.addListener(async () => {
   const config = await readConfig();
-  if (config.shouldRun) runLoop();
+  if (config.shouldRun) return runLoop();
+  await maybeAutoStart();
 });

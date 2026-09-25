@@ -116,6 +116,8 @@ function render(state) {
       : 'servis çalışanı yanıt vermiyor',
   );
 
+  $('autoStart').checked = state.autoStart === true;
+
   const message = state.lastError || state.bridgeError || status.lastError || '';
   $('message').textContent = message;
 }
@@ -139,6 +141,9 @@ async function command(op, extra = {}) {
 $('save').addEventListener('click', () => command('SAVE_CONFIG', { bridgeUrl: $('bridgeUrl').value }));
 
 $('start').addEventListener('click', () => command('START'));
+$('autoStart').addEventListener('change', () =>
+  command('SET_AUTO_START', { autoStart: $('autoStart').checked }),
+);
 $('pause').addEventListener('click', () => command('PAUSE'));
 $('resume').addEventListener('click', () => command('RESUME'));
 $('stop').addEventListener('click', () => command('STOP'));

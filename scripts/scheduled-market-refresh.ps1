@@ -65,13 +65,28 @@ $script:RunId = $null
 $script:Resumed = $false
 $script:LockTaken = $false
 
+$script:ChromeStartedByScheduler = $false
+$script:ChromePids = @()
+
 function Complete-Invocation {
     <#
       Her cikis yolu buradan gecer: son durum makine okunur bicimde yazilir,
-      kilit yalnizca BIZ aldiysak birakilir.
+      kilit yalnizca BIZ aldiysak birakilir, Chrome yalnizca BIZ actiysak
+      kapatilir.
     #>
     param([string] $Classification, [int] $ExitCode = 0, [string] $Reason = '')
     $endedAt = Get-Date
+
+    <#
+      CHROME TEMIZLIGI - YALNIZCA KENDI ACTIGIMIZ PENCERE.
+      Kullanicinin Chrome'u asla oldurulmez; kapanmayan pencere acik birakilir.
+    #>
+    if ($script:ChromeStartedByScheduler -and @($script:ChromePids).Count -gt 0) {
+        $stop = Stop-SchedulerChrome -ProcessIds $script:ChromePids
+        Write-Log ('chrome cleanup: closed {0}; still open {1}' -f `
+            ($(if (@($stop.Closed).Count) { $stop.Closed -join ',' } else { 'none' })), `
+            ($(if (@($stop.StillOpen).Count) { $stop.StillOpen -join ',' } else { 'none' })))
+    }
     if ($Reason) { Write-Log "result: $Classification - $Reason" }
     else { Write-Log "result: $Classification" }
 
@@ -165,6 +180,31 @@ try {
 $chromeExe = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe' -ErrorAction SilentlyContinue).'(Default)'
 Check 'chrome present' ([bool]$chromeExe) $(if ($chromeExe) { $chromeExe } else { 'chrome.exe not found in App Paths' })
 
+<#
+  OTOMASYON PROFILI KANITLANIR, TAHMIN EDILMEZ. Sayfalari ceken taraf
+  uzantidir; uzantinin KURULU OLMADIGI bir profille Chrome acmak, oturumu
+  olmayan bos bir tarayici acip geceyi harcamaktir.
+#>
+$chromeProfile = Get-ChromeAutomationProfile
+Check 'chrome automation profile' ([bool]$chromeProfile) $(
+    if ($chromeProfile) { "profile '$($chromeProfile.ProfileDirectory)' ($($chromeProfile.ProvenBy)); extension $($chromeProfile.ExtensionId)" }
+    else { 'the market-refresh-autopilot extension is not installed in any Chrome profile' }
+)
+$extensionState = $null
+if ($chromeProfile) {
+    $extensionState = Get-AutopilotExtensionState -ProfilePath (Join-Path $chromeProfile.UserDataDir $chromeProfile.ProfileDirectory) -ExtensionId $chromeProfile.ExtensionId
+    if ($extensionState.Found) {
+        Write-Log ("extension state (best effort): bridgeUrl={0} autoStart={1} shouldRun={2} lastState={3}" -f `
+                $extensionState.BridgeUrl, $extensionState.AutoStart, $extensionState.ShouldRun, $extensionState.LastState)
+        if (-not $extensionState.AutoStart) {
+            Write-Log ('note: the extension has auto-start switched off, so it will not begin on its own. ' +
+                'Tick "Kopru hazir oldugunda kendiliginden basla" once in the extension popup.') 'WARN'
+        }
+    } else {
+        Write-Log ("extension state unknown: {0}" -f $extensionState.Reason) 'WARN'
+    }
+}
+
 $runsReadable = Test-Path -LiteralPath $paths.RunsDir
 Check 'run state readable' $runsReadable $paths.RunsDir
 
@@ -200,11 +240,33 @@ $runs = Get-WeeklyRuns -RunsDir $paths.RunsDir
 foreach ($r in $runs) {
     Write-Log ('run state  {0,-38} {1,-18} pending={2} inProgress={3} complete={4} failed={5}' -f $r.RunId, $r.State, $r.Pending, $r.InProgress, $r.Complete, $r.Failed)
 }
-$decision = Get-RunDecision -Runs $runs -Now $startedAt -AdoptRunId $AdoptRunId
+$bootstrap = Read-BootstrapRun -Path $paths.BootstrapFile
+if ($bootstrap) {
+    Write-Log ('bootstrap adoption: run={0} status={1}' -f $bootstrap.RunId, $bootstrap.Status)
+}
+$decision = Get-RunDecision -Runs $runs -Now $startedAt -AdoptRunId $AdoptRunId -Bootstrap $bootstrap
+
+<#
+  Devralma bitti mi? Taban kosusu COMPLETE'e ulastiysa devralma ATOMIK olarak
+  kapatilir ve ayni cagri normal karara duser; bir sonraki gece market-auto
+  dongusune doner.
+#>
+if ($decision.Action -eq 'BOOTSTRAP_COMPLETED') {
+    Write-Log ('bootstrap run {0} is COMPLETE; closing the one-time adoption' -f $decision.RunId)
+    Complete-BootstrapRun -Path $paths.BootstrapFile -RunId $decision.RunId
+    $bootstrap = Read-BootstrapRun -Path $paths.BootstrapFile
+    $decision = Get-RunDecision -Runs $runs -Now $startedAt -AdoptRunId $AdoptRunId -Bootstrap $bootstrap
+}
+if ($decision.Action -in @('BOOTSTRAP_MISSING', 'BOOTSTRAP_UNUSABLE')) {
+    Complete-Invocation -Classification 'PRECHECK_FAILED' -ExitCode 6 -Reason $decision.Reason
+}
+
 $script:RunId = $decision.RunId
 $script:Resumed = $decision.Resumed
 Write-Log ('decision: {0} {1} - {2}' -f $decision.Action, $decision.RunId, $decision.Reason)
 foreach ($foreign in @($decision.ForeignResumable)) {
+    # Devraldigimiz kosu icin "devralinmadi" uyarisi yazmak celiskili olurdu.
+    if ($foreign.RunId -eq $decision.RunId) { continue }
     Write-Log ("note: manual run '{0}' is also resumable (state {1}, {2} pending). It is NOT adopted automatically; pass -AdoptRunId {0} to continue it." -f $foreign.RunId, $foreign.State, $foreign.Pending) 'WARN'
 }
 
@@ -236,26 +298,53 @@ Write-JsonAtomic -Path $paths.LockFile -Object ([ordered]@{
 $script:LockTaken = $true
 Write-Log ('lock acquired by pid {0}' -f $PID)
 
-# ------------------------------------------------------------------ chrome
-if (-not $NoChromeLaunch) {
-    $chromeRunning = @(Get-Process chrome -ErrorAction SilentlyContinue).Count -gt 0
-    if ($chromeRunning) {
-        Write-Log 'chrome already running; the autopilot extension should reconnect on its own'
-    } elseif ($chromeExe) {
-        Write-Log 'chrome is not running; starting it so the autopilot extension can drive the run'
-        Start-Process -FilePath $chromeExe | Out-Null
-    }
-}
-
 # ------------------------------------------------------- kopruyu baslat
+# KOPRU ONCE, CHROME SONRA: uzanti baglanmaya calistiginda kopru ayakta olsun.
 $runDir = Join-Path $paths.RunsDir $decision.RunId
+<#
+  Zaman damgasi KOPRUDEN ONCE alinir: uzanti hizli baglanirsa ilk yazim bizim
+  "onceki hal" olcumumuze karismasin.
+#>
+$baselineCheckpoint = Read-WeeklyCheckpoint -RunDir $runDir
+$baselineUpdatedAt = if ($baselineCheckpoint) { $baselineCheckpoint.UpdatedAt } else { $null }
+if ($baselineUpdatedAt) {
+    Write-Log ('resuming from a checkpoint written {0}; progress is measured against that timestamp' -f $baselineUpdatedAt)
+}
 $stdoutFile = "$logFile.stdout.txt"
 $stderrFile = "$logFile.stderr.txt"
 $proc = Start-Process -FilePath $nodeCmd.Source -ArgumentList $cliArgs -WorkingDirectory $paths.Backend `
     -RedirectStandardOutput $stdoutFile -RedirectStandardError $stderrFile -PassThru -WindowStyle Hidden
 Write-Log ('bridge started: pid {0}' -f $proc.Id)
+# ------------------------------------------------------------------ chrome
+<#
+  OTOMASYON CHROME'U: acikken YENIDEN ACILMAZ, kapaliyken KANITLANMIS profille
+  acilir. Kullanicinin baska profildeki Chrome'u otomasyon sayilmaz ve ona
+  dokunulmaz.
+#>
+$script:ChromeStartedByScheduler = $false
+$script:ChromePids = @()
+if (-not $NoChromeLaunch -and $chromeProfile -and $chromeExe) {
+    $chromeState = Test-AutomationChromeRunning -Profile $chromeProfile
+    if ($chromeState.Running) {
+        Write-Log ('automation chrome already running (profile {0}, pid(s) {1}); reusing it' -f `
+                $chromeProfile.ProfileDirectory, ($chromeState.MatchingPids -join ','))
+    } else {
+        if ($chromeState.OtherPids.Count -gt 0) {
+            Write-Log ('chrome is running with other profile(s) (pid(s) {0}); those are the user''s windows and are left alone' -f ($chromeState.OtherPids -join ',')) 'WARN'
+        }
+        Write-Log ('starting automation chrome: profile {0} under {1}' -f $chromeProfile.ProfileDirectory, $chromeProfile.UserDataDir)
+        $script:ChromePids = @(Start-AutomationChrome -Profile $chromeProfile -ChromeExe $chromeExe)
+        $script:ChromeStartedByScheduler = ($script:ChromePids.Count -gt 0)
+        Write-Log ('chrome started by scheduler: {0} (pid(s) {1})' -f $script:ChromeStartedByScheduler, ($script:ChromePids -join ','))
+    }
+} elseif ($NoChromeLaunch) {
+    Write-Log 'chrome launch suppressed by -NoChromeLaunch'
+}
+
 Write-JsonAtomic -Path $paths.ActiveRunFile -Object ([ordered]@{
         runId = $decision.RunId; bridgePid = $proc.Id; schedulerPid = $PID
+        chromeStartedByScheduler = $script:ChromeStartedByScheduler
+        chromePids = $script:ChromePids
         startedAt = (Get-Date).ToString('o'); logPath = $logFile
     })
 
@@ -275,19 +364,27 @@ while ($true) {
         break
     }
     $state = Read-WeeklyCheckpoint -RunDir $runDir
-    if ($state) {
+    <#
+      YALNIZCA BU CAGRIDA YAZILMIS DURUM DIKKATE ALINIR. Devam ettirilen bir
+      kosunun checkpoint'i zaten eski bir durum tasir (`RUNNING`, `INCOMPLETE`);
+      onu bu kosunun sonucu saymak, uzanti hic baglanmadigi halde "ilerliyor"
+      ya da "bitti" demek olurdu.
+    #>
+    if (Test-CheckpointProgressed -Baseline $baselineUpdatedAt -Current $state) {
+        if (-not $sawProgress) {
+            Write-Log 'the autopilot extension is driving the bridge: run state is advancing'
+            $sawProgress = $true
+        }
         if ($state.State -ne $lastState) {
             Write-Log ('state: {0} (complete {1}/{2}, pending {3}, failed {4})' -f $state.State, $state.Complete, $state.Total, $state.Pending, $state.Failed)
             $lastState = $state.State
             $lastProgressAt = Get-Date
-            $sawProgress = $true
         }
         if ($state.State -eq 'ACCESS_RESTRICTED') { $outcome = 'ACCESS_WALL'; break }
         if ($state.State -in @('COMPLETE', 'INCOMPLETE', 'SMOKE_LIMIT_REACHED')) { $outcome = $state.State; break }
-        if ($state.State -eq 'RUNNING') { $sawProgress = $true }
     }
     if (-not $sawProgress -and (Get-Date) -gt $extensionDeadline) {
-        $outcome = 'NO_EXTENSION'; break
+        $outcome = 'CHROME_EXTENSION_NOT_CONNECTED'; break
     }
     if ((Get-Date) -gt $deadline) { $outcome = 'MAX_RUNTIME'; break }
 }
@@ -295,23 +392,20 @@ while ($true) {
 # ------------------------------------------------------- nazik durdurma
 if (-not $proc.HasExited) {
     Write-Log 'stopping the bridge (CTRL+C so it writes its summary and exit code)'
+    <#
+      Once nazik yol denenir, ama UZUN beklenmez.
+
+      Kopru cikis ozetini yalnizca CTRL+C ile yazar; CTRL+C ise ancak surecin
+      bir konsolu varsa teslim edilebilir. Cikti dosyaya yonlendirildigi icin
+      (ve zamanlanmis gorevde masaustu oturumu olmadigi icin) cogu zaman
+      konsol yoktur: olculdu, sinyal ulasmadi ve 2 dakika bosa bekledik.
+      Zorla kapatmak guvenlidir - kosu her hedefte checkpoint yazar, filigran
+      her hedefte islenir; kaybedilen tek sey ozet ciktisidir, ILERLEME DEGIL.
+    #>
     $stopped = $false
     try {
-        # SIGINT esdegeri: kopru yalnizca bu sinyalde ozet yazip temiz kapanir.
-        Add-Type -Namespace Win32 -Name Console -MemberDefinition @'
-[DllImport("kernel32.dll", SetLastError=true)] public static extern bool AttachConsole(uint dwProcessId);
-[DllImport("kernel32.dll", SetLastError=true)] public static extern bool FreeConsole();
-[DllImport("kernel32.dll", SetLastError=true)] public static extern bool GenerateConsoleCtrlEvent(uint dwCtrlEvent, uint dwProcessGroupId);
-[DllImport("kernel32.dll", SetLastError=true)] public static extern bool SetConsoleCtrlHandler(IntPtr handler, bool add);
-'@ -ErrorAction SilentlyContinue
-        [Win32.Console]::FreeConsole() | Out-Null
-        if ([Win32.Console]::AttachConsole([uint32]$proc.Id)) {
-            [Win32.Console]::SetConsoleCtrlHandler([IntPtr]::Zero, $true) | Out-Null
-            [Win32.Console]::GenerateConsoleCtrlEvent(0, 0) | Out-Null
-            $stopped = $proc.WaitForExit(120000)
-            [Win32.Console]::FreeConsole() | Out-Null
-            [Win32.Console]::SetConsoleCtrlHandler([IntPtr]::Zero, $false) | Out-Null
-        }
+        # Sinyali AYRI bir surec gonderir; boylece olay zamanlayiciyi olduremez.
+        $stopped = Stop-BridgeGracefully -ProcessId $proc.Id -TimeoutSeconds 30
     } catch {
         Write-Log ('graceful stop could not be signalled: {0}' -f $_.Exception.Message) 'WARN'
     }
@@ -339,6 +433,11 @@ foreach ($capture in @(@{ f = $stdoutFile; n = 'stdout' }, @{ f = $stderrFile; n
 $final = Read-WeeklyCheckpoint -RunDir $runDir
 if ($final) {
     Write-Log ('final state: {0} (complete {1}/{2}, pending {3}, failed {4})' -f $final.State, $final.Complete, $final.Total, $final.Pending, $final.Failed)
+    # Devralinan taban kosusu bittiyse devralma ATOMIK olarak kapanir.
+    if ($decision.Action -eq 'RESUME_BOOTSTRAP' -and $final.State -eq 'COMPLETE') {
+        Complete-BootstrapRun -Path $paths.BootstrapFile -RunId $decision.RunId
+        Write-Log ('bootstrap adoption closed: {0} reached COMPLETE; the next scheduled night returns to market-auto runs' -f $decision.RunId)
+    }
 }
 $exit = if ($null -ne $script:ExitCode) { [int]$script:ExitCode } else { 0 }
 $duration = [math]::Round(((Get-Date) - $startedAt).TotalMinutes)
@@ -348,9 +447,10 @@ switch ($outcome) {
         Complete-Invocation -Classification 'ACCESS_WALL' -ExitCode $exit `
             -Reason 'the source refused access (captcha/403/429); the run state is preserved and no retry happens tonight'
     }
-    'NO_EXTENSION' {
-        Complete-Invocation -Classification 'PRECHECK_FAILED' -ExitCode 5 `
-            -Reason "the Chrome autopilot extension did not connect within $ExtensionWaitMinutes minute(s); the bridge cannot crawl on its own"
+    'CHROME_EXTENSION_NOT_CONNECTED' {
+        Complete-Invocation -Classification 'CHROME_EXTENSION_NOT_CONNECTED' -ExitCode 5 `
+            -Reason ("the autopilot extension did not drive the bridge within $ExtensionWaitMinutes minute(s). " +
+                'Open the extension popup once, set the bridge address and tick auto-start; no retry happens tonight.')
     }
     'MAX_RUNTIME' {
         Complete-Invocation -Classification 'INTERRUPTED' -ExitCode $exit `
