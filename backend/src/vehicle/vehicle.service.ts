@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import { CacheService } from '../cache.service';
 
@@ -77,7 +77,7 @@ export class VehicleService {
 
   async getYears() {
     const years = [];
-    for (let y = 2026; y >= 2000; y--) {
+    for (let y = new Date().getFullYear(); y >= 2000; y--) {
       years.push(y);
     }
     return years;
@@ -93,8 +93,20 @@ export class VehicleService {
     fuelTypeId?: string;
     transmissionTypeId?: string;
   }) {
+    // Public endpoint that may generate catalogue rows for a year/model on
+    // first use: only accept real model years and ids, otherwise any caller
+    // could create rows for arbitrary years (or crash the query with NaN).
+    const year = Number(query.year);
+    const maxYear = new Date().getFullYear() + 1;
+    if (!Number.isInteger(year) || year < 1950 || year > maxYear) {
+      throw new BadRequestException(`year must be an integer between 1950 and ${maxYear}.`);
+    }
+    if (!query.manufacturerId || !query.modelId) {
+      throw new BadRequestException('manufacturerId and modelId are required.');
+    }
+
     const baseWhere = {
-      year: Number(query.year),
+      year,
       manufacturerId: query.manufacturerId,
       modelId: query.modelId,
     };
@@ -105,7 +117,7 @@ export class VehicleService {
     });
     if (existingSpecsCount === 0) {
       await this.generateSpecsForModel(
-        Number(query.year),
+        year,
         query.manufacturerId,
         query.modelId,
       );
