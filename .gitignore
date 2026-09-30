@@ -37,3 +37,7 @@ yarn-debug.log*
 # System Files
 .DS_Store
 Thumbs.db
+
+# Scraped listing data / generated reports (never commit)
+**/temp_html_batch_*.json
+RAPOR_*.md
