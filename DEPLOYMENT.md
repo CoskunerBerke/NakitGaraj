@@ -46,9 +46,12 @@ cd /var/www/nakitgaraj
 
 # --- BACKEND KURULUMU ---
 cd backend
-cp .env.example .env           # Ardından .env içinde JWT_SECRET ve ADMIN_PASSWORD değerlerini doldurun
+cp .env.example .env           # Ardından .env içinde JWT_SECRET, ADMIN_PASSWORD ve CORS_ORIGIN değerlerini doldurun
                                # (JWT_SECRET üretmek için: openssl rand -hex 32)
-                               # JWT_SECRET yoksa backend başlamaz; ADMIN_PASSWORD yoksa seed hata verir.
+                               # JWT_SECRET yoksa veya "change-me" gibi örnek değerse backend production'da başlamaz;
+                               # ADMIN_PASSWORD yoksa seed hata verir.
+                               # CORS_ORIGIN=https://tasit.nakitgaraj.com (kendi alan adınız)
+                               # NODE_ENV=production değerini PM2 (ecosystem.config.js) verir.
 npm install --production=false # Geliştirici paketlerini de kur ki derleyebilsin
 npx prisma generate            # Prisma istemcisini oluştur
 npx prisma db push             # SQLite dev.db veri tabanını oluştur ve şemayı bas
@@ -59,7 +62,10 @@ cd ..
 # --- FRONTEND KURULUMU ---
 cd frontend
 npm install
-npm run build                  # Next.js uygulamasını production için derle
+NEXT_PUBLIC_API_URL=/api npm run build   # Next.js uygulamasını production için derle
+                               # NEXT_PUBLIC_API_URL=/api: tarayıcı API'ye Nginx üzerinden (aynı alan adı, HTTPS)
+                               # ulaşır. Verilmezse http://<alan-adı>:3001/api kullanılır; HTTPS sitede tarayıcı
+                               # bu isteği "mixed content" olarak engeller. Değer derleme sırasında gömülür.
 cd ..
 ```
 
@@ -114,6 +120,9 @@ server {
         proxy_set_header Upgrade $http_upgrade;
         proxy_set_header Connection 'upgrade';
         proxy_set_header Host $host;
+        # Gerçek istemci IP'si (giriş denemesi sınırı ve işlem kayıtları için)
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
         proxy_cache_bypass $http_upgrade;
     }
 }
@@ -130,5 +139,14 @@ sudo systemctl restart nginx
 sudo apt install -y certbot python3-certbot-nginx
 sudo certbot --nginx -d tasit.nakitgaraj.com # Domaininizi yazın
 ```
+
+---
+
+## 🔐 6. Güvenlik Kontrol Listesi
+
+*   `backend/.env` dosyasını asla Git'e eklemeyin; `JWT_SECRET` için rastgele bir değer kullanın (`openssl rand -hex 32`).
+*   Daha önce `Admin123!` / `ChangeMe123!` gibi varsayılan şifrelerle kurulum yaptıysanız admin şifresini panelden (Çalışanlar & Yetki) veya `ADMIN_PASSWORD` ile `npx prisma db seed` çalıştırarak değiştirin.
+*   Eski sürümlerde `ecosystem.config.js` içinde sabit bir `JWT_SECRET` vardı; o değeri kullandıysanız yenisiyle değiştirip `pm2 restart all` yapın (tüm oturumlar kapanır).
+*   Port 3001'i dış dünyaya açmanız gerekmez; API'ye Nginx `/api` üzerinden erişilir.
 
 Artık siteniz HTTPS protokollü, veri tabanı arkada güvenle çalışan ve PM2 ile 7/24 kapanmadan çalışan profesyonel bir canlı sunucu ortamına taşınmış durumdadır!
