@@ -2,10 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { Sparkles, Calendar, FileText, CheckCircle2, AlertCircle, Eye, X, Phone, User, Car, DollarSign, ShieldAlert, ChevronRight, ExternalLink } from 'lucide-react';
-
-const API_BASE = typeof window !== 'undefined'
-  ? `http://${window.location.hostname}:3001/api`
-  : 'http://127.0.0.1:3001/api';
+import { API_BASE } from '@/config/api';
 
 const getSahibindenSearchUrl = (item: any) => {
   const spec = item?.vehicleSpecification || {};

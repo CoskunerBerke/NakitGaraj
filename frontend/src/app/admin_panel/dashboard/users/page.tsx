@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { Users, UserPlus, Trash2, UserCheck, CheckCircle, AlertCircle, RefreshCw } from 'lucide-react';
+import { API_BASE } from '@/config/api';
 
 interface UserItem {
   id: string;
@@ -14,10 +15,6 @@ interface UserItem {
     name: string;
   };
 }
-
-const API_BASE = typeof window !== 'undefined'
-  ? `http://${window.location.hostname}:3001/api`
-  : 'http://127.0.0.1:3001/api';
 
 export default function AdminUsersPage() {
   const [users, setUsers] = useState<UserItem[]>([]);

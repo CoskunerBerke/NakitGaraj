@@ -3,10 +3,7 @@
 import React, { useEffect, useState } from 'react';
 import { UserCheck, MessageSquare, MapPin, PhoneCall, Mail, Clock, ShieldAlert, AlertCircle, ExternalLink } from 'lucide-react';
 import RealisticCarDamageSchematic from '../../../../components/RealisticCarDamageSchematic';
-
-const API_BASE = typeof window !== 'undefined'
-  ? `http://${window.location.hostname}:3001/api`
-  : 'http://127.0.0.1:3001/api';
+import { API_BASE } from '@/config/api';
 
 const getSahibindenSearchUrl = (cons: any) => {
   const spec = cons?.vehicleSpecification || cons?.vehicleEvaluation?.vehicleSpecification || {};
@@ -222,7 +219,8 @@ export default function ConsignmentsCRM() {
     } finally {
       setIsUpdating(false);
     }
-  };  if (isLoading) {
+  };
+  if (isLoading) {
     return <div className="text-zinc-500 dark:text-zinc-400 py-10 text-center">Konsinye başvuruları yükleniyor...</div>;
   }
 

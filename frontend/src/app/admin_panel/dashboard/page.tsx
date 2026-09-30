@@ -13,6 +13,7 @@ import {
   Database,
 } from 'lucide-react';
 import Link from 'next/link';
+import { API_BASE } from '@/config/api';
 
 const STATUS_MAP: Record<string, { label: string; style: string }> = {
   PENDING: {
@@ -52,10 +53,6 @@ const STATUS_MAP: Record<string, { label: string; style: string }> = {
     style: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-500 border border-emerald-500/20',
   },
 };
-
-const API_BASE = typeof window !== 'undefined'
-  ? `http://${window.location.hostname}:3001/api`
-  : 'http://127.0.0.1:3001/api';
 
 export default function DashboardOverview() {
   const [statsData, setStatsData] = useState<any>(null);

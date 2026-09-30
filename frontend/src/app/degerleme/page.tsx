@@ -34,6 +34,7 @@ import RealisticCarDamageSchematic from '../../components/RealisticCarDamageSche
 import Link from 'next/link';
 import { useLanguage } from '../../context/LanguageContext';
 import ShinyText from '../../components/reactbits/ShinyText';
+import { API_BASE } from '@/config/api';
 
 const BODY_PARTS = [
   'Motor Kaputu',
@@ -76,10 +77,6 @@ const step2Schema = z.object({
     message: "Devam etmek için KVKK Aydınlatma Metni'ni onaylamanız gerekmektedir.",
   }),
 });
-
-const API_BASE = typeof window !== 'undefined'
-  ? `http://${window.location.hostname}:3001/api`
-  : 'http://127.0.0.1:3001/api';
 
 const VEHICLE_FEATURES = {
   security: [
