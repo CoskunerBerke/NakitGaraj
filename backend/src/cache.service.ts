@@ -27,7 +27,10 @@ export class CacheService implements OnModuleInit {
         this.redisClient = null;
       });
       await this.redisClient.connect();
-      this.logger.log('Connected to Redis Cache successfully.');
+      // The error handler above may already have dropped the client.
+      if (this.redisClient?.isOpen) {
+        this.logger.log('Connected to Redis Cache successfully.');
+      }
     } catch (error) {
       this.logger.warn('Could not establish Redis connection. Using in-memory fallback cache.');
       this.redisClient = null;
