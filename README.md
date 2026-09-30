@@ -31,7 +31,7 @@ NakitGaraj ("cash garage") is built for a used-car dealer model with two offers:
 **Customer site (Next.js)**
 - Landing page with animated hero, service cards and testimonials section; Turkish / English language switch and light / dark theme.
 - **Valuation wizard** (`/degerleme`) — make → model → year → variant → package, mileage, equipment list and an interactive car damage schematic (original / painted / replaced parts).
-- **Consignment application** (`/konsinye`) and vehicle request forms, validated with React Hook Form + Zod.
+- **Consignment application** (`/konsinye`) with React Hook Form + Zod validation, and a request form for vehicles that are not yet in the catalogue.
 
 **Admin panel** (`/admin_panel/dashboard`)
 - Dashboard, valuations, consignment applications (with status updates), vehicle requests.
@@ -127,7 +127,7 @@ The repository includes a PM2 process file (`ecosystem.config.js`) that runs the
 
 - **Müşteri sitesi:** animasyonlu ana sayfa, Türkçe / İngilizce dil seçimi, açık / koyu tema.
 - **Değerleme sihirbazı** (`/degerleme`): marka → model → yıl → versiyon → paket, kilometre, donanım listesi ve etkileşimli hasar şeması (orijinal / boyalı / değişen parçalar).
-- **Konsinye başvurusu** (`/konsinye`) ve araç talep formları.
+- **Konsinye başvurusu** (`/konsinye`) ve katalogda henüz olmayan araçlar için talep formu.
 - **Yönetim paneli:** değerlemeler, konsinye başvuruları, araç talepleri, kullanıcı / rol yönetimi, işlem kayıtları, veri içe aktarma, Telegram ve piyasa senkronizasyonu ayarları.
 - **Fiyatlama motoru:** emsal ilan eşleştirme, isim normalleştirme, sağlam istatistik, kilometre düzeltmesi, güven puanı; şüpheli ilanlar karantinaya alınır.
 - **Arka uç:** NestJS REST API, JWT kimlik doğrulama, rol/izin korumaları, istek sınırlama, zamanlanmış piyasa senkronizasyonu, görsel kartlı Telegram bildirimleri.
