@@ -3,6 +3,18 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { generateTelegramCardBuffer, TelegramCardData } from './telegram.card-generator';
 
+/**
+ * Messages are sent with parse_mode HTML, so customer-typed text must be
+ * escaped: a stray "<" or "&" makes Telegram reject the whole notification
+ * and would let a customer inject their own markup or links.
+ */
+export function escapeTelegramHtml(value: unknown): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
 export interface TelegramSettings {
   botToken: string;
   chatIds: string; // Comma separated IDs or group IDs (e.g. "123456789, 987654321")
@@ -232,17 +244,17 @@ export class TelegramService {
     const caption = `
 <b>🚗 YENİ NAKİTGARAJ ARAÇ DEĞERLEMESİ!</b>
 
-<b>👤 Müşteri:</b> ${evalData.firstName || 'İsimsiz'} ${evalData.lastName || ''}
-<b>📞 Telefon:</b> ${evalData.phone || 'Belirtilmedi'}
-<b>🚘 Araç:</b> ${evalData.vehicleName}
+<b>👤 Müşteri:</b> ${escapeTelegramHtml(evalData.firstName || 'İsimsiz')} ${escapeTelegramHtml(evalData.lastName)}
+<b>📞 Telefon:</b> ${escapeTelegramHtml(evalData.phone || 'Belirtilmedi')}
+<b>🚘 Araç:</b> ${escapeTelegramHtml(evalData.vehicleName)}
 <b>🛣️ Kilometre:</b> ${evalData.mileage.toLocaleString('tr-TR')} km
-<b>📋 Plaka:</b> ${evalData.licensePlate || '34ABC123'} | <b>Renk:</b> ${evalData.color}
+<b>📋 Plaka:</b> ${escapeTelegramHtml(evalData.licensePlate || '34ABC123')} | <b>Renk:</b> ${escapeTelegramHtml(evalData.color)}
 
 ${desiredText}<b>📉 Piyasa Satış Değeri:</b> ${evalData.fairMarketValue.toLocaleString('tr-TR')} ₺
 <b>💵 Anında Nakit Alım Teklifimiz:</b> ${evalData.finalOfferedPrice.toLocaleString('tr-TR')} ₺ <i>(Net Kâr: ${profit.toLocaleString('tr-TR')} ₺)</i>
 <b>🏪 Dükkan Konsinye Fiyatımız:</b> ${evalData.finalConsignmentPrice.toLocaleString('tr-TR')} ₺
 
-<b>⏱️ Satış Aciliyeti:</b> ${evalData.sellingTimeline || 'Hemen'}
+<b>⏱️ Satış Aciliyeti:</b> ${escapeTelegramHtml(evalData.sellingTimeline || 'Hemen')}
 <b>📅 Tarih:</b> ${new Date().toLocaleString('tr-TR')}
 `.trim();
 
@@ -332,7 +344,7 @@ ${desiredText}<b>📉 Piyasa Satış Değeri:</b> ${evalData.fairMarketValue.toL
 
         Object.entries(paintScheme).forEach(([part, status]) => {
           if (status !== 'ORIJINAL') {
-            nonOriginal.push(` • ${part}: <b>${status}</b>`);
+            nonOriginal.push(` • ${escapeTelegramHtml(part)}: <b>${escapeTelegramHtml(status)}</b>`);
           } else {
             originalCount++;
           }
@@ -355,18 +367,18 @@ ${desiredText}<b>📉 Piyasa Satış Değeri:</b> ${evalData.fairMarketValue.toL
         if (vehicleStatusObj.heavyDamage) features.push('⚠️ Ağır Hasarlı Kaydı Var');
         if (vehicleStatusObj.importExport) features.push(`Menşei: ${vehicleStatusObj.importExport}`);
 
-        const equipText = features.length > 0 ? features.map((f) => ` • ${f}`).join('\n') : ' • Standart Donanım';
+        const equipText = features.length > 0 ? features.map((f) => ` • ${escapeTelegramHtml(f)}`).join('\n') : ' • Standart Donanım';
 
         return {
           paintText,
           equipText,
-          userNoteText: userNote || 'Yok',
+          userNoteText: escapeTelegramHtml(userNote || 'Yok'),
           paintSchemeObj: paintScheme,
         };
       }
     } catch (e) {}
 
-    return { paintText: 'Belirtilmedi', equipText: 'Belirtilmedi', userNoteText: rawNotes };
+    return { paintText: 'Belirtilmedi', equipText: 'Belirtilmedi', userNoteText: escapeTelegramHtml(rawNotes) };
   }
 
   async sendConsignmentNotification(consignmentData: {
@@ -390,10 +402,10 @@ ${desiredText}<b>📉 Piyasa Satış Değeri:</b> ${evalData.fairMarketValue.toL
     const caption = `
 <b>📢 YENİ KONSİNYE (DÜKKANA BIRAKMA) BAŞVURUSU!</b>
 
-<b>👤 Müşteri:</b> ${consignmentData.firstName} ${consignmentData.lastName}
-<b>📞 Telefon:</b> ${consignmentData.phone}
-<b>📍 Konum:</b> ${consignmentData.province} / ${consignmentData.district}
-<b>🚘 Araç:</b> ${consignmentData.vehicleName}
+<b>👤 Müşteri:</b> ${escapeTelegramHtml(consignmentData.firstName)} ${escapeTelegramHtml(consignmentData.lastName)}
+<b>📞 Telefon:</b> ${escapeTelegramHtml(consignmentData.phone)}
+<b>📍 Konum:</b> ${escapeTelegramHtml(consignmentData.province)} / ${escapeTelegramHtml(consignmentData.district)}
+<b>🚘 Araç:</b> ${escapeTelegramHtml(consignmentData.vehicleName)}
 <b>Est. Kilometre:</b> ${consignmentData.mileage ? consignmentData.mileage.toLocaleString('tr-TR') + ' km' : 'Belirtilmedi'}
 ${priceText}
 <b>🎨 Ekspertiz / Kaporta Durumu:</b>
