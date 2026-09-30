@@ -1,5 +1,8 @@
-import { Controller, Get, Post, Body, Query } from '@nestjs/common';
+import { Controller, Get, Post, Body, Query, UseGuards } from '@nestjs/common';
 import { VehicleService } from './vehicle.service';
+import { JwtAuthGuard } from '../auth/jwt.guard';
+import { RolesGuard } from '../auth/roles.guard';
+import { RequirePermissions } from '../auth/permissions.decorator';
 import { MarketSyncCronService, MarketSyncSettings } from './market-sync-cron.service';
 import { CreateVehicleRequestDto } from './dto/create-vehicle-request.dto';
 
@@ -59,6 +62,8 @@ export class VehicleController {
   }
 
   @Post('admin/adjust-market-prices')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @RequirePermissions('manage_vehicles')
   async adjustMarketPrices(
     @Body('percentage') percentage: number,
     @Body('brandName') brandName?: string,
@@ -67,11 +72,15 @@ export class VehicleController {
   }
 
   @Get('admin/market-sync-settings')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @RequirePermissions('manage_vehicles')
   async getMarketSyncSettings() {
     return this.marketSyncCronService.getSettings();
   }
 
   @Post('admin/market-sync-settings')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @RequirePermissions('manage_vehicles')
   async updateMarketSyncSettings(@Body() body: Partial<MarketSyncSettings>) {
     const current = this.marketSyncCronService.getSettings();
     const updated = { ...current, ...body };
@@ -80,6 +89,8 @@ export class VehicleController {
   }
 
   @Post('admin/trigger-market-sync')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @RequirePermissions('manage_vehicles')
   async triggerMarketSync() {
     await this.marketSyncCronService.handleMonthlyAutoMarketSync();
     return { success: true, message: 'Automated market sync executed successfully.' };

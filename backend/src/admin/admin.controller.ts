@@ -19,7 +19,7 @@ import { ImportService } from '../import/import.service';
 import { ScraperCronService } from '../scraper/scraper-cron.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { RolesGuard } from '../auth/roles.guard';
-import { RequirePermissions } from '../auth/permissions.decorator';
+import { RequirePermissions, RequireRoles } from '../auth/permissions.decorator';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { TelegramService } from '../telegram/telegram.service';
 
@@ -167,11 +167,13 @@ export class AdminController {
   }
 
   @Get('users')
+  @RequireRoles('ADMIN')
   async getUsers() {
     return this.adminService.getUsers();
   }
 
   @Post('users')
+  @RequireRoles('ADMIN')
   async createUser(
     @Body('email') email: string,
     @Body('password') password: string,
@@ -192,11 +194,13 @@ export class AdminController {
   }
 
   @Delete('users/:id')
+  @RequireRoles('ADMIN')
   async deleteUser(@Param('id') id: string) {
     return this.adminService.deleteUser(id);
   }
 
   @Patch('users/:id/password')
+  @RequireRoles('ADMIN')
   async updateUserPassword(
     @Param('id') id: string,
     @Body('password') newPassword: string,
@@ -208,11 +212,13 @@ export class AdminController {
   }
 
   @Get('telegram/settings')
+  @RequireRoles('ADMIN')
   async getTelegramSettings() {
     return this.telegramService.getSettings();
   }
 
   @Post('telegram/settings')
+  @RequireRoles('ADMIN')
   async saveTelegramSettings(
     @Body('botToken') botToken: string,
     @Body('chatIds') chatIds: string,
@@ -223,6 +229,7 @@ export class AdminController {
   }
 
   @Post('telegram/test')
+  @RequireRoles('ADMIN')
   async testTelegram(
     @Body('botToken') botToken?: string,
     @Body('chatIds') chatIds?: string,
@@ -240,11 +247,13 @@ Artık gelen tüm yeni <b>Araç Değerlemeleri</b> ve <b>Konsinye Başvuruları<
   }
 
   @Get('market-sync/settings')
+  @RequirePermissions('manage_vehicles')
   async getMarketSyncSettings() {
     return this.marketSyncCronService.getSettings();
   }
 
   @Post('market-sync/settings')
+  @RequirePermissions('manage_vehicles')
   async saveMarketSyncSettings(@Body() body: any) {
     const current = this.marketSyncCronService.getSettings();
     const updated = {

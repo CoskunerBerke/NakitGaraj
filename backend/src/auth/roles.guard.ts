@@ -1,7 +1,7 @@
 import { CanActivate, ExecutionContext, Injectable, ForbiddenException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { PrismaService } from '../prisma.service';
-import { PERMISSIONS_KEY } from './permissions.decorator';
+import { PERMISSIONS_KEY, ROLES_KEY } from './permissions.decorator';
 
 @Injectable()
 export class RolesGuard implements CanActivate {
@@ -16,7 +16,15 @@ export class RolesGuard implements CanActivate {
       context.getClass(),
     ]);
 
-    if (!requiredPermissions || requiredPermissions.length === 0) {
+    const requiredRoles = this.reflector.getAllAndOverride<string[]>(ROLES_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+
+    const needsPermissions = !!requiredPermissions && requiredPermissions.length > 0;
+    const needsRole = !!requiredRoles && requiredRoles.length > 0;
+
+    if (!needsPermissions && !needsRole) {
       return true;
     }
 
@@ -37,12 +45,18 @@ export class RolesGuard implements CanActivate {
       throw new ForbiddenException('Kullanıcı rolü tanımlı değil.');
     }
 
+    // Role name and permissions come from the DB for the token's roleId, so
+    // permission changes on a role apply immediately.
+    if (needsRole && !requiredRoles.includes(roleWithPermissions.name)) {
+      throw new ForbiddenException('Bu işlem için yetkiniz bulunmamaktadır.');
+    }
+
     const userPermissions = roleWithPermissions.permissions.map((p) => p.name);
     
     // Validate if user role matches required permissions
-    const hasPermission = requiredPermissions.every((permission) =>
-      userPermissions.includes(permission),
-    );
+    const hasPermission =
+      !needsPermissions ||
+      requiredPermissions.every((permission) => userPermissions.includes(permission));
 
     if (!hasPermission) {
       throw new ForbiddenException('Bu işlem için yetkiniz bulunmamaktadır.');
