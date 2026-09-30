@@ -103,6 +103,8 @@ npm install
 npm run dev
 ```
 
+Set `JWT_SECRET` and `ADMIN_PASSWORD` in `backend/.env` before seeding and starting. Optional PostgreSQL/Redis containers: `cp .env.example .env` in the repository root, set `POSTGRES_PASSWORD`, then `docker compose up -d` (ports are bound to 127.0.0.1 only; an existing Postgres volume keeps the password it was created with).
+
 On Windows, `run_project.bat` prepares the database and starts both apps. Tests: `cd backend && npm test`.
 
 ### Environment variables (names only)
@@ -148,6 +150,8 @@ npm run start:dev             # http://localhost:3001/api
 cd ../frontend
 npm install && npm run dev    # http://localhost:3000
 ```
+
+Seed ve başlatmadan önce `backend/.env` içinde `JWT_SECRET` ve `ADMIN_PASSWORD` değerlerini girin. İsteğe bağlı PostgreSQL/Redis konteynerleri için depo kökünde `cp .env.example .env` yapıp `POSTGRES_PASSWORD` belirleyin, ardından `docker compose up -d` (portlar yalnızca 127.0.0.1'e açılır).
 
 Windows'ta `run_project.bat` veritabanını hazırlayıp iki uygulamayı birlikte başlatır. Sunucuya kurulum (PM2 + Nginx) için [DEPLOYMENT.md](DEPLOYMENT.md) dosyasına bakın. Gizli anahtarları her zaman ortam değişkeniyle verin: `ecosystem.config.js` gizli anahtar içermez; backend `JWT_SECRET` tanımlı değilse başlamaz (sunucuda `backend/.env` dosyasına yazın veya `pm2 start` öncesi ortamda tanımlayın). `npx prisma db seed` için `ADMIN_PASSWORD` zorunludur.
 

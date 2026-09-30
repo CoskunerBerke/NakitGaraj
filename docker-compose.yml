@@ -5,12 +5,13 @@ services:
     image: postgres:15-alpine
     container_name: nakitgaraj_postgres
     restart: always
+    # Values come from the root .env file (copy .env.example to .env).
     environment:
-      POSTGRES_USER: nakitgaraj_user
-      POSTGRES_PASSWORD: nakitgaraj_password
-      POSTGRES_DB: nakitgaraj_db
+      POSTGRES_USER: ${POSTGRES_USER:-nakitgaraj_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env (see .env.example)}
+      POSTGRES_DB: ${POSTGRES_DB:-nakitgaraj_db}
     ports:
-      - '5432:5432'
+      - '127.0.0.1:5432:5432'
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
@@ -19,7 +20,7 @@ services:
     container_name: nakitgaraj_redis
     restart: always
     ports:
-      - '6379:6379'
+      - '127.0.0.1:6379:6379'
     volumes:
       - redis_data:/data
 
