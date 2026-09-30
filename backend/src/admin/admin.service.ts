@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { ConflictException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 
 @Injectable()
@@ -167,7 +167,7 @@ export class AdminService {
     });
 
     if (existing) {
-      throw new Error('Bu e-posta adresi ile zaten kayıtlı bir kullanıcı var.');
+      throw new ConflictException('Bu e-posta adresi ile zaten kayıtlı bir kullanıcı var.');
     }
 
     const targetRoleName = dto.roleName || 'STAFF';

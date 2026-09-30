@@ -876,7 +876,12 @@ export class VehicleService {
   }
 
   async adjustMarketPrices(percentage: number, brandName?: string) {
-    const multiplier = 1 + (percentage / 100);
+    // A missing or non-numeric percentage would write NaN prices.
+    const pct = Number(percentage);
+    if (percentage === null || percentage === undefined || !Number.isFinite(pct) || pct <= -100) {
+      throw new BadRequestException('percentage must be a number greater than -100.');
+    }
+    const multiplier = 1 + (pct / 100);
     const whereCondition = brandName
       ? { manufacturer: { name: { equals: brandName } } }
       : {};
@@ -895,6 +900,6 @@ export class VehicleService {
         count++;
       }
     }
-    return { success: true, count, percentage, brand: brandName || 'ALL' };
+    return { success: true, count, percentage: pct, brand: brandName || 'ALL' };
   }
 }

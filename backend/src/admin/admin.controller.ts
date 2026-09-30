@@ -100,10 +100,17 @@ export class AdminController {
 
     let result: any;
     if (format === 'json') {
-      const data =
-        typeof req.body.data === 'string'
-          ? JSON.parse(req.body.data)
-          : req.body.data;
+      // The import page sends either pasted JSON text (`data`) or a .json file.
+      const raw = file ? file.buffer.toString('utf8') : req.body.data;
+      let data: unknown;
+      try {
+        data = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      } catch {
+        throw new BadRequestException('Geçersiz JSON verisi.');
+      }
+      if (!Array.isArray(data)) {
+        throw new BadRequestException('JSON verisi bir dizi (array) olmalıdır.');
+      }
       result = await this.importService.importJson(data);
     } else if (file.originalname.endsWith('.csv')) {
       result = await this.importService.importCsv(file.buffer);
