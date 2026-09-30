@@ -2,6 +2,7 @@ import { PrismaClient } from '@prisma/client';
 import * as fs from 'fs';
 import * as path from 'path';
 import { JSDOM } from 'jsdom';
+import { getListingArchiveDir } from './listing-archive-dir';
 
 interface ExtractedListing {
   make: string;
@@ -241,7 +242,7 @@ function getAllHtmlFilesRecursively(dirPath: string): string[] {
 }
 
 async function main() {
-  const targetArg = process.argv[2] || `C:\\Users\\berke\\OneDrive\\Masaüstü\\sahibindne ilan`;
+  const targetArg = process.argv[2] || getListingArchiveDir();
   const absolutePath = path.isAbsolute(targetArg) ? targetArg : path.join(process.cwd(), targetArg);
 
   let htmlFiles: string[] = [];

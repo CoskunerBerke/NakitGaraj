@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { JSDOM } from 'jsdom';
 import { PrismaClient } from '@prisma/client';
+import { getListingArchiveDir } from './listing-archive-dir';
 
 const prisma = new PrismaClient();
 
@@ -93,7 +94,7 @@ async function organizeFolders(rootDir: string) {
   console.log(`\n✓ Dosya Organizasyonu Tamamlandı: ${movedCount} dosya doğru klasörüne taşındı, ${deletedDuplicateCount} mükerrer dosya temizlendi.\n`);
 }
 
-organizeFolders('C:\\Users\\berke\\OneDrive\\Masaüstü\\sahibindne ilan')
+organizeFolders(getListingArchiveDir())
   .catch(console.error)
   .finally(async () => {
     await prisma.$disconnect();

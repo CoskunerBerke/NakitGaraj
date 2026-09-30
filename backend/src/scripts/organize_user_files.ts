@@ -1,7 +1,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { getListingArchiveDir } from './listing-archive-dir';
 
-const targetDir = `C:\\Users\\berke\\OneDrive\\Masaüstü\\sahibindne ilan`;
+const targetDir = getListingArchiveDir();
 const alfaDir = path.join(targetDir, 'Alfa Romeo');
 
 if (!fs.existsSync(alfaDir)) {

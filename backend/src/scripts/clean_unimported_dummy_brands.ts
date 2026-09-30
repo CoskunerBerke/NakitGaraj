@@ -1,10 +1,11 @@
 import { PrismaClient } from '@prisma/client';
 import * as fs from 'fs';
 import * as path from 'path';
+import { getListingArchiveDir } from './listing-archive-dir';
 
 const prisma = new PrismaClient();
 
-const DESKTOP_DIR = 'C:\\Users\\berke\\OneDrive\\Masaüstü\\sahibindne ilan';
+const DESKTOP_DIR = getListingArchiveDir();
 
 async function main() {
   console.log(`\n====================================================================`);

@@ -4,9 +4,10 @@ import * as path from 'path';
 import * as cheerio from 'cheerio';
 import { CanonicalNormalizer } from '../evaluation/canonical-normalizer';
 import { RobustPricingCalculator } from '../evaluation/robust-pricing-calculator';
+import { getListingArchiveDir } from './listing-archive-dir';
 
 const prisma = new PrismaClient();
-const DESKTOP_DIR = 'C:\\Users\\berke\\OneDrive\\Masaüstü\\sahibindne ilan';
+const DESKTOP_DIR = getListingArchiveDir();
 
 function scanHtmlFilesRecursively(dir: string, fileList: string[] = []): string[] {
   if (!fs.existsSync(dir)) return fileList;

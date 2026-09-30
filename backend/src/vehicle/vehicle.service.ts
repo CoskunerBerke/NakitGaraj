@@ -26,12 +26,15 @@ export class VehicleService {
   }
 
   async getBrands() {
-    const DESKTOP_DIR = 'C:\\Users\\berke\\OneDrive\\Masaüstü\\sahibindne ilan';
+    // Optional: when LISTING_ARCHIVE_DIR points at the local folder of saved
+    // listing pages (one sub-folder per brand), only brands with a folder are
+    // offered. Unset (e.g. on a server) lists every brand in the database.
+    const DESKTOP_DIR = process.env.LISTING_ARCHIVE_DIR || '';
     let validNames: string[] = [];
     try {
       const fs = require('fs');
       const path = require('path');
-      if (fs.existsSync(DESKTOP_DIR)) {
+      if (DESKTOP_DIR && fs.existsSync(DESKTOP_DIR)) {
         validNames = fs.readdirSync(DESKTOP_DIR).filter((d: string) => {
           const p = path.join(DESKTOP_DIR, d);
           return fs.statSync(p).isDirectory();

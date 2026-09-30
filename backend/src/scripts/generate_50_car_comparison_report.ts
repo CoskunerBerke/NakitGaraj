@@ -451,19 +451,17 @@ ${reportRows.join('\n')}
 4. **Düşük Fiyatlı Araç Politikası (<400.000 TL):** Sabit minimum rezerv kuralları nedeniyle teklif oranı %85'in altına düşen araçlar otomatik olarak \`MANUAL_EVALUATION_REQUIRED\` durumuna alınmış ve konsinye satışı önceliklendirilmiştir.
 `;
 
-    const artifactPath = 'C:\\Users\\berke\\.gemini\\antigravity\\brain\\c78e1bb4-396a-426d-a6a5-7f1451ce5b59/valuation_comparison_50_cars.md';
-    const projectPath = 'C:\\Users\\berke\\OneDrive\\Masaüstü\\Büyük proje\\RAPOR_50_ARAC_FIYATLANDIRMA.md';
+    // Reports are written to the working directory (RAPOR_*.md is git-ignored).
+    const projectPath = path.join(process.cwd(), 'RAPOR_50_ARAC_FIYATLANDIRMA.md');
 
-    fs.writeFileSync(artifactPath, reportMarkdown, 'utf8');
     fs.writeFileSync(projectPath, reportMarkdown, 'utf8');
 
     // Remove any leftover RAPOR_BASARISIZ.md
-    const failPath = 'C:\\Users\\berke\\OneDrive\\Masaüstü\\Büyük proje\\RAPOR_BASARISIZ.md';
+    const failPath = path.join(process.cwd(), 'RAPOR_BASARISIZ.md');
     if (fs.existsSync(failPath)) fs.unlinkSync(failPath);
 
     console.log(`✓ Rapor Başarıyla Güncellendi ve Kaydedildi:`);
-    console.log(`  - Artifact: ${artifactPath}`);
-    console.log(`  - Proje Kök Dizin: ${projectPath}\n`);
+    console.log(`  - ${projectPath}\n`);
   } else {
     const failMarkdown = `# ❌ Rapor Üretimi Başarısız Oldu
 
@@ -475,7 +473,7 @@ ${failureReasons.map(reason => `- ${reason}`).join('\n')}
 **Tekrar Çalıştırmadan Önce Lütfen Hataları Giderin.**
 `;
 
-    const projectPath = 'C:\\Users\\berke\\OneDrive\\Masaüstü\\Büyük proje\\RAPOR_BASARISIZ.md';
+    const projectPath = path.join(process.cwd(), 'RAPOR_BASARISIZ.md');
     fs.writeFileSync(projectPath, failMarkdown, 'utf8');
 
     console.error(`\n❌ RAPOR ÜRETİMİ BAŞARISIZ OLDU! Ayrıntılar için RAPOR_BASARISIZ.md dosyasını inceleyin.\n`);
