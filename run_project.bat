@@ -35,8 +35,8 @@ echo Frontend Uygulamasi: http://localhost:3000
 echo Yonetim Paneli: http://localhost:3000/admin
 echo.
 echo Giris Bilgileri:
-echo E-posta: admin@nakitgaraj.com
-echo Sifre:   Admin123!
+echo E-posta: backend\.env icindeki ADMIN_EMAIL (varsayilan: admin@nakitgaraj.com)
+echo Sifre:   backend\.env icindeki ADMIN_PASSWORD
 echo ==========================================
 echo.
 pause

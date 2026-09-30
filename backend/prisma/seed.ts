@@ -4,6 +4,15 @@ import * as bcrypt from 'bcrypt';
 const prisma = new PrismaClient();
 
 async function main() {
+  // Fail before writing anything: there is no default admin password.
+  const seedPassword = process.env.ADMIN_PASSWORD;
+  if (!seedPassword || seedPassword.trim() === '') {
+    throw new Error(
+      'ADMIN_PASSWORD is not set. Set ADMIN_PASSWORD (and optionally ADMIN_EMAIL) in backend/.env ' +
+        'or the environment before running the seed; there is no default admin password.',
+    );
+  }
+
   console.log('Seeding database...');
 
   // 1. Permissions
@@ -61,7 +70,6 @@ async function main() {
 
   // 3. Admin User
   const seedEmail = process.env.ADMIN_EMAIL || 'admin@nakitgaraj.com';
-  const seedPassword = process.env.ADMIN_PASSWORD || 'ChangeMe123!';
   const adminPasswordHash = await bcrypt.hash(seedPassword, 10);
   await prisma.user.upsert({
     where: { email: seedEmail },
