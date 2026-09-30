@@ -20,10 +20,15 @@ export function validateEnv(
     );
   }
   if (PLACEHOLDER_SECRETS.has(secret.trim())) {
-    console.warn(
-      'WARNING: JWT_SECRET still has the placeholder value from .env.example. ' +
-        'Replace it with a random value (openssl rand -hex 32) before going live.',
-    );
+    const message =
+      'JWT_SECRET still has the placeholder value from .env.example. ' +
+      'Replace it with a random value (openssl rand -hex 32).';
+    // Anyone who has read .env.example could forge admin tokens with a
+    // placeholder secret, so production refuses it; development only warns.
+    if (config.NODE_ENV === 'production') {
+      throw new Error(`${message} Refusing to start in production.`);
+    }
+    console.warn(`WARNING: ${message}`);
   }
   return config;
 }
