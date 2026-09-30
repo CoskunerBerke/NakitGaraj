@@ -1595,7 +1595,7 @@ export default function ValuationWizard() {
             {/* Valuation Stats Dashboard */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
               {/* Main Price display */}
-              <div className="md:col-span-2 glass-card rounded-3xl p-6 md:p-8 border border-brand-orange/30 dark:border-brand-orange/20 flex flex-col justify-between relative overflow-hidden bg-gradient-to-br from-brand-orange/5 via-transparent to-emerald-500/5">
+              <div className="md:col-span-3 glass-card rounded-3xl p-6 md:p-8 border border-brand-orange/30 dark:border-brand-orange/20 flex flex-col justify-between relative overflow-hidden bg-gradient-to-br from-brand-orange/5 via-transparent to-emerald-500/5">
                 <div className="absolute top-0 right-0 w-32 h-32 bg-brand-orange/10 rounded-bl-[100px] blur-[30px] pointer-events-none" />
                 
                 {/* 2 MAIN SELLING OPTIONS COMPARISON */}
