@@ -46,6 +46,9 @@ cd /var/www/nakitgaraj
 
 # --- BACKEND KURULUMU ---
 cd backend
+cp .env.example .env           # Ardından .env içinde JWT_SECRET ve ADMIN_PASSWORD değerlerini doldurun
+                               # (JWT_SECRET üretmek için: openssl rand -hex 32)
+                               # JWT_SECRET yoksa backend başlamaz; ADMIN_PASSWORD yoksa seed hata verir.
 npm install --production=false # Geliştirici paketlerini de kur ki derleyebilsin
 npx prisma generate            # Prisma istemcisini oluştur
 npx prisma db push             # SQLite dev.db veri tabanını oluştur ve şemayı bas

@@ -15,9 +15,8 @@ export class JwtAuthGuard implements CanActivate {
     }
 
     try {
-      const payload = await this.jwtService.verifyAsync(token, {
-        secret: process.env.JWT_SECRET || 'your-jwt-secret-key-change-in-production',
-      });
+      // Uses the secret configured in AuthModule (JWT_SECRET, required).
+      const payload = await this.jwtService.verifyAsync(token);
       (request as any)['user'] = payload;
     } catch {
       throw new UnauthorizedException('Geçersiz veya süresi dolmuş oturum.');

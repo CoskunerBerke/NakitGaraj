@@ -112,7 +112,7 @@ On Windows, `run_project.bat` prepares the database and starts both apps. Tests:
 
 ## Deployment
 
-The repository includes a PM2 process file (`ecosystem.config.js`) that runs the built backend (`npm run start:prod`) and frontend (`npm run start`), and a step-by-step Linux VPS guide with PM2 and Nginx in [DEPLOYMENT.md](DEPLOYMENT.md). Set real secrets through environment variables on the server.
+The repository includes a PM2 process file (`ecosystem.config.js`) that runs the built backend (`npm run start:prod`) and frontend (`npm run start`), and a step-by-step Linux VPS guide with PM2 and Nginx in [DEPLOYMENT.md](DEPLOYMENT.md). Set real secrets through environment variables on the server: `ecosystem.config.js` contains no secrets, and the backend refuses to start without `JWT_SECRET` (put it in `backend/.env` on the server or export it before `pm2 start`). `npx prisma db seed` requires `ADMIN_PASSWORD`.
 
 ---
 
@@ -149,7 +149,7 @@ cd ../frontend
 npm install && npm run dev    # http://localhost:3000
 ```
 
-Windows'ta `run_project.bat` veritabanını hazırlayıp iki uygulamayı birlikte başlatır. Sunucuya kurulum (PM2 + Nginx) için [DEPLOYMENT.md](DEPLOYMENT.md) dosyasına bakın. Gizli anahtarları her zaman ortam değişkeniyle verin.
+Windows'ta `run_project.bat` veritabanını hazırlayıp iki uygulamayı birlikte başlatır. Sunucuya kurulum (PM2 + Nginx) için [DEPLOYMENT.md](DEPLOYMENT.md) dosyasına bakın. Gizli anahtarları her zaman ortam değişkeniyle verin: `ecosystem.config.js` gizli anahtar içermez; backend `JWT_SECRET` tanımlı değilse başlamaz (sunucuda `backend/.env` dosyasına yazın veya `pm2 start` öncesi ortamda tanımlayın). `npx prisma db seed` için `ADMIN_PASSWORD` zorunludur.
 
 ---
 

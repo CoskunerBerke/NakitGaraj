@@ -11,7 +11,9 @@ module.exports = {
         NODE_ENV: 'production',
         PORT: 3001,
         DATABASE_URL: 'file:./dev.db',
-        JWT_SECRET: 'super-secret-key-nakitgaraj-premium-2026',
+        // JWT_SECRET is intentionally not set here: PM2 passes through the
+        // server environment and the backend also reads backend/.env.
+        // The backend refuses to start if JWT_SECRET is missing.
         CORS_ORIGIN: 'http://localhost:3000'
       }
     },
