@@ -157,7 +157,7 @@ export class RobustPricingCalculator {
     }
 
     // 1. KM & Condition Adjustment using referenceMedianMileage
-    const age = Math.max(1, 2026 - userYear);
+    const age = Math.max(1, new Date().getFullYear() - userYear);
     const expectedKm = age * 15000;
     const baseReferenceKm = (referenceMedianMileage && referenceMedianMileage > 0) ? referenceMedianMileage : expectedKm;
     const kmDelta = userMileage - baseReferenceKm;
