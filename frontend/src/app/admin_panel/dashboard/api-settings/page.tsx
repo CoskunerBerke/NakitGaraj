@@ -10,7 +10,7 @@ const API_BASE = typeof window !== 'undefined'
 export default function ApiSettingsPage() {
   const [selectedProvider, setSelectedProvider] = useState('data_deger');
   const [selectedPackage, setSelectedPackage] = useState('paket2');
-  const [apiKey, setApiKey] = useState('sk_live_51NzkG92kLpB1ntfD82af21782fc4d6d2');
+  const [apiKey, setApiKey] = useState('');
   const [saveSuccess, setSaveSuccess] = useState(false);
 
   // Telegram States
