@@ -1,4 +1,5 @@
-import { Injectable } from '@nestjs/common';
+import { ConflictException, Injectable } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma.service';
 import { CreateConsignmentDto } from './dto/create-consignment.dto';
 import { EvaluationService } from '../evaluation/evaluation.service';
@@ -42,32 +43,41 @@ export class ConsignmentService {
       evalId = evResult.evaluationId || null;
     }
 
-    const consignment = await this.prisma.consignmentApplication.create({
-      data: {
-        vehicleEvaluationId: evalId,
-        firstName: dto.firstName,
-        lastName: dto.lastName,
-        phone: dto.phone,
-        email: dto.email,
-        province: dto.province,
-        district: dto.district,
-        preferredContact: dto.preferredContact,
-        status: 'PENDING',
-        notes: dto.notes || null,
-      },
-      include: {
-        vehicleEvaluation: {
-          include: {
-            vehicleSpecification: {
-              include: {
-                manufacturer: true,
-                model: true,
+    let consignment;
+    try {
+      consignment = await this.prisma.consignmentApplication.create({
+        data: {
+          vehicleEvaluationId: evalId,
+          firstName: dto.firstName,
+          lastName: dto.lastName,
+          phone: dto.phone,
+          email: dto.email,
+          province: dto.province,
+          district: dto.district,
+          preferredContact: dto.preferredContact,
+          status: 'PENDING',
+          notes: dto.notes || null,
+        },
+        include: {
+          vehicleEvaluation: {
+            include: {
+              vehicleSpecification: {
+                include: {
+                  manufacturer: true,
+                  model: true,
+                },
               },
             },
           },
         },
-      },
-    });
+      });
+    } catch (err) {
+      // vehicleEvaluationId is unique: one application per valuation.
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        throw new ConflictException('Bu değerleme için zaten bir konsinye başvurusu alınmış.');
+      }
+      throw err;
+    }
 
     const vSpec = consignment.vehicleEvaluation?.vehicleSpecification;
     const vehicleName = vSpec
@@ -87,11 +97,16 @@ export class ConsignmentService {
       notes: consignment.notes || undefined,
     }).catch((err) => console.error('Telegram Consignment Notify Error:', err.message));
 
+    // This is a public endpoint and vehicleEvaluationId comes from the caller:
+    // never echo the linked evaluation (another customer's name, phone, IP,
+    // plate) back. The applicant only gets their own application data.
+    const { vehicleEvaluation: _linkedEvaluation, ...applicantConsignment } = consignment;
+
     return {
       success: true,
       message: 'Konsinye başvurunuz başarıyla alınmıştır. Uzmanlarımız sizinle en kısa sürede iletişime geçecektir.',
       consignmentId: consignment.id,
-      consignment,
+      consignment: applicantConsignment,
     };
   }
 
