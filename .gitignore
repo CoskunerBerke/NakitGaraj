@@ -28,6 +28,7 @@ dev.db
 # Scratch & Temporary Logs
 scratch/
 **/scratch/
+**/scratch_*.js
 .tempmediaStorage/
 .user_uploaded/
 *.log
