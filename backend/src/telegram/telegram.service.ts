@@ -62,6 +62,11 @@ export class TelegramService {
     return updated;
   }
 
+  /** Gallery WhatsApp number from the admin settings (or GALLERY_WHATSAPP_PHONE). */
+  private getAdminWhatsAppPhone(): string {
+    return (this.getSettings().galleryWhatsAppPhone || process.env.GALLERY_WHATSAPP_PHONE || '').trim();
+  }
+
   formatWhatsAppUrl(customerPhone?: string, messageText?: string): string | null {
     if (!customerPhone) return null;
     let clean = customerPhone.replace(/\D/g, '');
@@ -263,7 +268,7 @@ ${desiredText}<b>📉 Piyasa Satış Değeri:</b> ${evalData.fairMarketValue.toL
       `Merhabalar ${evalData.firstName || ''}, NakitGaraj üzerinden ${evalData.vehicleName} (${evalData.licensePlate || ''}) aracınız için yaptığınız değerleme ile ilgili yazıyorum.`,
     );
 
-    const adminPhone = '05350379074';
+    const adminPhone = this.getAdminWhatsAppPhone();
     const adminText = `🚗 YENİ NAKİTGARAJ ARAÇ DEĞERLEMESİ!\n\n👤 Müşteri: ${evalData.firstName || 'İsimsiz'} ${evalData.lastName || ''}\n📞 Telefon: ${evalData.phone || 'Belirtilmedi'}\n🚘 Araç: ${evalData.vehicleName}\n🛣️ Kilometre: ${evalData.mileage ? evalData.mileage.toLocaleString('tr-TR') : 0} km\n📋 Plaka: ${evalData.licensePlate || ''} | Renk: ${evalData.color || ''}\n\n${evalData.userDesiredPrice ? '💰 Müşteri Beklentisi: ' + evalData.userDesiredPrice.toLocaleString('tr-TR') + ' ₺\n' : ''}📉 Piyasa Satış Değeri: ${evalData.fairMarketValue ? evalData.fairMarketValue.toLocaleString('tr-TR') : 0} ₺\n💵 Anında Nakit Alım Teklifimiz: ${evalData.finalOfferedPrice ? evalData.finalOfferedPrice.toLocaleString('tr-TR') : 0} ₺ (Net Kâr: ${profit.toLocaleString('tr-TR')} ₺)\n🏪 Dükkan Konsinye Fiyatımız: ${evalData.finalConsignmentPrice ? evalData.finalConsignmentPrice.toLocaleString('tr-TR') : 0} ₺\n\n⏱️ Satış Aciliyeti: ${evalData.sellingTimeline || 'Hemen'}\n📅 Tarih: ${new Date().toLocaleString('tr-TR')}`;
 
     const adminWaUrl = this.formatWhatsAppUrl(adminPhone, adminText);
@@ -273,7 +278,7 @@ ${desiredText}<b>📉 Piyasa Satış Değeri:</b> ${evalData.fairMarketValue.toL
       inlineKeyboard.push([{ text: '📱 Müşteriye WhatsApp Mesajı At', url: customerWaUrl }]);
     }
     if (adminWaUrl) {
-      inlineKeyboard.push([{ text: '📩 Yetkiliye İlet (05350379074)', url: adminWaUrl }]);
+      inlineKeyboard.push([{ text: `📩 Yetkiliye İlet (${adminPhone})`, url: adminWaUrl }]);
     }
 
     const replyMarkup = inlineKeyboard.length > 0 ? { inline_keyboard: inlineKeyboard } : undefined;
@@ -423,7 +428,7 @@ ${parsedNotes.equipText}
       `Merhabalar ${consignmentData.firstName || ''}, NakitGaraj üzerinden ${consignmentData.vehicleName} dükkana bırakma (konsinye) başvurunuz ile ilgili iletişime geçiyorum.`,
     );
 
-    const adminPhone = '05350379074';
+    const adminPhone = this.getAdminWhatsAppPhone();
     const adminText = `🏪 YENİ DÜKKANA BIRAKMA (KONSİNYE) BAŞVURUSU!\n\n👤 Müşteri: ${consignmentData.firstName || ''} ${consignmentData.lastName || ''}\n📞 Telefon: ${consignmentData.phone || ''}\n🚘 Araç: ${consignmentData.vehicleName}\nKM: ${consignmentData.mileage ? consignmentData.mileage.toLocaleString('tr-TR') : 0} km\nPlaka: ${consignmentData.licensePlate || ''}\n\n💰 Müşteri Fiyatı: ${consignmentData.desiredPrice ? consignmentData.desiredPrice.toLocaleString('tr-TR') : 0} ₺\n📅 Tarih: ${new Date().toLocaleString('tr-TR')}`;
 
     const adminWaUrl = this.formatWhatsAppUrl(adminPhone, adminText);
@@ -433,7 +438,7 @@ ${parsedNotes.equipText}
       inlineKeyboard.push([{ text: '📱 Müşteriye WhatsApp Mesajı At', url: customerWaUrl }]);
     }
     if (adminWaUrl) {
-      inlineKeyboard.push([{ text: '📩 Yetkiliye İlet (05350379074)', url: adminWaUrl }]);
+      inlineKeyboard.push([{ text: `📩 Yetkiliye İlet (${adminPhone})`, url: adminWaUrl }]);
     }
 
     const replyMarkup = inlineKeyboard.length > 0 ? { inline_keyboard: inlineKeyboard } : undefined;

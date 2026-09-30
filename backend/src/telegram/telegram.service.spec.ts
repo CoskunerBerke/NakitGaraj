@@ -42,6 +42,25 @@ describe('TelegramService notifications (HTML parse mode)', () => {
     expect(caption).toContain('<b>'); // own formatting is kept
   });
 
+  it('sends the "forward to manager" button to the configured gallery phone', async () => {
+    await service.sendEvaluationNotification({
+      licensePlate: '06ABC123',
+      vehicleName: '2020 Fiat Egea (1.4 Fire)',
+      mileage: 85000,
+      color: 'Beyaz',
+      damageStatus: 'NO',
+      fairMarketValue: 640000,
+      finalOfferedPrice: 570000,
+      finalConsignmentPrice: 654000,
+    });
+
+    const replyMarkup = sendPhoto.mock.calls[0][4];
+    const buttons = replyMarkup.inline_keyboard.flat();
+    const forward = buttons.find((b: any) => b.text.startsWith('📩'));
+    expect(forward.text).toContain('05550000000');
+    expect(forward.url).toContain('wa.me/905550000000');
+  });
+
   it('escapes free-text notes in consignment notifications', async () => {
     await service.sendConsignmentNotification({
       firstName: 'Ayşe',
