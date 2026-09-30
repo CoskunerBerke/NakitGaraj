@@ -3,6 +3,12 @@ import { EmsalMatcherService, CleanListingItem } from './emsal-matcher.service';
 import { PrismaClient } from '@prisma/client';
 import { EvaluationService } from './evaluation.service';
 
+// Tests 1 and 8 need real market snapshots that only exist in a database
+// filled from scraped listings (not part of the repository). They are skipped
+// unless PRICING_REAL_DATA_TESTS=1. The other tests only need a migrated
+// database (npx prisma migrate deploy).
+const realDataTest = process.env.PRICING_REAL_DATA_TESTS === '1' ? test : test.skip;
+
 describe('NakitGaraj Real Database & Advanced Pricing Engine Integration Test Suite', () => {
   let prisma: PrismaClient;
   let matcher: EmsalMatcherService;
@@ -18,7 +24,7 @@ describe('NakitGaraj Real Database & Advanced Pricing Engine Integration Test Su
     await prisma.$disconnect();
   });
 
-  test('1. Real Database Integration: BMW 3 Serisi 2015 yields real matched count and weighted percentiles', async () => {
+  realDataTest('1. Real Database Integration: BMW 3 Serisi 2015 yields real matched count and weighted percentiles', async () => {
     const match = await matcher.matchComparableListings({
       make: 'BMW',
       model: '3 Serisi',
@@ -151,7 +157,7 @@ describe('NakitGaraj Real Database & Advanced Pricing Engine Integration Test Su
     expect(result.customerConsignmentNet).toEqual(result.expectedConsignmentSalePrice - result.consignmentCommission);
   });
 
-  test('8. Regression Test: BMW 5 Serisi 2016 Executive fetched directly from real DB snapshot ae03fc3c', async () => {
+  realDataTest('8. Regression Test: BMW 5 Serisi 2016 Executive fetched directly from real DB snapshot ae03fc3c', async () => {
     const snap = await prisma.vehicleMarketSnapshot.findFirst({
       where: {
         make: 'BMW',
