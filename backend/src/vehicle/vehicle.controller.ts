@@ -1,4 +1,5 @@
 import { Controller, Get, Post, Body, Query, UseGuards } from '@nestjs/common';
+import { ThrottlerGuard } from '@nestjs/throttler';
 import { VehicleService } from './vehicle.service';
 import { JwtAuthGuard } from '../auth/jwt.guard';
 import { RolesGuard } from '../auth/roles.guard';
@@ -56,6 +57,8 @@ export class VehicleController {
     });
   }
 
+  // Public form: rate-limited per IP (ThrottlerModule default, 100/min).
+  @UseGuards(ThrottlerGuard)
   @Post('vehicle-requests')
   async createVehicleRequest(@Body() dto: CreateVehicleRequestDto) {
     return this.vehicleService.createVehicleRequest(dto);

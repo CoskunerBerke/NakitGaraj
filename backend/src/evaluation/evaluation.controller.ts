@@ -1,4 +1,5 @@
-import { Controller, Post, Body, Req, Get, Param } from '@nestjs/common';
+import { Controller, Post, Body, Req, Get, Param, UseGuards } from '@nestjs/common';
+import { ThrottlerGuard } from '@nestjs/throttler';
 import { EvaluationService } from './evaluation.service';
 import { CreateEvaluationDto } from './dto/create-evaluation.dto';
 
@@ -6,6 +7,8 @@ import { CreateEvaluationDto } from './dto/create-evaluation.dto';
 export class EvaluationController {
   constructor(private evaluationService: EvaluationService) {}
 
+  // Public form: rate-limited per IP (ThrottlerModule default, 100/min).
+  @UseGuards(ThrottlerGuard)
   @Post()
   async evaluateVehicle(@Body() dto: CreateEvaluationDto, @Req() req: any) {
     const ip = req.ip || req.socket.remoteAddress;
