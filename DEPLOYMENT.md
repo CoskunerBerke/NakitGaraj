@@ -24,8 +24,9 @@ Proje ana dizinindeki tüm dosyaları (`ecosystem.config.js` dahil) ve `frontend
 Sunucunuza SSH (Putty veya Terminal) ile bağlandıktan sonra gerekli araçları kurun:
 
 ```bash
-# 1. Paket listelerini güncelle ve Node.js & NPM'i kur (Node.js v20 önerilir)
-curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+# 1. Paket listelerini güncelle ve Node.js & NPM'i kur (Node.js 22 önerilir; en az 20.19 veya 22.13,
+#    çünkü backend bağımlılığı jsdom 29 daha eski sürümlerde çalışmaz)
+curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash -
 sudo apt-get install -y nodejs build-essential
 
 # 2. PM2 (Process Manager) kur (Arka planda servislerin sürekli çalışmasını sağlar)

@@ -154,7 +154,7 @@ NakitGaraj/
 
 ## Quick start
 
-Requires Node.js 20.12+ (CI uses Node 22). These steps were run on a fresh clone.
+Requires Node.js 20.19+ (20.x line), 22.13+ (22.x line) or 24+: jsdom 29, a backend dependency, supports only these versions (both `package.json` files declare the range in `engines`). CI uses Node 22. These steps were run on a fresh clone.
 
 ```bash
 git clone https://github.com/CoskunerBerke/NakitGaraj.git
@@ -267,7 +267,7 @@ Yukarıdaki [Architecture](#architecture) ve [How a price is calculated](#how-a-
 
 ### Kurulum
 
-Node.js 20.12+ gerekir (CI Node 22 kullanır). Aşağıdaki adımlar temiz bir klonda çalıştırılarak doğrulandı.
+Node.js 20.19+ (20.x serisi), 22.13+ (22.x serisi) veya 24+ gerekir: backend bağımlılığı jsdom 29 yalnızca bu sürümleri destekler (iki `package.json` dosyası da bu aralığı `engines` alanında belirtir). CI Node 22 kullanır. Aşağıdaki adımlar temiz bir klonda çalıştırılarak doğrulandı.
 
 ```bash
 git clone https://github.com/CoskunerBerke/NakitGaraj.git
