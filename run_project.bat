@@ -32,7 +32,7 @@ echo Baslatma Islemleri Tamamlandi!
 echo.
 echo Backend API:   http://localhost:3001/api
 echo Frontend Uygulamasi: http://localhost:3000
-echo Yonetim Paneli: http://localhost:3000/admin
+echo Yonetim Paneli: http://localhost:3000/admin_panel
 echo.
 echo Giris Bilgileri:
 echo E-posta: backend\.env icindeki ADMIN_EMAIL (varsayilan: admin@nakitgaraj.com)
