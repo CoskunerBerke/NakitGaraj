@@ -47,11 +47,15 @@ cd /var/www/nakitgaraj
 
 # --- BACKEND KURULUMU ---
 cd backend
-cp .env.example .env           # Ardından .env içinde JWT_SECRET, ADMIN_PASSWORD ve CORS_ORIGIN değerlerini doldurun
+cp .env.example .env           # Ardından .env içinde JWT_SECRET ve ADMIN_PASSWORD değerlerini doldurun
                                # (JWT_SECRET üretmek için: openssl rand -hex 32)
                                # JWT_SECRET yoksa veya "change-me" gibi örnek değerse backend production'da başlamaz;
+                               # depo geçmişinde görünen eski JWT anahtarlarıyla hiçbir ortamda başlamaz.
                                # ADMIN_PASSWORD yoksa seed hata verir.
-                               # CORS_ORIGIN=https://tasit.nakitgaraj.com (kendi alan adınız)
+                               # CORS_ORIGIN boşsa production'da başka sitelerden gelen (cross-origin) tarayıcı
+                               # istekleri reddedilir; site API'ye aynı alan adından (Nginx /api) ulaştığı için
+                               # bu yeterlidir. API'yi başka bir alan adı çağıracaksa virgülle ayırarak yazın,
+                               # örn. CORS_ORIGIN=https://tasit.nakitgaraj.com
                                # NODE_ENV=production değerini PM2 (ecosystem.config.js) verir.
 npm install --production=false # Geliştirici paketlerini de kur ki derleyebilsin
 npx prisma generate            # Prisma istemcisini oluştur
@@ -66,7 +70,8 @@ npm install
 NEXT_PUBLIC_API_URL=/api npm run build   # Next.js uygulamasını production için derle
                                # NEXT_PUBLIC_API_URL=/api: tarayıcı API'ye Nginx üzerinden (aynı alan adı, HTTPS)
                                # ulaşır. Verilmezse http://<alan-adı>:3001/api kullanılır; HTTPS sitede tarayıcı
-                               # bu isteği "mixed content" olarak engeller. Değer derleme sırasında gömülür.
+                               # bu isteği "mixed content" olarak engeller, CORS_ORIGIN boşsa backend de reddeder.
+                               # Değer derleme sırasında gömülür.
 cd ..
 ```
 
@@ -147,7 +152,8 @@ sudo certbot --nginx -d tasit.nakitgaraj.com # Domaininizi yazın
 
 *   `backend/.env` dosyasını asla Git'e eklemeyin; `JWT_SECRET` için rastgele bir değer kullanın (`openssl rand -hex 32`).
 *   Daha önce `Admin123!` / `ChangeMe123!` gibi varsayılan şifrelerle kurulum yaptıysanız admin şifresini panelden (Çalışanlar & Yetki) veya `ADMIN_PASSWORD` ile `npx prisma db seed` çalıştırarak değiştirin.
-*   Eski sürümlerde `ecosystem.config.js` içinde sabit bir `JWT_SECRET` vardı; o değeri kullandıysanız yenisiyle değiştirip `pm2 restart all` yapın (tüm oturumlar kapanır).
+*   Eski sürümlerde `ecosystem.config.js` içinde sabit bir `JWT_SECRET`, auth modülünde de yedek bir değer vardı; ikisi de depo geçmişinde herkese açık. Backend artık bu iki değerden biriyle başlamaz ("Rotate your JWT_SECRET" hatası verir). Sunucunuzda hâlâ biri varsa güncellemeden önce `openssl rand -hex 32` ile yeni bir değer üretip `backend/.env` içine yazın ve `pm2 restart all` yapın (tüm oturumlar kapanır).
+*   `CORS_ORIGIN` boşken production'da API başka sitelerden gelen tarayıcı isteklerine cevap vermez; yalnızca gerçekten gereken alan adlarını yazın.
 *   Port 3001'i dış dünyaya açmanız gerekmez; API'ye Nginx `/api` üzerinden erişilir.
 
 Artık siteniz HTTPS protokollü, veri tabanı arkada güvenle çalışan ve PM2 ile 7/24 kapanmadan çalışan profesyonel bir canlı sunucu ortamına taşınmış durumdadır!

@@ -12,7 +12,8 @@ npm run build && npm run start
 
 `NEXT_PUBLIC_API_URL` (build time) sets the API base URL, e.g. `/api` behind the
 Nginx proxy from [DEPLOYMENT.md](../DEPLOYMENT.md). Without it the browser calls
-`http://<current host>:3001/api`.
+`http://<current host>:3001/api`, a cross-origin request that a production
+backend only allows when its `CORS_ORIGIN` lists this site.
 
 | Route | Page |
 |---|---|

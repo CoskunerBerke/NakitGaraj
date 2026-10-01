@@ -184,10 +184,10 @@ Backend variables go in `backend/.env` (template: [`backend/.env.example`](backe
 
 | Variable | Where | Required | Purpose |
 |---|---|---|---|
-| `JWT_SECRET` | backend | **yes** | Signs admin sessions. The backend refuses to start without it, and refuses placeholders such as `change-me` when `NODE_ENV=production`. |
+| `JWT_SECRET` | backend | **yes** | Signs admin sessions. The backend refuses to start without it, refuses placeholders such as `change-me` when `NODE_ENV=production`, and in every environment refuses the two JWT secrets that were once committed to this repository (they are public in the git history) with a "rotate your JWT_SECRET" error. |
 | `NODE_ENV` | backend | on servers | `production` on servers (the PM2 config sets it). |
 | `PORT` | backend | no | API port, default `3001`. |
-| `CORS_ORIGIN` | backend | on servers | Comma-separated browser origins allowed to call the API. Unset allows every origin (local development only). |
+| `CORS_ORIGIN` | backend | no | Comma-separated browser origins allowed to call the API from another site. Unset with `NODE_ENV=production`: no cross-origin requests at all (the site reaches the API on its own origin through Nginx `/api`). Unset in development: every origin is allowed. |
 | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | seed | password: **yes** | Admin account created or updated by `npx prisma db seed`. There is no default password. |
 | `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_IDS`, `GALLERY_WHATSAPP_PHONE` | backend | no | Initial Telegram settings (later editable in the admin panel). |
 | `REDIS_URL` | backend | no | Redis cache, e.g. `redis://localhost:6379`. Falls back to memory. |
@@ -201,13 +201,13 @@ Backend variables go in `backend/.env` (template: [`backend/.env.example`](backe
 ```bash
 cd backend
 npx prisma migrate deploy   # no-op if you followed the quick start
-npm test                    # 9 suites: 35 passed, 2 skipped
+npm test                    # 10 suites: 50 passed, 2 skipped
 npm run test:e2e            # 4 suites: 83 passed
 ```
 
 The tests use `prisma/dev.db`. If that database was created with `prisma db push` (for example by `run_project.bat`), skip `migrate deploy`: Prisma refuses to apply migrations to a schema it did not create (error P3005), and the tests run on that database as they are.
 
-- **Unit tests:** pricing calculator, comparable matching, name normaliser, env validation, consignment/admin/vehicle services and Telegram message escaping. Two pricing regression tests need the scraped market database and only run with `PRICING_REAL_DATA_TESTS=1`.
+- **Unit tests:** pricing calculator, comparable matching, name normaliser, env validation (including the refused leaked secrets), CORS defaults, consignment/admin/vehicle services (including the accepted model years) and Telegram message escaping. Two pricing regression tests need the scraped market database and only run with `PRICING_REAL_DATA_TESTS=1`.
 - **e2e tests** (Supertest against the real Nest app) check all 23 admin routes: 401 without a token and with a token signed by another secret, 403 for a role without permissions, and 403 on the 7 ADMIN-only routes (user management, Telegram settings) for a role that has every permission but is not ADMIN. A test fails when a new admin route is missing from that list. Other e2e tests cover the login rate limit and the admin JSON import.
 - **CI** ([`ci.yml`](.github/workflows/ci.yml)) runs on every push and pull request. Backend: typecheck, migrations, unit and e2e tests, seed + demo-seed smoke test, build. Frontend: typecheck, production build.
 
@@ -215,13 +215,14 @@ The tests use `prisma/dev.db`. If that database was created with `prisma db push
 
 `ecosystem.config.js` runs the built backend (`npm run start:prod`) and frontend (`npm run start`) under PM2. [DEPLOYMENT.md](DEPLOYMENT.md) (Turkish) walks through a Linux VPS setup with PM2, Nginx and Let's Encrypt. On a server:
 
-- set `JWT_SECRET`, `CORS_ORIGIN` and (for seeding) `ADMIN_PASSWORD` in `backend/.env`; `ecosystem.config.js` contains no secrets;
-- build the frontend with `NEXT_PUBLIC_API_URL=/api` so the browser reaches the API through Nginx over HTTPS;
+- set `JWT_SECRET` and (for seeding) `ADMIN_PASSWORD` in `backend/.env`; `ecosystem.config.js` contains no secrets;
+- build the frontend with `NEXT_PUBLIC_API_URL=/api` so the browser reaches the API through Nginx over HTTPS on the same origin. In production the API refuses cross-origin requests unless `CORS_ORIGIN` lists the calling site, so a frontend built without `/api` (calling `:3001` directly) needs `CORS_ORIGIN`;
 - keep port 3001 private; Nginx forwards `/api` and passes `X-Forwarded-For`, which the backend trusts only from localhost.
 
 ## Security notes
 
-- No secrets in the repository. The backend has no fallback JWT secret and refuses placeholder secrets in production. The seed has no default admin password.
+- No secrets in the current files. The backend has no fallback JWT secret and refuses placeholder secrets in production. Two JWT secrets from earlier versions are still visible in the git history; the backend refuses both in every environment, so a server that still uses one has to rotate it. The seed has no default admin password.
+- CORS fails closed in production: without `CORS_ORIGIN` the API answers no cross-origin browser requests.
 - Admin routes need a valid JWT and are checked on the server: user management and Telegram settings are ADMIN-only; pricing, import and market sync need `manage_vehicles`.
 - Login is limited to 5 attempts per minute per IP. Public form submissions are rate-limited.
 - Public responses do not include other customers' data. Customer input is escaped in Telegram HTML messages.
@@ -300,7 +301,7 @@ Değişkenlerin tam listesi yukarıdaki [Configuration](#configuration) tablosun
 ```bash
 cd backend
 npx prisma migrate deploy   # kurulum adımlarını izlediyseniz bir şey yapmaz
-npm test                    # 9 test dosyası: 35 geçti, 2 atlandı
+npm test                    # 10 test dosyası: 50 geçti, 2 atlandı
 npm run test:e2e            # 4 test dosyası: 83 geçti
 ```
 
