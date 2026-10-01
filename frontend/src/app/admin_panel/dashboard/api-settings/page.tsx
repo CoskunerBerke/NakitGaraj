@@ -13,7 +13,7 @@ export default function ApiSettingsPage() {
   // Telegram States
   const [telegramToken, setTelegramToken] = useState('');
   const [telegramChatIds, setTelegramChatIds] = useState('');
-  const [galleryWhatsAppPhone, setGalleryWhatsAppPhone] = useState('05350379074');
+  const [galleryWhatsAppPhone, setGalleryWhatsAppPhone] = useState('');
   const [telegramSaveSuccess, setTelegramSaveSuccess] = useState('');
   const [telegramError, setTelegramError] = useState('');
   const [telegramTesting, setTelegramTesting] = useState(false);
@@ -88,7 +88,7 @@ export default function ApiSettingsPage() {
         const data = await res.json();
         setTelegramToken(data.botToken || '');
         setTelegramChatIds(data.chatIds || '');
-        setGalleryWhatsAppPhone(data.galleryWhatsAppPhone || '05350379074');
+        setGalleryWhatsAppPhone(data.galleryWhatsAppPhone || '');
       }
     } catch (err) {
       console.error('Telegram ayarları yüklenemedi:', err);
@@ -499,13 +499,13 @@ export default function ApiSettingsPage() {
                 </label>
                 <input
                   type="text"
-                  placeholder="05350379074"
+                  placeholder="05XXXXXXXXX"
                   value={galleryWhatsAppPhone}
                   onChange={(e) => setGalleryWhatsAppPhone(e.target.value)}
                   className="glass-input rounded-xl p-3.5 text-xs font-mono w-full border-emerald-500/30"
                 />
                 <span className="text-[10px] text-zinc-400">
-                  Bildirim mesajlarındaki <b>"📱 Müşteriye WhatsApp'tan Mesaj At"</b> butonunun kullanacağı ana telefon numarası. İstediğiniz zaman değiştirebilirsiniz.
+                  Bildirim mesajlarındaki <b>"📩 Yetkiliye İlet"</b> butonunun WhatsApp mesajını göndereceği galeri numarası. Boş bırakılırsa bu buton gösterilmez. İstediğiniz zaman değiştirebilirsiniz.
                 </span>
               </div>
 
@@ -564,7 +564,7 @@ export default function ApiSettingsPage() {
                 <div className="p-3.5 rounded-xl bg-white dark:bg-zinc-900 border border-sky-500/20 flex flex-col gap-1.5">
                   <span className="font-extrabold text-sky-600 dark:text-sky-400">4. Adım: WhatsApp Buton Numarası ve Test</span>
                   <p className="text-[11px] text-zinc-500 dark:text-zinc-400 leading-normal">
-                    <b>Galeri WhatsApp Numarası</b> kutusuna müşterinin tıklayınca mesaj atacağı galeri telefon numaranızı girin (Örn: <code>05350379074</code>). Ardından <b>"Test Mesajı Gönder"</b> butonuna basın. Telefonunuza canlı mesaj düşecektir!
+                    <b>Galeri WhatsApp Numarası</b> kutusuna bildirimlerdeki "Yetkiliye İlet" butonunun kullanacağı galeri telefon numaranızı girin (Örn: <code>05XXXXXXXXX</code>). Ardından <b>"Test Mesajı Gönder"</b> butonuna basın. Telefonunuza canlı mesaj düşecektir!
                   </p>
                 </div>
               </div>

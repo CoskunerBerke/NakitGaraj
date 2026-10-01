@@ -36,7 +36,7 @@ export const siteConfig: SiteConfig = {
   tagline: process.env.NEXT_PUBLIC_TAGLINE || 'Türkiye\'nin Yapay Zeka Destekli Anında Araç Değerleme ve Konsinye Platformu',
   logoText: process.env.NEXT_PUBLIC_LOGO_TEXT || 'NakitGaraj',
   domain: process.env.NEXT_PUBLIC_DOMAIN || 'localhost:3000',
-  supportPhone: process.env.NEXT_PUBLIC_SUPPORT_PHONE || '05350379074',
+  supportPhone: process.env.NEXT_PUBLIC_SUPPORT_PHONE || '',
   supportEmail: process.env.NEXT_PUBLIC_SUPPORT_EMAIL || 'destek@nakitgaraj.com',
   address: process.env.NEXT_PUBLIC_ADDRESS || 'Ankara / Yenimahalle',
   theme: {
