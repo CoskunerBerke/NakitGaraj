@@ -2,6 +2,7 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { ValidationPipe } from '@nestjs/common';
 import { NestExpressApplication } from '@nestjs/platform-express';
+import { buildCorsOptions } from './config/cors';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
@@ -15,16 +16,17 @@ async function bootstrap() {
   app.setGlobalPrefix('api');
   
   // CORS: CORS_ORIGIN (comma-separated list, e.g. https://example.com) limits
-  // which sites may call the API. Without it every origin is allowed, which
-  // is fine for local development; set it in production.
-  const corsOrigins = (process.env.CORS_ORIGIN || '')
-    .split(',')
-    .map((o) => o.trim())
-    .filter(Boolean);
-  app.enableCors({
-    origin: corsOrigins.length > 0 ? corsOrigins : true,
-    credentials: true,
-  });
+  // which sites may call the API. Without it, production allows no
+  // cross-origin requests (same origin through Nginx only) and development
+  // allows every origin. See config/cors.ts.
+  const corsOptions = buildCorsOptions(process.env);
+  if (corsOptions.origin === false) {
+    console.log(
+      'CORS_ORIGIN is not set: cross-origin requests are refused ' +
+        '(same-origin only). Set CORS_ORIGIN to allow other sites.',
+    );
+  }
+  app.enableCors(corsOptions);
 
   // Enable global validation pipe
   app.useGlobalPipes(
