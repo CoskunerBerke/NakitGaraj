@@ -34,9 +34,13 @@ describe('VehicleService', () => {
     it.each([
       ['a missing year', { year: undefined }],
       ['a non-numeric year', { year: 'abc' }],
+      ['a fractional year', { year: 2020.5 }],
       ['a year far in the past', { year: 1850 }],
-      ['a year in the future', { year: new Date().getFullYear() + 5 }],
+      ['the year before the catalogue starts', { year: 1999 }],
+      ['next year', { year: 2029 }],
+      ['a year in the future', { year: 2033 }],
     ])('rejects %s without touching the database', async (_label, override) => {
+      jest.useFakeTimers({ now: new Date('2028-03-15T10:00:00Z') });
       const { service, prisma } = makeService();
 
       await expect(
@@ -47,6 +51,24 @@ describe('VehicleService', () => {
         }),
       ).rejects.toBeInstanceOf(BadRequestException);
       expect(prisma.vehicleSpecification.count).not.toHaveBeenCalled();
+    });
+
+    it('accepts exactly the years that getYears offers', async () => {
+      jest.useFakeTimers({ now: new Date('2028-03-15T10:00:00Z') });
+      const { service, prisma } = makeService();
+      const offered = await service.getYears();
+
+      for (const year of [offered[offered.length - 1], offered[0]]) {
+        await service.getVehicleData({
+          year,
+          manufacturerId: 'm1',
+          modelId: 'x1',
+        });
+      }
+
+      expect(offered[offered.length - 1]).toBe(2000);
+      expect(offered[0]).toBe(2028);
+      expect(prisma.vehicleSpecification.count).toHaveBeenCalledTimes(2);
     });
 
     it('rejects a request without manufacturer or model', async () => {

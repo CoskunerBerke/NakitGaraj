@@ -2,6 +2,10 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import { CacheService } from '../cache.service';
 
+// Model years offered by the catalogue (GET /years and the valuation wizard):
+// from 2000 up to the current year.
+export const CATALOGUE_FIRST_YEAR = 2000;
+
 @Injectable()
 export class VehicleService {
   constructor(
@@ -80,7 +84,7 @@ export class VehicleService {
 
   async getYears() {
     const years = [];
-    for (let y = new Date().getFullYear(); y >= 2000; y--) {
+    for (let y = new Date().getFullYear(); y >= CATALOGUE_FIRST_YEAR; y--) {
       years.push(y);
     }
     return years;
@@ -97,12 +101,15 @@ export class VehicleService {
     transmissionTypeId?: string;
   }) {
     // Public endpoint that may generate catalogue rows for a year/model on
-    // first use: only accept real model years and ids, otherwise any caller
-    // could create rows for arbitrary years (or crash the query with NaN).
+    // first use: only accept the model years the catalogue offers (same range
+    // as getYears) and real ids, otherwise any caller could create rows for
+    // other years (or crash the query with NaN).
     const year = Number(query.year);
-    const maxYear = new Date().getFullYear() + 1;
-    if (!Number.isInteger(year) || year < 1950 || year > maxYear) {
-      throw new BadRequestException(`year must be an integer between 1950 and ${maxYear}.`);
+    const maxYear = new Date().getFullYear();
+    if (!Number.isInteger(year) || year < CATALOGUE_FIRST_YEAR || year > maxYear) {
+      throw new BadRequestException(
+        `year must be an integer between ${CATALOGUE_FIRST_YEAR} and ${maxYear}.`,
+      );
     }
     if (!query.manufacturerId || !query.modelId) {
       throw new BadRequestException('manufacturerId and modelId are required.');
