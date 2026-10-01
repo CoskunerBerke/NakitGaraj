@@ -201,7 +201,7 @@ Backend variables go in `backend/.env` (template: [`backend/.env.example`](backe
 ```bash
 cd backend
 npx prisma migrate deploy   # no-op if you followed the quick start
-npm test                    # 10 suites: 50 passed, 2 skipped
+npm test                    # 10 suites: 51 passed, 2 skipped
 npm run test:e2e            # 4 suites: 83 passed
 ```
 
@@ -221,7 +221,7 @@ The tests use `prisma/dev.db`. If that database was created with `prisma db push
 
 ## Security notes
 
-- No secrets in the current files. The backend has no fallback JWT secret and refuses placeholder secrets in production. Two JWT secrets from earlier versions are still visible in the git history; the backend refuses both in every environment, so a server that still uses one has to rotate it. The seed has no default admin password.
+- No secrets in the current files. The backend has no fallback JWT secret and refuses placeholder secrets in production. Two JWT secrets from earlier versions are still visible in the git history; the backend refuses both in every environment, so a server that still uses one has to rotate it. A server first started with an older `ecosystem.config.js` keeps that secret in its PM2 environment, which overrides `backend/.env` and survives `pm2 restart`; [DEPLOYMENT.md](DEPLOYMENT.md) gives the commands that recreate the PM2 process. The seed has no default admin password.
 - CORS fails closed in production: without `CORS_ORIGIN` the API answers no cross-origin browser requests.
 - Admin routes need a valid JWT and are checked on the server: user management and Telegram settings are ADMIN-only; pricing, import and market sync need `manage_vehicles`.
 - Login is limited to 5 attempts per minute per IP. Public form submissions are rate-limited.
@@ -372,7 +372,7 @@ Backend değişkenleri `backend/.env` dosyasına yazılır (şablon: [`backend/.
 ```bash
 cd backend
 npx prisma migrate deploy   # kurulum adımlarını izlediyseniz bir şey yapmaz
-npm test                    # 10 test dosyası: 50 geçti, 2 atlandı
+npm test                    # 10 test dosyası: 51 geçti, 2 atlandı
 npm run test:e2e            # 4 test dosyası: 83 geçti
 ```
 
@@ -392,7 +392,7 @@ Testler `prisma/dev.db` veritabanını kullanır. Veritabanı `prisma db push` i
 
 ### Güvenlik notları
 
-- Mevcut dosyalarda gizli anahtar yok. Backend'de yedek JWT anahtarı bulunmaz ve production'da örnek anahtarlar reddedilir. Önceki sürümlerden iki JWT anahtarı git geçmişinde hâlâ görünür; backend ikisini de her ortamda reddeder, bu yüzden hâlâ birini kullanan bir sunucu anahtarını değiştirmek zorundadır. Seed'in varsayılan admin şifresi yoktur.
+- Mevcut dosyalarda gizli anahtar yok. Backend'de yedek JWT anahtarı bulunmaz ve production'da örnek anahtarlar reddedilir. Önceki sürümlerden iki JWT anahtarı git geçmişinde hâlâ görünür; backend ikisini de her ortamda reddeder, bu yüzden hâlâ birini kullanan bir sunucu anahtarını değiştirmek zorundadır. Eski bir `ecosystem.config.js` ile başlatılmış bir sunucuda bu anahtar PM2 ortamında kalır, `backend/.env` içindeki değerin önüne geçer ve `pm2 restart` sonrasında da korunur; PM2 sürecini yeniden oluşturan komutlar [DEPLOYMENT.md](DEPLOYMENT.md) içinde. Seed'in varsayılan admin şifresi yoktur.
 - Production'da CORS kapalı başlar: `CORS_ORIGIN` yoksa API hiçbir cross-origin tarayıcı isteğine yanıt vermez.
 - Admin rotaları geçerli bir JWT ister ve sunucuda kontrol edilir: çalışan yönetimi ve Telegram ayarları yalnızca ADMIN'e açıktır; fiyat, aktarım ve piyasa senkronizasyonu `manage_vehicles` izni ister.
 - Giriş denemeleri IP başına dakikada 5 ile sınırlıdır. Herkese açık form gönderimlerinde de istek sınırı vardır.

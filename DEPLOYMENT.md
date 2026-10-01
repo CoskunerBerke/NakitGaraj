@@ -88,8 +88,29 @@ pm2 start ecosystem.config.js
 ### Yararlı PM2 Komutları:
 *   `pm2 status` : Çalışan servisleri listeler.
 *   `pm2 logs` : Hataları ve logları canlı izlemenizi sağlar.
-*   `pm2 restart all` : Her iki servisi de yeniden başlatır.
+*   `pm2 restart all` : Her iki servisi de yeniden başlatır. Süreçlerin ortam değişkenlerini değiştirmez (aşağıya bakın).
 *   `pm2 save` ve `pm2 startup` : Sunucu resetlendiğinde servislerin otomatik açılmasını sağlar.
+
+### Eski Bir Kurulumu Güncelleme (Sabit JWT_SECRET)
+
+Eski sürümlerde `ecosystem.config.js`, backend'e sabit bir `JWT_SECRET` veriyordu. Bu değer depo geçmişinde herkese açık olduğu için backend artık onunla başlamaz ("Rotate your JWT_SECRET" hatası verir). Sunucu böyle bir dosyayla başlatıldıysa `backend/.env` dosyasını düzenleyip `pm2 restart` yapmak yetmez:
+
+*   PM2 bir süreci, ilk başlatıldığı ortam değişkenleriyle saklar. `pm2 restart` (`--update-env` ile de), süreç zaten varken `pm2 start ecosystem.config.js` ve sunucu yeniden açılınca `pm2 resurrect`, eski `JWT_SECRET` değerini silmez.
+*   Süreç ortamındaki (PM2 ya da sunucu ortamı) `JWT_SECRET`, `backend/.env` içindeki değerin önüne geçer.
+
+Bu durumda backend başlamaz ve PM2 onu sürekli yeniden başlatır. Yeni kodu yükleyip derledikten sonra proje ana dizininde:
+
+```bash
+cd /var/www/nakitgaraj
+openssl rand -hex 32             # Çıkan değeri backend/.env içine JWT_SECRET=<değer> olarak yazın
+printenv JWT_SECRET              # Eski değeri göstermemeli (normalde boştur): pm2 start, komutu çalıştırdığınız
+                                 # shell'in ortamını da kopyalar. Eski değer görünüyorsa ~/.bashrc veya
+                                 # /etc/environment gibi yerlerden kaldırıp yeni bir oturum açın.
+pm2 delete nakitgaraj-backend && pm2 start ecosystem.config.js --only nakitgaraj-backend && pm2 save
+pm2 status                       # Birkaç saniye sonra nakitgaraj-backend "online" olmalı ve ↺ (yeniden başlatma) sayısı 0 kalmalı
+```
+
+`pm2 save`, kayıtlı süreç listesini (`~/.pm2/dump.pm2`) yeni ortamla günceller; atlanırsa sunucu yeniden açıldığında `pm2 resurrect` eski `JWT_SECRET` değerini geri getirir. Bu adımlar eski dosyadaki `CORS_ORIGIN: 'http://localhost:3000'` değerini de PM2 ortamından kaldırır. Anahtar değiştiği için açık admin oturumları kapanır; yeniden giriş yapın.
 
 ---
 
@@ -152,7 +173,7 @@ sudo certbot --nginx -d tasit.nakitgaraj.com # Domaininizi yazın
 
 *   `backend/.env` dosyasını asla Git'e eklemeyin; `JWT_SECRET` için rastgele bir değer kullanın (`openssl rand -hex 32`).
 *   Daha önce `Admin123!` / `ChangeMe123!` gibi varsayılan şifrelerle kurulum yaptıysanız admin şifresini panelden (Çalışanlar & Yetki) veya `ADMIN_PASSWORD` ile `npx prisma db seed` çalıştırarak değiştirin.
-*   Eski sürümlerde `ecosystem.config.js` içinde sabit bir `JWT_SECRET`, auth modülünde de yedek bir değer vardı; ikisi de depo geçmişinde herkese açık. Backend artık bu iki değerden biriyle başlamaz ("Rotate your JWT_SECRET" hatası verir). Sunucunuzda hâlâ biri varsa güncellemeden önce `openssl rand -hex 32` ile yeni bir değer üretip `backend/.env` içine yazın ve `pm2 restart all` yapın (tüm oturumlar kapanır).
+*   Eski sürümlerde `ecosystem.config.js` içinde sabit bir `JWT_SECRET`, auth modülünde de yedek bir değer vardı; ikisi de depo geçmişinde herkese açık. Backend artık bu iki değerden biriyle başlamaz ("Rotate your JWT_SECRET" hatası verir). Sunucunuzda hâlâ biri varsa `openssl rand -hex 32` ile yeni bir değer üretip `backend/.env` içine yazın ve backend'i PM2'de silip yeniden başlatın (`pm2 restart` yetmez, çünkü PM2 eski değeri saklar ve bu değer `backend/.env` içindekinin önüne geçer). Adımlar 4. bölümdeki "Eski Bir Kurulumu Güncelleme" başlığında (tüm oturumlar kapanır).
 *   `CORS_ORIGIN` boşken production'da API başka sitelerden gelen tarayıcı isteklerine cevap vermez; yalnızca gerçekten gereken alan adlarını yazın.
 *   Port 3001'i dış dünyaya açmanız gerekmez; API'ye Nginx `/api` üzerinden erişilir.
 
