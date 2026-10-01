@@ -171,7 +171,7 @@ export default function AdminUsersPage() {
           <div className="p-3.5 rounded-2xl bg-white dark:bg-zinc-900 border border-brand-orange/15 flex flex-col gap-1">
             <span className="font-extrabold text-brand-orange">3. Adım: Çalışana Şifresini Verin</span>
             <p className="text-[11px] text-zinc-500 dark:text-zinc-400 leading-normal">
-              <b>"Hesabı Oluştur & Yetkilendir"</b> butonuna basın. Çalışanınız artık <code>/admin</code> giriş sayfasından kendi mail ve şifresiyle girebilir. İstediğiniz zaman sağ listeden hesabı silebilirsiniz.
+              <b>"Hesabı Oluştur & Yetkilendir"</b> butonuna basın. Çalışanınız artık <code>/admin_panel</code> giriş sayfasından kendi mail ve şifresiyle girebilir. İstediğiniz zaman sağ listeden hesabı silebilirsiniz.
             </p>
           </div>
         </div>
