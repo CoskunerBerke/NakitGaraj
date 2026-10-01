@@ -1,4 +1,4 @@
-import { validateEnv } from './env.validation';
+import { LEAKED_JWT_SECRETS, validateEnv } from './env.validation';
 
 describe('validateEnv', () => {
   let warnSpy: jest.SpyInstance;
@@ -31,6 +31,33 @@ describe('validateEnv', () => {
       expect.stringContaining('placeholder'),
     );
   });
+
+  it('lists both secrets that were published in the git history', () => {
+    expect(LEAKED_JWT_SECRETS).toHaveLength(2);
+    expect(LEAKED_JWT_SECRETS).toContain(
+      'your-jwt-secret-key-change-in-production',
+    );
+  });
+
+  it.each(['production', 'development', 'test', undefined])(
+    'refuses a leaked secret and asks to rotate it (NODE_ENV=%s)',
+    (nodeEnv) => {
+      for (const leaked of LEAKED_JWT_SECRETS) {
+        for (const value of [leaked, `  ${leaked}\n`]) {
+          let error: Error | undefined;
+          try {
+            validateEnv({ JWT_SECRET: value, NODE_ENV: nodeEnv });
+          } catch (e) {
+            error = e as Error;
+          }
+          expect(error).toBeDefined();
+          expect(error?.message).toMatch(/Rotate your JWT_SECRET/);
+          // The message must not repeat the secret.
+          expect(error?.message).not.toContain(leaked);
+        }
+      }
+    },
+  );
 
   it('accepts a real secret', () => {
     const config = { JWT_SECRET: 'a'.repeat(64), NODE_ENV: 'production' };
