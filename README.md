@@ -55,8 +55,21 @@ Prices come from real market statistics instead of a fixed depreciation formula.
 - Pricing engine: comparable matcher (`emsal-matcher.service.ts`), robust calculator (`robust-pricing-calculator.ts`), canonical name normaliser; suspicious listings are quarantined during import.
 - JWT authentication, role and permission guards, request validation (class-validator, whitelist), rate limiting on login (5/min) and on the public forms.
 - Telegram notifications with a generated image card (`@napi-rs/canvas`).
-- Scheduled jobs: monthly market-price sync and a listing scraper (Playwright, optional proxies).
+- Scheduled jobs: a monthly catalogue-price sync and a price scraper (Playwright, optional proxies). Both update catalogue prices, not the market snapshots that offers are computed from.
 - Optional Redis cache with an in-memory fallback.
+
+## How it works
+
+1. **Catalogue.** The wizard narrows make → model year → model → engine → trim through `GET /vehicle-data`, which returns only the options that still exist. If a model has no catalogue rows for the chosen year yet, that request creates them.
+2. **Market snapshots.** An offline import turns saved listing pages into canonically named listings and quarantines the ones it cannot name. It removes price outliers with IQR and stores one snapshot per make · model · variant · year (P5–P95, median mileage, mileage slope). The whole snapshot set is replaced in one transaction.
+3. **Matching.** `POST /vehicle-evaluation` looks for the closest snapshot in this order: exact spec (at least 5 listings), same variant ± 1 year (at least 5), same model ± 2 years (at least 3). If none qualifies, the answer is `INSUFFICIENT_DATA`. The wider levels merge snapshots and normalise their prices to the requested year.
+4. **Pricing.**
+   - Fair value: P50, adjusted for mileage and declared damage.
+   - Cash offer: the lower of fair value minus a segment reserve and the adjusted P35, rounded down. Below 400,000 TL the answer is "manual evaluation" instead.
+   - Consignment: a listing price near P60 (or the seller's desired price, capped), 1.5 % expected negotiation, a tiered commission and the seller's net payout.
+5. **Leads.** Priced valuations and consignment applications are stored for the admin CRM and sent to Telegram as an image card. Admin routes need a JWT and pass role and permission guards on the server.
+
+The full walkthrough is in **[docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md)**: diagrams, every formula and constant, the data model, the security model, test counts and known gaps.
 
 ## Screenshots
 
@@ -113,7 +126,7 @@ flowchart TD
   I --> J
 ```
 
-Level 2 and 3 matches combine several snapshots and normalise them to the requested model year (the yearly price change is learned from the snapshots when there are enough of them, otherwise 8 % is used). Cars under 400,000 TL whose cash offer would be below 85 % of market value get a "manual evaluation" answer instead of an automatic offer.
+Level 2 and 3 matches combine several snapshots and normalise them to the requested model year (the yearly price change is learned from the snapshots when there are enough of them, otherwise 8 % is used). Cars under 400,000 TL whose cash offer would be below 85 % of market value get a "manual evaluation" answer instead of an automatic offer. Because of the 65,000 TL minimum reserve, that is every car valued under 400,000 TL.
 
 ## Tech stack
 
@@ -176,7 +189,7 @@ npm ci
 npm run dev                       # http://localhost:3000
 ```
 
-Log in at <http://localhost:3000/admin_panel> with `ADMIN_EMAIL` (default `admin@nakitgaraj.com`) and the `ADMIN_PASSWORD` you used for the seed. Without `npm run seed:demo` (or your own imported listings), valuations answer "not enough market data", because the real listing data is not part of the repository. On Windows, `run_project.bat` creates the database with `prisma db push` instead, runs the seed and starts both apps.
+Log in at <http://localhost:3000/admin_panel> with `ADMIN_EMAIL` (default `admin@nakitgaraj.com`) and the `ADMIN_PASSWORD` you used for the seed. Without `npm run seed:demo` (or your own imported listings), the API answers every valuation with `INSUFFICIENT_DATA` ("not enough market data"), because the real listing data is not part of the repository. The wizard's result step does not display that answer yet (see [Status & roadmap](#status--roadmap)). On Windows, `run_project.bat` creates the database with `prisma db push` instead, runs the seed and starts both apps.
 
 ## Configuration
 
@@ -235,7 +248,9 @@ Done and verified: valuation wizard, pricing engine, consignment flow, admin pan
 Still in progress / known gaps:
 - **Market data:** real snapshots come from saved listing pages imported with local scripts (`backend/src/scripts`). That data is not in the repository; `seed:demo` generates synthetic data for trying the app.
 - **Listing sources:** the scraper cron and the Chrome extension read third-party listing sites (sahibinden.com, arabam.com). Their terms of use have to be checked before this runs in production. The extension is a prototype and posts to an import endpoint that the backend does not implement yet.
-- **Provider integrations:** the data-provider cards and API key field on the admin "API Ayarları" page are a UI mock-up; nothing is stored or called. The Telegram and market-sync settings on that page do work.
+- **Valuation wizard:** the result step only renders priced answers. `INSUFFICIENT_DATA` and `MANUAL_EVALUATION_REQUIRED` responses (the latter for every car valued under 400,000 TL) are not displayed yet. The paint map, chassis and damage flags are sent but not stored or priced; only the damage record (yes / no / unknown) changes the price.
+- **Provider integrations:** the data-provider cards and API key field on the admin "API Ayarları" page are a UI mock-up; nothing is stored or called. The Telegram settings on that page work. The market-sync switch and monthly rate work too, but the sync only scales the catalogue list prices (`originalMSRP`), which the pricing engine does not read. The margin fields on that page are saved but not used: offers come from the constants in `backend/src/evaluation/robust-pricing-calculator.ts`.
+- **Roles:** the seed creates ADMIN and CRM_MANAGER. A role that the panel creates on the fly (such as STAFF) starts without permissions, and there is no screen to grant them yet.
 - **White-label:** `frontend/src/config/site-config.ts` defines brand settings from `NEXT_PUBLIC_*` variables, but the UI does not use it yet (the footer contact details are hard-coded).
 - **Database:** SQLite only. `prisma/schema.prisma` hard-codes `file:./dev.db`, so `DATABASE_URL` and the Postgres container in `docker-compose.yml` are not used yet.
 - **Code quality:** ESLint reports existing errors in both packages, so CI does not run lint yet. `backend/src/scripts` contains many one-off data scripts from development.
@@ -273,8 +288,21 @@ Fiyatlar sabit bir amortisman formülünden değil, gerçek piyasa istatistikler
 - Fiyatlama motoru: emsal eşleştirici (`emsal-matcher.service.ts`), sağlam fiyat hesaplayıcı (`robust-pricing-calculator.ts`), kanonik ad normalleştirici; şüpheli ilanlar içe aktarma sırasında karantinaya alınır.
 - JWT kimlik doğrulama, rol ve izin guard'ları, istek doğrulama (class-validator, whitelist), girişte (dakikada 5) ve herkese açık formlarda istek sınırı.
 - Oluşturulan görsel kartla Telegram bildirimleri (`@napi-rs/canvas`).
-- Zamanlanmış görevler: aylık piyasa fiyatı senkronizasyonu ve ilan tarayıcı (Playwright, isteğe bağlı proxy'ler).
+- Zamanlanmış görevler: aylık katalog fiyatı senkronizasyonu ve fiyat tarayıcı (Playwright, isteğe bağlı proxy'ler). İkisi de katalog fiyatlarını günceller; tekliflerin hesaplandığı piyasa snapshot'larını değiştirmez.
 - Bellek içi yedeği olan isteğe bağlı Redis önbelleği.
+
+### Nasıl çalışır
+
+1. **Katalog.** Sihirbaz marka → model yılı → model → motor → paket seçimini `GET /vehicle-data` ile daraltır; bu uç nokta yalnızca hâlâ mümkün olan seçenekleri döndürür. Bir modelin seçilen yıl için henüz katalog kaydı yoksa, bu istek kayıtları oluşturur.
+2. **Piyasa snapshot'ları.** Çevrim dışı bir içe aktarma, kaydedilmiş ilan sayfalarını kanonik adlı ilanlara dönüştürür ve adını belirleyemediği ilanları karantinaya alır. Aykırı fiyatları IQR ile ayıklar ve her marka · model · versiyon · yıl için bir snapshot saklar (P5–P95, medyan kilometre, kilometre eğimi). Snapshot setinin tamamı tek bir transaction ile değiştirilir.
+3. **Eşleştirme.** `POST /vehicle-evaluation` en yakın snapshot'ı şu sırayla arar: tam spesifikasyon (en az 5 ilan), aynı versiyon ± 1 yıl (en az 5), aynı model ± 2 yıl (en az 3). Hiçbiri uymazsa yanıt `INSUFFICIENT_DATA` olur. Geniş seviyeler snapshot'ları birleştirir ve fiyatlarını istenen model yılına göre normalleştirir.
+4. **Fiyatlama.**
+   - Piyasa değeri: kilometreye ve beyan edilen hasara göre düzeltilmiş P50.
+   - Nakit teklif: piyasa değeri eksi segment rezervi ile düzeltilmiş P35'ten küçük olanı, aşağı yuvarlanmış hâli. 400.000 TL altında bunun yerine "manuel değerlendirme" yanıtı verilir.
+   - Konsinye: P60 civarında bir ilan fiyatı (ya da sınırlandırılmış olarak müşterinin istediği fiyat), %1,5 beklenen pazarlık, kademeli komisyon ve müşteriye kalan net tutar.
+5. **Talepler.** Fiyatlanan değerlemeler ve konsinye başvuruları yönetim panelindeki CRM için kaydedilir ve görsel kartla Telegram'a gönderilir. Admin rotaları JWT ister; rol ve izin kontrolleri sunucuda yapılır.
+
+Ayrıntılı anlatım **[docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md)** içindedir (İngilizce, sonunda Türkçe özet): diyagramlar, tüm formüller ve sabitler, veri modeli, güvenlik modeli, test sayıları ve bilinen eksikler.
 
 ### Ekran görüntüleri
 
@@ -284,7 +312,7 @@ Yönetim paneli özeti, değerleme listesi (CRM) ve mobil görünüm (390 × 844
 
 Yukarıdaki [Architecture](#architecture) ve [How a price is calculated](#how-a-price-is-calculated) diyagramları geçerlidir: Next.js sitesi ve yönetim paneli → NestJS REST API (`:3001`, `/api`; JWT ve rol/izin guard'ları, giriş ve formlarda istek sınırı) → fiyatlama motoru → Prisma → SQLite. Cron görevleri (aylık piyasa senkronizasyonu, ilan tarayıcı) ve içe aktarma betikleri de veritabanına yazar; bildirimler Telegram Bot API'ye gider, Redis önbelleği isteğe bağlıdır.
 
-2. ve 3. seviye eşleşmeler birkaç snapshot'ı birleştirir ve istenen model yılına göre normalleştirir (yıllık fiyat değişimi yeterli snapshot varsa onlardan öğrenilir, yoksa %8 kullanılır). Fiyatı 400.000 TL'nin altında olup nakit teklifi piyasa değerinin %85'inin altında kalacak araçlara otomatik teklif yerine "manuel değerlendirme" yanıtı verilir.
+2. ve 3. seviye eşleşmeler birkaç snapshot'ı birleştirir ve istenen model yılına göre normalleştirir (yıllık fiyat değişimi yeterli snapshot varsa onlardan öğrenilir, yoksa %8 kullanılır). Fiyatı 400.000 TL'nin altında olup nakit teklifi piyasa değerinin %85'inin altında kalacak araçlara otomatik teklif yerine "manuel değerlendirme" yanıtı verilir. 65.000 TL'lik asgari rezerv nedeniyle bu, değeri 400.000 TL'nin altındaki her araç için geçerlidir.
 
 ### Teknolojiler
 
@@ -347,7 +375,7 @@ npm ci
 npm run dev                       # http://localhost:3000
 ```
 
-<http://localhost:3000/admin_panel> adresinden `ADMIN_EMAIL` (varsayılan `admin@nakitgaraj.com`) ve seed sırasında kullandığınız `ADMIN_PASSWORD` ile giriş yapın. Gerçek ilan verisi depoda olmadığından `npm run seed:demo` (veya kendi içe aktardığınız ilanlar) olmadan değerlemeler "yeterli piyasa verisi yok" yanıtı verir. Windows'ta `run_project.bat` veritabanını bunun yerine `prisma db push` ile oluşturur, seed'i çalıştırır ve iki uygulamayı başlatır.
+<http://localhost:3000/admin_panel> adresinden `ADMIN_EMAIL` (varsayılan `admin@nakitgaraj.com`) ve seed sırasında kullandığınız `ADMIN_PASSWORD` ile giriş yapın. Gerçek ilan verisi depoda olmadığından `npm run seed:demo` (veya kendi içe aktardığınız ilanlar) olmadan API her değerlemeye `INSUFFICIENT_DATA` ("yeterli piyasa verisi yok") yanıtı verir. Sihirbazın sonuç ekranı bu yanıtı henüz gösteremiyor (bkz. *Durum ve yol haritası*). Windows'ta `run_project.bat` veritabanını bunun yerine `prisma db push` ile oluşturur, seed'i çalıştırır ve iki uygulamayı başlatır.
 
 ### Yapılandırma
 
@@ -406,7 +434,9 @@ Tamamlanan ve doğrulanan: değerleme sihirbazı, fiyatlama motoru, konsinye ak�
 Devam eden işler / bilinen eksikler:
 - **Piyasa verisi:** gerçek snapshot'lar, yerel betiklerle (`backend/src/scripts`) içe aktarılan kayıtlı ilan sayfalarından üretilir. Bu veri depoda yoktur; `seed:demo` uygulamayı denemek için sentetik veri üretir.
 - **İlan kaynakları:** tarayıcı (cron) ve Chrome eklentisi üçüncü taraf ilan sitelerini (sahibinden.com, arabam.com) okur. Bu çalışma production'a alınmadan önce sitelerin kullanım koşulları kontrol edilmelidir. Eklenti prototiptir ve backend'in henüz sunmadığı bir içe aktarma adresine istek atar.
-- **Sağlayıcı entegrasyonları:** yönetim panelindeki "API Ayarları" sayfasında yer alan veri sağlayıcı kartları ve API anahtarı alanı yalnızca arayüz taslağıdır; hiçbir şey kaydedilmez veya çağrılmaz. Aynı sayfadaki Telegram ve piyasa senkronizasyonu ayarları çalışır.
+- **Değerleme sihirbazı:** sonuç ekranı yalnızca fiyatlanmış yanıtları gösterir. `INSUFFICIENT_DATA` ve `MANUAL_EVALUATION_REQUIRED` yanıtları (ikincisi değeri 400.000 TL'nin altındaki her araç için) henüz gösterilmiyor. Boya şeması, şasi ve hasar işaretleri gönderilir ama kaydedilmez ve fiyata yansımaz; fiyatı yalnızca hasar kaydı (var / yok / bilinmiyor) değiştirir.
+- **Sağlayıcı entegrasyonları:** yönetim panelindeki "API Ayarları" sayfasında yer alan veri sağlayıcı kartları ve API anahtarı alanı yalnızca arayüz taslağıdır; hiçbir şey kaydedilmez veya çağrılmaz. Aynı sayfadaki Telegram ayarları çalışır. Piyasa senkronizasyonunun aç/kapa ayarı ve aylık oranı da çalışır, ancak senkronizasyon yalnızca katalog liste fiyatlarını (`originalMSRP`) ölçekler; fiyatlama motoru bu değeri okumaz. Aynı sayfadaki kâr marjı alanları kaydedilir ama kullanılmaz: teklifler `backend/src/evaluation/robust-pricing-calculator.ts` içindeki sabitlerden hesaplanır.
+- **Roller:** seed, ADMIN ve CRM_MANAGER rollerini oluşturur. Panelin anında oluşturduğu bir rol (örneğin STAFF) izinsiz başlar ve izin vermek için henüz bir ekran yoktur.
 - **Beyaz etiket:** `frontend/src/config/site-config.ts` marka ayarlarını `NEXT_PUBLIC_*` değişkenlerinden tanımlar, ancak arayüz henüz bunu kullanmıyor (alt bilgideki iletişim bilgileri sabit yazılmıştır).
 - **Veritabanı:** yalnızca SQLite. `prisma/schema.prisma` içinde `file:./dev.db` sabit yazılı olduğundan `DATABASE_URL` ve `docker-compose.yml` içindeki Postgres container'ı henüz kullanılmıyor.
 - **Kod kalitesi:** iki pakette de mevcut ESLint hataları var, bu yüzden CI henüz lint çalıştırmıyor. `backend/src/scripts` geliştirme sürecinden kalma çok sayıda tek seferlik veri betiği içerir.
