@@ -53,7 +53,7 @@ cp .env.example .env           # Ardından .env içinde JWT_SECRET ve ADMIN_PASS
                                # depo geçmişinde görünen eski JWT anahtarlarıyla hiçbir ortamda başlamaz.
                                # ADMIN_PASSWORD yoksa seed hata verir.
                                # CORS_ORIGIN boşsa production'da başka sitelerden gelen (cross-origin) tarayıcı
-                               # istekleri reddedilir; site API'ye aynı alan adından (Nginx /api) ulaştığı için
+                               # isteklerine CORS başlığı gönderilmez (tarayıcı yanıtı okutmaz); site API'ye aynı alan adından (Nginx /api) ulaştığı için
                                # bu yeterlidir. API'yi başka bir alan adı çağıracaksa virgülle ayırarak yazın,
                                # örn. CORS_ORIGIN=https://tasit.nakitgaraj.com
                                # NODE_ENV=production değerini PM2 (ecosystem.config.js) verir.
@@ -111,6 +111,8 @@ pm2 status                       # Birkaç saniye sonra nakitgaraj-backend "onli
 ```
 
 `pm2 save`, kayıtlı süreç listesini (`~/.pm2/dump.pm2`) yeni ortamla günceller; atlanırsa sunucu yeniden açıldığında `pm2 resurrect` eski `JWT_SECRET` değerini geri getirir. Bu adımlar eski dosyadaki `CORS_ORIGIN: 'http://localhost:3000'` değerini de PM2 ortamından kaldırır. Anahtar değiştiği için açık admin oturumları kapanır; yeniden giriş yapın.
+
+Frontend'i de yeniden derleyin (`cd frontend && npm ci && NEXT_PUBLIC_API_URL=/api npm run build`, ardından `pm2 restart nakitgaraj-frontend`). Next.js güvenlik güncellemesi ancak bu derlemeyle yayına girer. Eski derlemeler API'yi `http://<alan adı>:3001/api` adresinden çağırır; `CORS_ORIGIN` boşken production backend'i bu çağrılara CORS başlığı göndermez ve tarayıcı yanıtları engeller.
 
 ---
 
@@ -174,7 +176,7 @@ sudo certbot --nginx -d tasit.nakitgaraj.com # Domaininizi yazın
 *   `backend/.env` dosyasını asla Git'e eklemeyin; `JWT_SECRET` için rastgele bir değer kullanın (`openssl rand -hex 32`).
 *   Daha önce `Admin123!` / `ChangeMe123!` gibi varsayılan şifrelerle kurulum yaptıysanız admin şifresini panelden (Çalışanlar & Yetki) veya `ADMIN_PASSWORD` ile `npx prisma db seed` çalıştırarak değiştirin.
 *   Eski sürümlerde `ecosystem.config.js` içinde sabit bir `JWT_SECRET`, auth modülünde de yedek bir değer vardı; ikisi de depo geçmişinde herkese açık. Backend artık bu iki değerden biriyle başlamaz ("Rotate your JWT_SECRET" hatası verir). Sunucunuzda hâlâ biri varsa `openssl rand -hex 32` ile yeni bir değer üretip `backend/.env` içine yazın ve backend'i PM2'de silip yeniden başlatın (`pm2 restart` yetmez, çünkü PM2 eski değeri saklar ve bu değer `backend/.env` içindekinin önüne geçer). Adımlar 4. bölümdeki "Eski Bir Kurulumu Güncelleme" başlığında (tüm oturumlar kapanır).
-*   `CORS_ORIGIN` boşken production'da API başka sitelerden gelen tarayıcı isteklerine cevap vermez; yalnızca gerçekten gereken alan adlarını yazın.
+*   `CORS_ORIGIN` boşken production'da API, başka sitelerden gelen tarayıcı isteklerine CORS başlığı göndermez: tarayıcı bu yanıtları okutmaz ve JSON gönderen (ön kontrollü) istekleri engeller. CORS bir sunucu güvenlik duvarı değildir; yetki kontrolü yine JWT ve rollerle yapılır. `CORS_ORIGIN`'e yalnızca gerçekten gereken alan adlarını yazın.
 *   Port 3001'i dış dünyaya açmanız gerekmez; API'ye Nginx `/api` üzerinden erişilir.
 
 Artık siteniz HTTPS protokollü, veri tabanı arkada güvenle çalışan ve PM2 ile 7/24 kapanmadan çalışan profesyonel bir canlı sunucu ortamına taşınmış durumdadır!
