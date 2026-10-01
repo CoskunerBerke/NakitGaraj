@@ -162,7 +162,7 @@ cd NakitGaraj/backend
 npm ci
 cp .env.example .env              # then set JWT_SECRET (e.g. openssl rand -hex 32)
 npx prisma generate
-npx prisma db push                # creates prisma/dev.db (SQLite)
+npx prisma migrate deploy         # creates prisma/dev.db (SQLite) from the migrations
 ADMIN_PASSWORD='choose-a-password' npx prisma db seed   # catalogue, roles, admin user
 npm run seed:demo                 # optional: synthetic market data so valuations return prices
 npm run start:dev                 # http://localhost:3001/api
@@ -176,7 +176,7 @@ npm ci
 npm run dev                       # http://localhost:3000
 ```
 
-Log in at <http://localhost:3000/admin_panel> with `ADMIN_EMAIL` (default `admin@nakitgaraj.com`) and the `ADMIN_PASSWORD` you used for the seed. Without `npm run seed:demo` (or your own imported listings), valuations answer "not enough market data", because the real listing data is not part of the repository. On Windows, `run_project.bat` runs `db push` + seed and starts both apps.
+Log in at <http://localhost:3000/admin_panel> with `ADMIN_EMAIL` (default `admin@nakitgaraj.com`) and the `ADMIN_PASSWORD` you used for the seed. Without `npm run seed:demo` (or your own imported listings), valuations answer "not enough market data", because the real listing data is not part of the repository. On Windows, `run_project.bat` creates the database with `prisma db push` instead, runs the seed and starts both apps.
 
 ## Configuration
 
@@ -200,13 +200,15 @@ Backend variables go in `backend/.env` (template: [`backend/.env.example`](backe
 
 ```bash
 cd backend
-npx prisma migrate deploy   # tests use a migrated database (prisma/dev.db)
-npm test                    # 9 suites: 34 passed, 2 skipped
-npm run test:e2e            # 4 suites: 17 passed
+npx prisma migrate deploy   # no-op if you followed the quick start
+npm test                    # 9 suites: 35 passed, 2 skipped
+npm run test:e2e            # 4 suites: 83 passed
 ```
 
+The tests use `prisma/dev.db`. If that database was created with `prisma db push` (for example by `run_project.bat`), skip `migrate deploy`: Prisma refuses to apply migrations to a schema it did not create (error P3005), and the tests run on that database as they are.
+
 - **Unit tests:** pricing calculator, comparable matching, name normaliser, env validation, consignment/admin/vehicle services and Telegram message escaping. Two pricing regression tests need the scraped market database and only run with `PRICING_REAL_DATA_TESTS=1`.
-- **e2e tests** (Supertest against the real Nest app) cover authorization of every sensitive admin route (401 without a token, 403 for the wrong role), the login rate limit and the admin JSON import.
+- **e2e tests** (Supertest against the real Nest app) check all 23 admin routes: 401 without a token and with a token signed by another secret, 403 for a role without permissions, and 403 on the 7 ADMIN-only routes (user management, Telegram settings) for a role that has every permission but is not ADMIN. A test fails when a new admin route is missing from that list. Other e2e tests cover the login rate limit and the admin JSON import.
 - **CI** ([`ci.yml`](.github/workflows/ci.yml)) runs on every push and pull request. Backend: typecheck, migrations, unit and e2e tests, seed + demo-seed smoke test, build. Frontend: typecheck, production build.
 
 ## Deployment
@@ -273,7 +275,7 @@ cd NakitGaraj/backend
 npm ci
 cp .env.example .env              # ardından JWT_SECRET girin (örn. openssl rand -hex 32)
 npx prisma generate
-npx prisma db push                # prisma/dev.db (SQLite) oluşturulur
+npx prisma migrate deploy         # prisma/dev.db (SQLite) migration'lardan oluşturulur
 ADMIN_PASSWORD='bir-sifre-secin' npx prisma db seed    # katalog, roller, admin kullanıcı
 npm run seed:demo                 # isteğe bağlı: değerlemelerin fiyat döndürmesi için sentetik piyasa verisi
 npm run start:dev                 # http://localhost:3001/api
@@ -284,7 +286,7 @@ npm ci
 npm run dev                       # http://localhost:3000
 ```
 
-Yönetim paneli: <http://localhost:3000/admin_panel>. Giriş için `ADMIN_EMAIL` (varsayılan `admin@nakitgaraj.com`) ve seed sırasında kullandığınız `ADMIN_PASSWORD` gerekir. Gerçek ilan verisi depoda olmadığından `seed:demo` (veya kendi içe aktardığınız ilanlar) olmadan değerlemeler "yeterli piyasa verisi yok" yanıtı verir. Windows'ta `run_project.bat` veritabanını hazırlayıp iki uygulamayı başlatır.
+Yönetim paneli: <http://localhost:3000/admin_panel>. Giriş için `ADMIN_EMAIL` (varsayılan `admin@nakitgaraj.com`) ve seed sırasında kullandığınız `ADMIN_PASSWORD` gerekir. Gerçek ilan verisi depoda olmadığından `seed:demo` (veya kendi içe aktardığınız ilanlar) olmadan değerlemeler "yeterli piyasa verisi yok" yanıtı verir. Windows'ta `run_project.bat` veritabanını `prisma db push` ile hazırlar, seed'i çalıştırır ve iki uygulamayı başlatır.
 
 ### Yapılandırma
 
@@ -297,12 +299,14 @@ Değişkenlerin tam listesi yukarıdaki [Configuration](#configuration) tablosun
 
 ```bash
 cd backend
-npx prisma migrate deploy
-npm test            # 9 test dosyası: 34 geçti, 2 atlandı
-npm run test:e2e    # 4 test dosyası: 17 geçti
+npx prisma migrate deploy   # kurulum adımlarını izlediyseniz bir şey yapmaz
+npm test                    # 9 test dosyası: 35 geçti, 2 atlandı
+npm run test:e2e            # 4 test dosyası: 83 geçti
 ```
 
-Birim testleri fiyatlama motorunu, emsal eşleştirmeyi, ortam değişkeni doğrulamasını, servisleri ve Telegram mesajlarındaki kaçış işlemini kapsar. e2e testleri her hassas admin rotasının yetkilendirmesini (token yoksa 401, yanlış rolde 403), giriş sınırını ve JSON veri aktarımını doğrular. Kazınmış piyasa verisi gerektiren 2 test yalnızca `PRICING_REAL_DATA_TESTS=1` ile çalışır. GitHub Actions her push ve pull request'te tip kontrolü, testler, seed denemesi ve iki uygulamanın derlemesini çalıştırır.
+Testler `prisma/dev.db` veritabanını kullanır. Veritabanı `prisma db push` ile oluşturulduysa (örneğin `run_project.bat` ile) `migrate deploy` adımını atlayın: Prisma kendi oluşturmadığı bir şemaya migration uygulamaz (P3005 hatası); testler o veritabanında da çalışır.
+
+Birim testleri fiyatlama motorunu, emsal eşleştirmeyi, ortam değişkeni doğrulamasını, servisleri ve Telegram mesajlarındaki kaçış işlemini kapsar. e2e testleri 23 admin rotasının tamamını dener: token yokken ve başka bir anahtarla imzalanmış token'da 401, izni olmayan rolde 403; yalnızca ADMIN'e açık 7 rotada (çalışan yönetimi, Telegram ayarları) tüm izinlere sahip ama ADMIN olmayan rolde 403. Yeni bir admin rotası bu listeye eklenmezse test başarısız olur. Diğer e2e testleri giriş sınırını ve JSON veri aktarımını doğrular. Kazınmış piyasa verisi gerektiren 2 test yalnızca `PRICING_REAL_DATA_TESTS=1` ile çalışır. GitHub Actions her push ve pull request'te tip kontrolü, testler, seed denemesi ve iki uygulamanın derlemesini çalıştırır.
 
 ### Sunucuya kurulum
 

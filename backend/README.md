@@ -8,12 +8,12 @@ See the [main README](../README.md) for the architecture, configuration and depl
 ```bash
 npm ci
 cp .env.example .env            # set JWT_SECRET (openssl rand -hex 32)
-npx prisma migrate deploy       # or: npx prisma db push
+npx prisma migrate deploy       # creates prisma/dev.db (or prisma db push, but do not mix the two)
 ADMIN_PASSWORD='choose-one' npx prisma db seed   # catalogue, roles, admin user
 npm run seed:demo               # optional: synthetic demo market data (not in production)
 npm run start:dev               # http://localhost:3001/api
 
-npm test                        # unit tests (need a migrated database)
+npm test                        # unit tests (use prisma/dev.db)
 npm run test:e2e                # e2e tests (HTTP, auth, rate limit, import)
 npm run build && npm run start:prod
 ```
