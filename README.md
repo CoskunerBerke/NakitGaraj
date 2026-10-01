@@ -69,7 +69,7 @@ Prices come from real market statistics instead of a fixed depreciation formula.
    - Consignment: a listing price near P60 (or the seller's desired price, capped), 1.5 % expected negotiation, a tiered commission and the seller's net payout.
 5. **Leads.** Priced valuations and consignment applications are stored for the admin CRM and sent to Telegram as an image card. Admin routes need a JWT and pass role and permission guards on the server.
 
-The full walkthrough is in **[docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md)**: diagrams, every formula and constant, the data model, the security model, test counts and known gaps.
+The full walkthrough is in **[docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md)**: diagrams, every formula and constant with a worked example, the public API with its response shapes, the data model, the security model with a route → permission table, test counts and known gaps.
 
 ## Screenshots
 
@@ -236,7 +236,7 @@ The tests use `prisma/dev.db`. If that database was created with `prisma db push
 
 - No secrets in the current files. The backend has no fallback JWT secret and refuses placeholder secrets in production. Two JWT secrets from earlier versions are still visible in the git history; the backend refuses both in every environment, so a server that still uses one has to rotate it. A server first started with an older `ecosystem.config.js` keeps that secret in its PM2 environment, which overrides `backend/.env` and survives `pm2 restart`; [DEPLOYMENT.md](DEPLOYMENT.md) gives the commands that recreate the PM2 process. The seed has no default admin password.
 - CORS fails closed in production: without `CORS_ORIGIN` the API answers no cross-origin browser requests.
-- Admin routes need a valid JWT and are checked on the server: user management and Telegram settings are ADMIN-only; pricing, import and market sync need `manage_vehicles`.
+- Admin routes need a valid JWT and are checked on the server: user management and Telegram settings are ADMIN-only; catalogue prices, import, scraper, market sync and vehicle-request status changes need `manage_vehicles`; the consignment CRM needs `manage_consignments`. The full route → permission table is in [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md#admin-routes-and-their-guards).
 - Login is limited to 5 attempts per minute per IP. Public form submissions are rate-limited.
 - Public responses do not include other customers' data. Customer input is escaped in Telegram HTML messages.
 - Report security issues privately to the maintainer instead of opening a public issue.
@@ -246,8 +246,9 @@ The tests use `prisma/dev.db`. If that database was created with `prisma db push
 Done and verified: valuation wizard, pricing engine, consignment flow, admin panel/CRM, roles and permissions, Telegram notifications, CI.
 
 Still in progress / known gaps:
-- **Market data:** real snapshots come from saved listing pages imported with local scripts (`backend/src/scripts`). That data is not in the repository; `seed:demo` generates synthetic data for trying the app.
+- **Market data:** real snapshots come from saved listing pages imported with local scripts (`backend/src/scripts`). That data is not in the repository; `seed:demo` generates synthetic data for trying the app. The synthetic prices differ on every fresh database, and the listing import does not filter by source, so demo listings created before an import end up in its snapshots.
 - **Listing sources:** the scraper cron and the Chrome extension read third-party listing sites (sahibinden.com, arabam.com). Their terms of use have to be checked before this runs in production. The extension is a prototype and posts to an import endpoint that the backend does not implement yet.
+- **Pricing engine:** snapshots built from two or three listings take their percentiles from unsorted prices, and Level 2 and 3 matches take the reference mileage from a single merged snapshot instead of a weighted value. The snapshot lookups have no index yet.
 - **Valuation wizard:** the result step only renders priced answers. `INSUFFICIENT_DATA` and `MANUAL_EVALUATION_REQUIRED` responses (the latter for every car valued under 400,000 TL) are not displayed yet. The paint map, chassis and damage flags are sent but not stored or priced; only the damage record (yes / no / unknown) changes the price.
 - **Provider integrations:** the data-provider cards and API key field on the admin "API Ayarları" page are a UI mock-up; nothing is stored or called. The Telegram settings on that page work. The market-sync switch and monthly rate work too, but the sync only scales the catalogue list prices (`originalMSRP`), which the pricing engine does not read. The margin fields on that page are saved but not used: offers come from the constants in `backend/src/evaluation/robust-pricing-calculator.ts`.
 - **Roles:** the seed creates ADMIN and CRM_MANAGER. A role that the panel creates on the fly (such as STAFF) starts without permissions, and there is no screen to grant them yet.
@@ -302,7 +303,7 @@ Fiyatlar sabit bir amortisman formülünden değil, gerçek piyasa istatistikler
    - Konsinye: P60 civarında bir ilan fiyatı (ya da sınırlandırılmış olarak müşterinin istediği fiyat), %1,5 beklenen pazarlık, kademeli komisyon ve müşteriye kalan net tutar.
 5. **Talepler.** Fiyatlanan değerlemeler ve konsinye başvuruları yönetim panelindeki CRM için kaydedilir ve görsel kartla Telegram'a gönderilir. Admin rotaları JWT ister; rol ve izin kontrolleri sunucuda yapılır.
 
-Ayrıntılı anlatım **[docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md)** içindedir (İngilizce, sonunda Türkçe özet): diyagramlar, tüm formüller ve sabitler, veri modeli, güvenlik modeli, test sayıları ve bilinen eksikler.
+Ayrıntılı anlatım **[docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md)** içindedir (İngilizce, sonunda Türkçe özet): diyagramlar, örnek hesapla birlikte tüm formüller ve sabitler, yanıt biçimleriyle herkese açık API, veri modeli, rota → izin tablosuyla güvenlik modeli, test sayıları ve bilinen eksikler.
 
 ### Ekran görüntüleri
 
@@ -422,7 +423,7 @@ Testler `prisma/dev.db` veritabanını kullanır. Veritabanı `prisma db push` i
 
 - Mevcut dosyalarda gizli anahtar yok. Backend'de yedek JWT anahtarı bulunmaz ve production'da örnek anahtarlar reddedilir. Önceki sürümlerden iki JWT anahtarı git geçmişinde hâlâ görünür; backend ikisini de her ortamda reddeder, bu yüzden hâlâ birini kullanan bir sunucu anahtarını değiştirmek zorundadır. Eski bir `ecosystem.config.js` ile başlatılmış bir sunucuda bu anahtar PM2 ortamında kalır, `backend/.env` içindeki değerin önüne geçer ve `pm2 restart` sonrasında da korunur; PM2 sürecini yeniden oluşturan komutlar [DEPLOYMENT.md](DEPLOYMENT.md) içinde. Seed'in varsayılan admin şifresi yoktur.
 - Production'da CORS kapalı başlar: `CORS_ORIGIN` yoksa API hiçbir cross-origin tarayıcı isteğine yanıt vermez.
-- Admin rotaları geçerli bir JWT ister ve sunucuda kontrol edilir: çalışan yönetimi ve Telegram ayarları yalnızca ADMIN'e açıktır; fiyat, aktarım ve piyasa senkronizasyonu `manage_vehicles` izni ister.
+- Admin rotaları geçerli bir JWT ister ve sunucuda kontrol edilir: çalışan yönetimi ve Telegram ayarları yalnızca ADMIN'e açıktır; katalog fiyatları, aktarım, fiyat tarayıcı, piyasa senkronizasyonu ve araç talebi durum değişikliği `manage_vehicles`, konsinye CRM'i `manage_consignments` izni ister. Rota → izin tablosunun tamamı [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md#admin-routes-and-their-guards) içindedir.
 - Giriş denemeleri IP başına dakikada 5 ile sınırlıdır. Herkese açık form gönderimlerinde de istek sınırı vardır.
 - Herkese açık yanıtlar başka müşterilerin verisini içermez. Müşteri girdileri Telegram HTML mesajlarında kaçışlanır (escape).
 - Güvenlik açıklarını herkese açık bir issue açmak yerine doğrudan proje sahibine bildirin.
@@ -432,8 +433,9 @@ Testler `prisma/dev.db` veritabanını kullanır. Veritabanı `prisma db push` i
 Tamamlanan ve doğrulanan: değerleme sihirbazı, fiyatlama motoru, konsinye akışı, yönetim paneli/CRM, roller ve izinler, Telegram bildirimleri, CI.
 
 Devam eden işler / bilinen eksikler:
-- **Piyasa verisi:** gerçek snapshot'lar, yerel betiklerle (`backend/src/scripts`) içe aktarılan kayıtlı ilan sayfalarından üretilir. Bu veri depoda yoktur; `seed:demo` uygulamayı denemek için sentetik veri üretir.
+- **Piyasa verisi:** gerçek snapshot'lar, yerel betiklerle (`backend/src/scripts`) içe aktarılan kayıtlı ilan sayfalarından üretilir. Bu veri depoda yoktur; `seed:demo` uygulamayı denemek için sentetik veri üretir. Sentetik fiyatlar her yeni veritabanında farklı çıkar; ilan aktarımı kaynağa göre süzmediği için aktarımdan önce eklenmiş demo ilanları onun snapshot'larına karışır.
 - **İlan kaynakları:** tarayıcı (cron) ve Chrome eklentisi üçüncü taraf ilan sitelerini (sahibinden.com, arabam.com) okur. Bu çalışma production'a alınmadan önce sitelerin kullanım koşulları kontrol edilmelidir. Eklenti prototiptir ve backend'in henüz sunmadığı bir içe aktarma adresine istek atar.
+- **Fiyatlama motoru:** iki veya üç ilandan üretilen snapshot'lar yüzdeliklerini sıralanmamış fiyatlardan alır; Seviye 2 ve 3 eşleşmeleri referans kilometreyi ağırlıklı bir değer yerine birleştirilen snapshot'lardan yalnızca birinden alır. Snapshot sorguları için henüz indeks yok.
 - **Değerleme sihirbazı:** sonuç ekranı yalnızca fiyatlanmış yanıtları gösterir. `INSUFFICIENT_DATA` ve `MANUAL_EVALUATION_REQUIRED` yanıtları (ikincisi değeri 400.000 TL'nin altındaki her araç için) henüz gösterilmiyor. Boya şeması, şasi ve hasar işaretleri gönderilir ama kaydedilmez ve fiyata yansımaz; fiyatı yalnızca hasar kaydı (var / yok / bilinmiyor) değiştirir.
 - **Sağlayıcı entegrasyonları:** yönetim panelindeki "API Ayarları" sayfasında yer alan veri sağlayıcı kartları ve API anahtarı alanı yalnızca arayüz taslağıdır; hiçbir şey kaydedilmez veya çağrılmaz. Aynı sayfadaki Telegram ayarları çalışır. Piyasa senkronizasyonunun aç/kapa ayarı ve aylık oranı da çalışır, ancak senkronizasyon yalnızca katalog liste fiyatlarını (`originalMSRP`) ölçekler; fiyatlama motoru bu değeri okumaz. Aynı sayfadaki kâr marjı alanları kaydedilir ama kullanılmaz: teklifler `backend/src/evaluation/robust-pricing-calculator.ts` içindeki sabitlerden hesaplanır.
 - **Roller:** seed, ADMIN ve CRM_MANAGER rollerini oluşturur. Panelin anında oluşturduğu bir rol (örneğin STAFF) izinsiz başlar ve izin vermek için henüz bir ekran yoktur.
