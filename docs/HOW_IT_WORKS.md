@@ -7,17 +7,18 @@ Contents:
 1. [What it is and what it is not](#what-it-is-and-what-it-is-not)
 2. [Architecture](#architecture)
 3. [Runtime flows](#runtime-flows)
-4. [Data model](#data-model)
-5. [Where the data comes from](#where-the-data-comes-from)
-6. [Pricing engine in depth](#pricing-engine-in-depth)
-7. [Security model](#security-model)
-8. [Notifications and scheduled jobs](#notifications-and-scheduled-jobs)
-9. [Design decisions and trade-offs](#design-decisions-and-trade-offs)
-10. [Testing strategy](#testing-strategy)
-11. [Limitations, known gaps and next steps](#limitations-known-gaps-and-next-steps)
-12. [Code tour](#code-tour)
-13. [Glossary](#glossary)
-14. [Türkçe özet](#türkçe-özet)
+4. [Public API reference](#public-api-reference)
+5. [Data model](#data-model)
+6. [Where the data comes from](#where-the-data-comes-from)
+7. [Pricing engine in depth](#pricing-engine-in-depth)
+8. [Security model](#security-model)
+9. [Notifications and scheduled jobs](#notifications-and-scheduled-jobs)
+10. [Design decisions and trade-offs](#design-decisions-and-trade-offs)
+11. [Testing strategy](#testing-strategy)
+12. [Limitations, known gaps and next steps](#limitations-known-gaps-and-next-steps)
+13. [Code tour](#code-tour)
+14. [Glossary](#glossary)
+15. [Türkçe özet](#türkçe-özet)
 
 ---
 
@@ -152,7 +153,7 @@ What the code does on each branch ([`evaluation.service.ts` `evaluateVehicle`](.
 - **Spec lookup.** It looks for a `VehicleSpecification` with all the selected ids. If none matches and a variant was given, it retries with year, brand, model and variant only. If there is still no spec, the answer is `404`.
 - **Damage penalty.** It comes only from `damageStatus`: `YES` = 8 %, `NO` = 0 %, anything else = 4 %.
 - **Stored only when priced.** Only a priced answer is written to `VehicleEvaluation` and sent to Telegram. `INSUFFICIENT_DATA` and `MANUAL_EVALUATION_REQUIRED` answers are returned to the browser and not persisted.
-- **Comparable listings.** For a priced answer, the response includes up to five `RawVehicleListing` rows whose ids are stored in the matched snapshot's `snapshotDataJson.uniqueListingIds`.
+- **Comparable listings.** For a priced answer, the response includes the `RawVehicleListing` rows named by the first five source listing ids in `snapshotDataJson.uniqueListingIds` of the snapshot the matcher reports (in Levels 2 and 3, the merged snapshot with the most listings).
 - **What is not used.** The wizard also sends the paint map, chassis state, vehicle status and damage-record (Tramer) amount. The DTO accepts these fields, but the service neither stores nor prices them. Only `features` (the equipment checklist, as JSON) is saved. The wizard's "estimated value decrease" percentage (`calculateEstimatedDamagePenalty`) is computed and shown in the browser only.
 
 ### 2. Consignment application
@@ -169,9 +170,14 @@ sequenceDiagram
   B->>S: POST /consignment (throttled)
   alt evaluationId given (came from the result page)
     Note over S: link to that valuation
-  else full spec ids given and no evaluationId
+  else no evaluationId, year and six spec ids given
     S->>E: evaluateVehicle(damage UNKNOWN, desired price 0, placeholder plate)
-    E-->>S: evaluationId (only if the valuation was priced)
+    alt no catalogue spec for the ids
+      E-->>S: NotFoundException
+      S-->>B: 404, application not saved
+    else spec found
+      E-->>S: evaluationId only if the valuation was priced
+    end
   end
   S->>D: create ConsignmentApplication (status PENDING)
   alt valuation already has an application
@@ -184,7 +190,8 @@ sequenceDiagram
 
 Key points ([`consignment.service.ts` `createConsignment`](../backend/src/consignment/consignment.service.ts)):
 
-- **Two entry points.** From a valuation result, the form opens as `/konsinye?evaluationId=...`, loads `GET /vehicle-evaluation/:id` and sends that id. Opened on its own, the form asks for the vehicle. If the variant, body, fuel and transmission ids are all present, the service runs a valuation itself, with damage `UNKNOWN`, desired price `0`, default mileage 100,000 and default colour if those are missing, and a placeholder plate. That valuation sends its own notification. The service links the result only if the valuation was priced.
+- **Two entry points.** From a valuation result, the form opens as `/konsinye?evaluationId=...`, loads `GET /vehicle-evaluation/:id` and sends that id. Opened on its own, the form asks for the vehicle. If the year and the make, model, variant, body, fuel and transmission ids are all present, the service runs a valuation itself, with damage `UNKNOWN`, desired price `0`, default mileage 100,000 and default colour if those are missing, and a placeholder plate. A priced valuation is stored like any other (with the applicant's name and phone) and sends its own Telegram notification, so the team gets two messages for one application. If any of these seven fields is missing, no valuation runs and the application is saved without a link.
+- **Outcome of the on-the-fly valuation.** Priced: the application is linked to the new valuation. `INSUFFICIENT_DATA` or `MANUAL_EVALUATION_REQUIRED`: the application is saved without a link. No catalogue spec for the ids: `evaluateVehicle` throws `NotFoundException`, `createConsignment` does not catch it, so the request ends with 404 and **the application is not saved**; the form shows the error message in an alert. The form's own cascading selects only offer ids of existing specs, so this path is reached by direct API calls or stale ids rather than by normal use.
 - **One application per valuation.** `ConsignmentApplication.vehicleEvaluationId` is unique, so a second application for the same valuation is answered with 409.
 - **No data leak through a guessed id.** `vehicleEvaluationId` comes from the caller. The response therefore strips the linked valuation, so a caller cannot read another customer's name, phone or plate through it.
 - **Structured notes.** The form puts the paint map, equipment and vehicle-status answers into `notes` as JSON. `formatConsignmentNotes` in the Telegram service parses that JSON back into readable lines.
@@ -241,6 +248,47 @@ This runs on the operator's machine with `npx ts-node src/scripts/ingest_all_des
 
 ---
 
+## Public API reference
+
+All paths are under the global `/api` prefix. The public request bodies are DTO classes checked by the global `ValidationPipe`, so an unknown body field is a 400. The admin routes are listed in [Admin routes and their guards](#admin-routes-and-their-guards).
+
+| Route | Guard | Request | Response |
+|---|---|---|---|
+| `GET /` | none | none | The string `Hello World!` (smoke test). |
+| `GET /years` | none | none | Model years as numbers, from the current year down to 2000. |
+| `GET /brands` | none | none | `Manufacturer` rows sorted by name. If `LISTING_ARCHIVE_DIR` points at an existing folder with sub-folders, only the brands named by those sub-folders. |
+| `GET /models?brandId=` | none | brand id | `Model` rows of that brand. |
+| `GET /variants?modelId=` | none | model id | `Variant` rows, cached for one hour (Redis or memory). |
+| `GET /vehicle-data` | none | `year`, `manufacturerId`, `modelId`, optional `variantId`, `packageId`, `bodyTypeId`, `fuelTypeId` (`transmissionTypeId` is accepted but filters nothing) | `{ variants, packages, bodyTypes, fuelTypes, transmissionTypes, autoPopulate }`. Each list holds the options that the earlier choices still allow; `autoPopulate` has the id of every list with exactly one entry, otherwise `null`. 400 for a year outside 2000 to the current year or a missing id. May create catalogue rows (see [Sources](#sources)). |
+| `POST /vehicle-requests` | throttle | `brand`, `model`, optional `year`, `note`, `phone`, `email` | The created `VehicleRequest` row. |
+| `POST /vehicle-evaluation` | throttle | [`CreateEvaluationDto`](../backend/src/evaluation/dto/create-evaluation.dto.ts): `year`, `manufacturerId`, `modelId`, optional spec ids, `mileage` (≥ 0), `color`, `damageStatus`, `licensePlate` (Turkish plate regex), `firstName`, `lastName`, `phone` (`^(05\|5)\d{9}$`), `sellingTimeline`, `userDesiredPrice` (≥ 0), optional JSON strings (`paintScheme`, `chassisState`, `equipments`, `vehicleStatus`, `features`) and `tramerAmount` | One of three shapes, below. 404 when no catalogue spec matches. |
+| `GET /vehicle-evaluation/:id` | none; the id is a UUID | none | The stored valuation in a different, smaller shape, below. 404 for an unknown id. |
+| `POST /consignment` | throttle | [`CreateConsignmentDto`](../backend/src/consignment/dto/create-consignment.dto.ts): `firstName`, `lastName`, `phone`, `email`, `province`, `district`, `preferredContact`, optional `vehicleEvaluationId`, `notes` (a string; the form sends JSON) and the optional vehicle fields of the on-the-fly valuation | `{ success, message, consignmentId, consignment }`, where `consignment` is the stored row without the linked valuation. 409 for a second application on the same valuation; 404 as described in [Consignment application](#2-consignment-application). An unknown `vehicleEvaluationId` fails the foreign key (Prisma `P2003`), which is not caught, so the answer is 500. |
+| `POST /auth/login` | throttle 5 / 60 s | `email`, `password` (at least 6 characters) | `{ accessToken, user: { id, email, firstName, lastName, role } }`; 401 for a wrong e-mail or password (same message for both). |
+| `GET /auth/me` | JWT | none | `{ id, email, firstName, lastName, role, permissions }`, read from the database. |
+
+**`POST /vehicle-evaluation` response shapes** ([`evaluation.service.ts` `evaluateVehicle`](../backend/src/evaluation/evaluation.service.ts)):
+
+| State | Top-level fields | `results` |
+|---|---|---|
+| Priced (no `status` field) | `evaluationId`, `vehicle` (year and the names of make, model, variant, package, body, fuel and transmission, plus `engineSize`, `horsepower`, `originalMSRP`), `results`, `aiAnalysis` (string array), `comparableListings` | `fairMarketValue`, `adjustedP35`, `cashOffer`, `cashOfferMin`, `cashOfferMax`, `consignmentListingPrice`, `expectedConsignmentSalePrice`, `consignmentCommission`, `customerConsignmentNet`, `estimatedDaysToSell` (a string such as `"7-18 gün"`), `confidenceScore` (number), `matchedListingCount`, `matchedLevel`, `pricingExplanation`, plus the aliases below |
+| `MANUAL_EVALUATION_REQUIRED` | `status`, `confidenceScore`, `message`, `vehicle` (year and the seven names only), `results`, `aiAnalysis`, `comparableListings: []`; **no `evaluationId`** | The same figures except `adjustedP35`, plus `requiresManualApproval: true`, `kmDecayPer10k`, `referenceMedianMileage`; `pricingExplanation` holds the manual-review reason; **no aliases**, so no `finalOfferedPrice` |
+| `INSUFFICIENT_DATA` | `status`, `confidenceScore: 0`, `message`, `vehicle`, `aiAnalysis` (one warning), `comparableListings: []` | `null` |
+
+The priced `results` also carry older field names. They repeat values from the response or the request:
+
+| Alias | Same value as |
+|---|---|
+| `estimatedValue`, `finalOfferedPrice` | `cashOffer` |
+| `minExpectedValue`, `quickSaleValue` | `cashOfferMin` |
+| `maxExpectedValue`, `finalConsignmentPrice` | `consignmentListingPrice` |
+| `fairMarketRange` | the string `"<cashOfferMin> ₺ - <consignmentListingPrice> ₺"`, formatted for `tr-TR`. Despite the name, it is not a range around the fair market value. |
+| `userDesiredPrice` | the request's desired price |
+
+**`GET /vehicle-evaluation/:id`** ([`getEvaluationById`](../backend/src/evaluation/evaluation.service.ts)) can only return what `VehicleEvaluation` stores, so its shape differs: `evaluationId`, `vehicle` (year and the seven names, no ids), `aiAnalysis`, and `results` with `estimatedValue`, `finalOfferedPrice`, `userDesiredPrice`, `fairMarketRange`, `minExpectedValue`, `maxExpectedValue`, `quickSaleValue` and `confidenceScore` as a **string** such as `"80%"`. The fair market value, the expected sale price, the commission and the net payout are not stored and therefore not returned. The consignment form uses this response only to show the vehicle and the cash offer (`estimatedValue`).
+
+---
+
 ## Data model
 
 The schema is [`backend/prisma/schema.prisma`](../backend/prisma/schema.prisma) (SQLite; two migrations in [`prisma/migrations`](../backend/prisma/migrations/migration_lock.toml)). It has four groups of tables.
@@ -278,7 +326,7 @@ erDiagram
 |---|---|
 | `RawVehicleListing` | One parsed listing. `(source, sourceListingId)` is unique. It keeps the raw and the canonical make/model/variant, `year`, `mileageKm`, `price`, `isDamaged`, `parseStatus` (`VALID` or `QUARANTINED`), `parseWarnings` and `lastSeenAt`. |
 | `QuarantinedListing` | One row per rejected listing and reason. `(source, rawListingId, reason)` is unique, so re-running the import does not duplicate rows (second migration). |
-| `VehicleMarketSnapshot` | The engine's input. It is keyed by eight canonical fields plus `snapshotVersion` (unique together). It stores `year`, `matchedListingCount`, `weightedP5/P35/P50/P60/P95`, `medianMileage`, `kmDecayPer10k`, `mileageAdjustmentSource` and `isActive`. `snapshotDataJson` holds the listing ids and the mileage statistics. The matcher queries the display columns `make`, `model` and `variant`, which the builders fill with the canonical values. |
+| `VehicleMarketSnapshot` | The engine's input. It is keyed by eight canonical fields plus `snapshotVersion` (unique together). It stores `year`, `matchedListingCount`, `weightedP5/P35/P50/P60/P95`, `medianMileage`, `kmDecayPer10k`, `mileageAdjustmentSource` and `isActive`. `snapshotDataJson` holds the listing ids and the mileage statistics. The matcher queries the display columns `make`, `model` and `variant`, which the builders fill with the canonical values; no index covers them. |
 
 ### Leads and CRM
 
@@ -318,7 +366,7 @@ So the scraper, the monthly sync and the price-adjust endpoint change catalogue 
 | Source | Writes | How it works |
 |---|---|---|
 | `npx prisma db seed` ([`seed.ts`](../backend/prisma/seed.ts)) | Permissions, roles, admin user, catalogue | Requires `ADMIN_PASSWORD`. It upserts the admin user, then builds 12 brands, 18 models, 30 variants and 76 packages for model years 2005 to 2026, which gives 1,672 specs, each with a `VehicleMarketPrice`. Prices start from `basePrice × max(0.48, 1 − age·0.025 − age^1.2·0.002) × package factor` (1.08, 1.18 or 1.25 for named package groups). Then [`recalibrateAllSpecs`](../backend/src/recalibrate_all_vehicle_variants.ts) rewrites `originalMSRP` and the catalogue prices from per-brand base prices and four depreciation curves (exotic, luxury, standard, economy). If more than 1,000 specs already exist, it stops after the permissions, roles, admin user and lookup tables and leaves the catalogue alone. |
-| `npm run seed:demo` ([`seed-demo.ts`](../backend/prisma/seed-demo.ts)) | Synthetic listings and snapshots | It refuses to run with `NODE_ENV=production`. For each make · model · variant · year group of the last 12 model years (currently 2014 to 2025), it creates 14 listings with source `DEMO_SYNTHETIC`. They are centred on the catalogue `averageListingPrice`, with mileage around `age × 15,000 km` and a 0.4 % per 10,000 km price slope, plus or minus 7 % noise, from a seeded PRNG so every run gives the same data. It aggregates them with the same `cleanOutliersIQR` and `calculatePercentiles` functions as the real import and marks the snapshots `"demo": true`. On a fresh seed it created 5,040 listings and 360 snapshots. |
+| `npm run seed:demo` ([`seed-demo.ts`](../backend/prisma/seed-demo.ts)) | Synthetic listings and snapshots | It refuses to run with `NODE_ENV=production`. For each make · model · variant · year group of the last 12 model years (currently 2014 to 2025), it creates 14 listings with source `DEMO_SYNTHETIC`. They are centred on the catalogue `averageListingPrice`, with mileage drawn between 0.55 and 1.45 × `age × 15,000 km`, a 0.4 % per 10,000 km price slope and plus or minus 7 % price noise. It aggregates them with the same `cleanOutliersIQR` and `calculatePercentiles` functions as the real import and marks the snapshots `"demo": true`. On a fresh seed it created 5,040 listings and 360 snapshots. **The synthetic prices differ on every fresh database**; see [Demo data is not reproducible across databases](#demo-data-is-not-reproducible-across-databases). |
 | Listing ingest ([`ingest_all_desktop_html_recursive.ts`](../backend/src/scripts/ingest_all_desktop_html_recursive.ts)) | Real listings, quarantine, snapshots | It reads saved search-result pages from `LISTING_ARCHIVE_DIR` (one folder per brand, file name = model; see [`listing-archive-dir.ts`](../backend/src/scripts/listing-archive-dir.ts)). See [Snapshot building](#snapshot-building). |
 | Lazy catalogue generation ([`vehicle.service.ts` `generateSpecsForModel`](../backend/src/vehicle/vehicle.service.ts)) | Variants, packages, specs | When `GET /vehicle-data` is asked for a year and model that have no specs, it creates them from built-in variant lists per brand and model (or generic ones). Prices follow `floor + (base − floor) × 0.88^age`, with age counted from 2026. The year must be an integer from 2000 to the current year, so public callers cannot create rows for arbitrary years. |
 | Admin import (`POST /admin/import`, [`import.service.ts`](../backend/src/import/import.service.ts)) | Catalogue rows and catalogue prices | CSV, Excel (first sheet) or JSON array. Each row needs brand, model, variant and year. Missing technical fields get defaults. |
@@ -326,6 +374,25 @@ So the scraper, the monthly sync and the price-adjust endpoint change catalogue 
 | Chrome extension ([`chrome-extension/`](../chrome-extension/manifest.json)) | Nothing yet | A prototype content script that posts a listing to `http://localhost:3000/api/listings/import`. No such endpoint exists. |
 
 The scraper and the extension are data-collection tooling aimed at third-party listing sites. Whether running them is allowed depends on those sites' terms of use, which the owner has to check.
+
+### Demo data is not reproducible across databases
+
+[`seed-demo.ts`](../backend/prisma/seed-demo.ts) draws all random numbers from one PRNG stream with a fixed seed (`mulberry32(20260930)`). The comment there says this makes every run produce the same data, but that holds only for the same database. The groups consume the stream in the order of the catalogue query, which sorts by `manufacturerId`, `modelId` and `variantId`. These ids are random UUIDs that `prisma db seed` creates, so each fresh database hands different random numbers to each make · model · variant · year group.
+
+What stays the same is the structure: the counts (14 listings per group, 5,040 listings and 360 snapshots with a 2026 clock), the price centre of each group (the mean catalogue price, which is deterministic) and the match level a given car gets. The percentiles, the median mileages and therefore every offer change. For a 2020 Fiat Egea 1.4 Fire, two fresh databases gave a 2019 snapshot P50 of 598,000 and 581,000 TL. The year window also moves with the system clock: it is always the 12 model years before the current one.
+
+For this reason the [worked example](#worked-example-fixed-snapshot-input) below starts from fixed snapshot rows rather than from "run the demo seed".
+
+### Demo and real listings share one table
+
+The demo seed and the listing ingest write to the same `RawVehicleListing` table, and nothing in the ingest separates them:
+
+- **The ingest reads every source.** It builds snapshots from all rows with `parseStatus = 'VALID'` and `isDamaged = false`, with no filter on `source`. Demo rows qualify (their `isDamaged` defaults to `false`).
+- **Demo rows lose their marker.** If `seed:demo` ran before an ingest, the demo listings are grouped with the real ones whenever the canonical names match, and form their own groups otherwise. The resulting snapshots carry no `"demo": true` marker, because the ingest's `snapshotDataJson` has no such field.
+- **The swap removes the marked snapshots.** The ingest's swap transaction deletes every `v2.0` row, including the demo-marked ones, and replaces them with these unmarked snapshots.
+- **A later `seed:demo` cannot clean up.** It deletes the `DEMO_SYNTHETIC` listings and the snapshots that contain `"demo":true`. The unmarked snapshots built from demo listings stay, and still point at listing ids that no longer exist. Its `upsert` also uses `update: {}`, so it does not overwrite an existing snapshot with the same canonical key.
+
+In short, run the demo seed only on a database that will never see a real import, or delete the `DEMO_SYNTHETIC` listings before importing.
 
 ---
 
@@ -351,12 +418,12 @@ Inside the ingest script ([source](../backend/src/scripts/ingest_all_desktop_htm
 - **Row filter.** A row is kept only if its price is between 50,000 and 150,000,000 TL and its year is between 1980 and 2026. Mileage is kept if it is between 0 and 2,000,000 and not equal to the year or the price (a guard against shifted cells).
 - **Damage flag.** `isDamaged` is set when the row text contains "ağır hasar" (heavy damage) or "pert" (write-off). Damaged listings are stored but excluded from snapshots, so snapshots describe clean cars and damage is priced separately.
 - **Grouping and deduplication.** Listings are grouped by canonical make · model · variant · year. Within one run, a listing id is kept once, and existing rows are updated in place with a new `lastSeenAt`.
-- **Outliers** ([`RobustPricingCalculator.cleanOutliersIQR`](../backend/src/evaluation/robust-pricing-calculator.ts)). It keeps prices between 50,000 and 150,000,000. With four or more prices it computes `Q1 = sorted[⌊0.25n⌋]`, `Q3 = sorted[⌊0.75n⌋]` and keeps prices in `[max(50,000, Q1 − 1.5·IQR), Q3 + 1.5·IQR]`.
-- **Percentiles** (`calculatePercentiles`). Nearest rank `sorted[⌊p·n⌋]` for P5, P35, P50, P60 and P95. The columns are named `weighted…` because the matcher later averages several snapshots with weights; inside one snapshot they are plain percentiles.
+- **Outliers** ([`RobustPricingCalculator.cleanOutliersIQR`](../backend/src/evaluation/robust-pricing-calculator.ts)). It keeps prices between 50,000 and 150,000,000. With four or more prices it sorts them, computes `Q1 = sorted[⌊0.25n⌋]`, `Q3 = sorted[⌊0.75n⌋]` and returns the sorted prices in `[max(50,000, Q1 − 1.5·IQR), Q3 + 1.5·IQR]`. With fewer than four it returns them unfiltered **and in input order** (an early return before the sort).
+- **Percentiles** (`calculatePercentiles`). Nearest rank `sorted[⌊p·n⌋]` for P5, P35, P50, P60 and P95. The function assumes sorted input. For groups of four or more listings that holds. For groups of two or three it does not: the ingest passes prices in database order, so the "percentiles" are positions in that order. For example, `[900,000, 500,000, 700,000]` gives P5 900,000, P35 to P60 500,000 and P95 700,000, so P5 is above P50 (checked by running the two functions). Level 3 accepts a single snapshot with three listings, so such values can reach an offer. The demo seed always has 14 listings per group and is not affected. The columns are named `weighted…` because the matcher later averages several snapshots with weights; inside one snapshot they are plain percentiles.
 - **Mileage statistics.** The median and the average of the listings with a mileage. With 8 or more such listings, it fits an ordinary least-squares line of price against `km / 10,000`. If the slope is negative, `kmDecayPer10k = clamp(|slope| / P50, 0.001, 0.015)`, which is the fraction of the median price lost per 10,000 km, and the source is `LEARNED_FROM_LISTINGS`. Otherwise the decay stays at the default 0.0025, with source `LIMITED_SAMPLE` (4 to 7 samples) or `DEFAULT_FALLBACK`.
 - **Technical metadata.** Body, fuel, transmission and trim are copied from the first catalogue spec with the same make · model · variant · year. If there is none, they stay empty, and an empty field rules out a Level 1 match later.
 - **Quality score** (`calculateDataQualityScore`). 50 points, plus up to 20 for listing count, up to 15 for mileage coverage, up to 15 for complete metadata, plus `max(0, 15 − 30·CV)` for price consistency. It is stored but not used by the matcher.
-- **Atomic swap.** Snapshots are written as version `v2.0_temp` (inactive). One transaction then deletes the old `v2.0` rows and renames the new ones. A valuation running during an import therefore sees either the complete old set or the complete new set, never a half-built one.
+- **Atomic swap.** Snapshots are written as version `v2.0_temp` (inactive). One transaction then deletes the old `v2.0` rows (all of them, demo snapshots included; see [Demo and real listings share one table](#demo-and-real-listings-share-one-table)) and renames the new ones. A valuation running during an import therefore sees either the complete old set or the complete new set, never a half-built one.
 
 ### Comparable matching (four levels)
 
@@ -378,17 +445,19 @@ flowchart TD
 
 **Level 1** needs at least 5 listings in the exact-year snapshot. On top of that, variant, body, fuel and transmission must be non-empty on both sides and equal, case-insensitively, together with make, model and trim. Confidence is `min(99, max(83, 95 + ⌊n/12⌋))`.
 
-**Levels 2 and 3** merge up to 10 snapshots (ordered by listing count) and move them to the requested year. Each snapshot's year difference is `d = userYear − snapshotYear`.
+**Levels 2 and 3** merge up to 10 snapshots and move them to the requested year (`queryWeightedSnapshotsFromDb`). The query orders by `matchedListingCount` descending and has no tie-breaker, so snapshots with equal counts come back in whatever order SQLite returns them. Each snapshot's year difference is `d = userYear − snapshotYear`.
 
-- **Learned yearly rate.** Take the oldest and the newest year among the merged snapshots with `P50 > 0`, with medians `p1` and `p2`: `rate = (p2 / p1)^(1 / (y2 − y1)) − 1`. The rate is used only if `0.01 < rate < 0.20` (`LEARNED_YEAR_ADJUSTMENT`). Otherwise the default 0.08 is used (`DEFAULT_YEAR_ADJUSTMENT`).
+- **Learned yearly rate.** Take the oldest and the newest year among the merged snapshots with `P50 > 0`, with medians `p1` and `p2`: `rate = (p2 / p1)^(1 / (y2 − y1)) − 1`. The rate is used only if `0.01 < rate < 0.20` (`LEARNED_YEAR_ADJUSTMENT`). Otherwise the default 0.08 is used (`DEFAULT_YEAR_ADJUSTMENT`). When two merged snapshots share a model year (Level 3 merges several variants), the one later in the query order sets that year's median.
 - **Price factor.** Each percentile is multiplied by `1 + d · rate`. This is a linear adjustment toward the requested year.
 - **Weight.** `matchedListingCount × 0.92^|d|`, so a snapshot one year away counts 8 % less than the exact year.
 - **Result.** Each percentile is the weight-averaged value. The listing count is the plain sum, and confidence is `min(88, max(76, 78 + ⌊n/20⌋))` for Level 2 and `min(78, max(62, 65 + ⌊n/25⌋))` for Level 3.
+- **Mileage reference: the last snapshot wins.** The reference median mileage, the km decay and the mileage source are **not** weighted. The loop reads them from each snapshot's `snapshotDataJson` and overwrites the previous values, so the snapshot that comes last in the query order supplies all three (both builders always write all three). That is the one with the fewest listings or, among equal counts, whichever SQLite returns last. It can be a different model year than the requested one, or in Level 3 a different variant. The prices are moved to the requested year; this reference is not. A newer model year usually has a lower median mileage, so when its snapshot comes last the car looks over-driven and loses value; an older one does the opposite. The [worked example](#worked-example-fixed-snapshot-input) shows the size of the effect.
 - **Variant filter.** Variants named `Standart` or `FarkliVaryant` (or empty) do not filter the query.
+- **Display columns.** The query filters on the `make`, `model` and `variant` display columns, not on the `canonical*` columns of the unique key. Both snapshot builders fill the two sets with the same values. No index covers these columns; see [Limitations](#limitations-known-gaps-and-next-steps).
 
 **Level 4** means not enough data. The service answers `INSUFFICIENT_DATA` and stores nothing.
 
-If a snapshot lacks a percentile, it is derived from P50: P5 = 0.85, P35 = 0.92, P60 = 1.02 and P95 = 1.15 × P50. Mileage fallbacks are a reference median of 100,000 km and a decay of 0.0025.
+If a snapshot lacks a percentile, it is derived from P50: P5 = 0.85, P35 = 0.92, P60 = 1.02 and P95 = 1.15 × P50. Mileage fallbacks are a reference median of 100,000 km and a decay of 0.0025. Level 1 takes its reference median from the snapshot's `snapshotDataJson` and its decay from the `kmDecayPer10k` column; both builders write the same decay to both places.
 
 ### Fair market value
 
@@ -450,21 +519,37 @@ The listing price targets the 60th percentile, capped at 3 % above fair value an
 
 The wizard requires a desired price of at least 1 TL, so wizard valuations always take the desired-price branch. The consignment form's on-the-fly valuation sends 0 and takes the P60 branch.
 
-### Worked example (synthetic demo data)
+### Worked example (fixed snapshot input)
 
-This comes from a local run on a fresh clone after `prisma db seed` and `npm run seed:demo`. The prices are synthetic. Input: 2020 Fiat Egea 1.4 Fire, 90,000 km, damage `NO`.
+The demo seed gives different numbers on every fresh database (see [Demo data is not reproducible across databases](#demo-data-is-not-reproducible-across-databases)), so this example starts from fixed input: the three Level 2 snapshots that one fresh `prisma db seed` plus `npm run seed:demo` produced for the Fiat Egea 1.4 Fire. The prices are synthetic. Every number below follows from these rows and the formulas above. They were checked by passing the rows to the real `EmsalMatcherService` (with a stub in place of Prisma) and `RobustPricingCalculator`, and they match a direct `EvaluationService.evaluateVehicle` call on that database.
+
+Request: 2020 Fiat Egea 1.4 Fire, 90,000 km, damage `NO`.
+
+| Snapshot, in query order | Listings | P5 | P35 | P50 | P60 | P95 | Median km |
+|---|---|---|---|---|---|---|---|
+| 2019 | 14 | 553,000 | 583,000 | 598,000 | 600,000 | 633,000 | 102,000 |
+| 2020 | 14 | 609,000 | 617,000 | 646,000 | 647,000 | 676,000 | 91,000 |
+| 2021 | 14 | 676,000 | 687,000 | 716,000 | 720,000 | 750,000 | 85,000 |
+
+All three rows have trim `Easy`, body `Sedan`, fuel `Benzin`, transmission `Manuel` and a km decay of 0.004. Their listing counts are equal, so the query's order is not defined. SQLite returned them in year order, the order the demo seed inserted them, in both runs made for this document.
 
 | Step | Value |
 |---|---|
-| Match | Level 2: 3 snapshots (2019 to 2021), 42 listings, learned yearly rate 8.3 %, confidence 80 |
-| Mileage | reference median 80,000 km, decay 0.40 % per 10,000 km, delta +10,000 km → adjustment −2,584 TL |
-| Fair market value | 643,380 TL |
-| Reserve | 8 % − 0.5 % = 7.5 % → 48,254 TL, below the 65,000 TL minimum → 65,000 TL |
-| Cash offer | min(643,380 − 65,000, adjusted P35 630,032) = 578,380 → rounded down to **575,000 TL** (range 550,000 to 585,000), 7 to 18 days to sell |
-| Consignment, desired price 0 | listing **658,000 TL**, expected sale 648,130, commission max(50,000, 29,166) = 50,000, net 598,130 |
-| Consignment, desired price 700,000 | cap 695,815 → listing **694,000 TL**, expected sale 683,590, commission 50,000, net 633,590 |
+| Level 1 | The 2020 snapshot has 14 listings, but `evaluateVehicle` passes no trim and `''` is not `Easy`, so no Level 1. |
+| Level 2 | 3 snapshots, 42 listings (at least 5). Confidence `min(88, max(76, 78 + ⌊42/20⌋))` = 80. |
+| Learned yearly rate | `(716,000 / 598,000)^(1/2) − 1` = 9.42 %, inside the 1 % to 20 % band. |
+| Weights and price factors | 2019: `14 × 0.92` = 12.88, factor 1.0942. 2020: 14, factor 1. 2021: 12.88, factor 0.9058. |
+| Merged percentiles | P5 608,809 · P35 625,488 · P50 649,525 · P60 651,760 · P95 682,471 |
+| Mileage | The last row (2021) supplies the reference: 85,000 km, decay 0.40 % per 10,000 km. Delta +5,000 km gives `−round(649,525 × 0.5 × 0.004)` = −1,299 TL. |
+| Fair market value | 649,525 − 1,299 = **648,226 TL** |
+| Reserve | 8 % − 0.5 % = 7.5 % gives 48,617 TL, below the 65,000 TL minimum, so 65,000 TL. |
+| Cash offer | `min(648,226 − 65,000, adjusted P35 624,189)` = 583,226, rounded down to **580,000 TL** (range 555,000 to 590,000), 7 to 18 days to sell. |
+| Consignment, desired price 0 | Adjusted P60 650,461 is under the cap of 667,673, so the listing is **649,000 TL**. Expected sale `max(610,000, 649,000 − 9,735)` = 639,265; commission `max(50,000, 28,767)` = 50,000; net 589,265. |
+| Consignment, desired price 700,000 | Cap `round(648,226 × 1.05 × 1.03)` = 701,056, so the listing is **699,000 TL**. Expected sale 688,515; commission 50,000; net 638,515. |
 
-Why Level 2 and not Level 1: `evaluateVehicle` does not pass the package as `trim`, so Level 1 only matches a snapshot whose trim is empty. The demo snapshots, like real snapshots built from catalogue specs with a package, carry a trim, so their valuations resolve at Level 2 or 3. See [Limitations](#limitations-known-gaps-and-next-steps).
+**Effect of the last-snapshot rule.** The requested year's own snapshot (2020) has a median of 91,000 km. With that reference the mileage adjustment would be +260 TL, the fair value 649,785 TL and the P60 listing 651,000 TL; the cash offer would stay at 580,000 TL. In the second fresh database the same rule took the 2021 median (79,000 km) instead of the 2020 one (96,000 km) and lowered the cash offer from 575,000 to 570,000 TL. That database's full result was a learned rate of 9.5 %, a fair value of 636,129 TL and a cash offer of 570,000 TL: the same steps with different synthetic inputs.
+
+**Why Level 2 and not Level 1.** `evaluateVehicle` does not pass the package as `trim`, so Level 1 only matches a snapshot whose trim is empty. The demo snapshots, like real snapshots built from catalogue specs with a package, carry a trim, so their valuations resolve at Level 2 or 3. See [Limitations](#limitations-known-gaps-and-next-steps).
 
 ### Response states
 
@@ -487,7 +572,7 @@ Why Level 2 and not Level 1: `evaluateVehicle` does not pass the package as `tri
 | Secret at boot | `validateEnv` runs inside `ConfigModule.forRoot`. A missing or blank `JWT_SECRET` stops the app. A secret whose SHA-256 matches one of the two values that were once committed to this repository stops the app in **every** environment, with instructions to rotate it. The `.env.example` placeholders stop the app in production and only print a warning elsewhere. Only digests of the leaked values are kept in the source, and the error never echoes the secret. | [`env.validation.ts`](../backend/src/config/env.validation.ts) |
 | Sessions | `POST /auth/login` checks a bcrypt hash and signs a JWT with `JWT_SECRET` through `ConfigService.getOrThrow` (no fallback), valid for one day. The payload carries user id, email, names, role name, `roleId` and permission names. | [`auth.service.ts`](../backend/src/auth/auth.service.ts), [`auth.module.ts`](../backend/src/auth/auth.module.ts) |
 | Authentication | `JwtAuthGuard` accepts only `Authorization: Bearer …`, verifies signature and expiry, and puts the payload on `request.user`. Otherwise it answers 401. | [`jwt.guard.ts`](../backend/src/auth/jwt.guard.ts) |
-| Authorisation (RBAC) | `@RequirePermissions(...)` and `@RequireRoles(...)` set route metadata. `RolesGuard` loads the role by the token's `roleId` **from the database**, so permission changes apply at once. It requires all listed permissions and, for `@RequireRoles`, a role name from the list; otherwise it answers 403. User management and Telegram settings are `ADMIN`-only. Catalogue, import, scraper and market sync need `manage_vehicles`. Dashboard, valuations and vehicle requests need `view_valuations`. The CRM needs `manage_consignments`. Logs need `view_audit_logs`. | [`permissions.decorator.ts`](../backend/src/auth/permissions.decorator.ts), [`roles.guard.ts`](../backend/src/auth/roles.guard.ts), [`admin.controller.ts`](../backend/src/admin/admin.controller.ts) |
+| Authorisation (RBAC) | `@RequirePermissions(...)` and `@RequireRoles(...)` set route metadata. `RolesGuard` loads the role by the token's `roleId` **from the database**, so permission changes apply at once. It requires all listed permissions and, for `@RequireRoles`, a role name from the list; otherwise it answers 403. A route with neither decorator passes this guard, which is why the e2e suite checks that every admin route rejects a role without permissions. The per-route requirements are in the [table below](#admin-routes-and-their-guards). | [`permissions.decorator.ts`](../backend/src/auth/permissions.decorator.ts), [`roles.guard.ts`](../backend/src/auth/roles.guard.ts), [`admin.controller.ts`](../backend/src/admin/admin.controller.ts) |
 | Rate limiting | `ThrottlerModule` defaults to 100 requests per 60 s per client IP. The guard is not global: it is attached to login (overridden to 5 per 60 s) and to the three public forms (valuation, consignment, vehicle request). The counters live in process memory. | [`auth.controller.ts`](../backend/src/auth/auth.controller.ts), [`app.module.ts`](../backend/src/app.module.ts) |
 | Client IP behind Nginx | `app.set('trust proxy', 'loopback')`: `X-Forwarded-For` is honoured only when the direct peer is localhost (Nginx on the same host). A remote client cannot spoof its IP to get around the login limit or pollute audit logs. | [`main.ts`](../backend/src/main.ts) |
 | CORS | `CORS_ORIGIN` set: only those origins, with credentials. Unset in production: `origin: false`, so no CORS headers are sent and browsers block cross-origin reads; the site calls the API on its own origin through Nginx `/api`. Unset outside production: every origin is allowed, so `next dev` on :3000 can call :3001. | [`cors.ts`](../backend/src/config/cors.ts) |
@@ -497,6 +582,38 @@ Why Level 2 and not Level 1: `evaluateVehicle` does not pass the package as `tri
 | Seed | No default admin password: the seed stops before writing anything when `ADMIN_PASSWORD` is missing. | [`seed.ts`](../backend/prisma/seed.ts) |
 
 The posture is to **fail closed**. Without a usable secret the API does not start. Without `CORS_ORIGIN`, production allows no cross-origin reads. An admin route added without a permission check fails the e2e suite, because every `/admin` route must be in the test's inventory and must reject a user without permissions (see [Testing strategy](#testing-strategy)).
+
+### Admin routes and their guards
+
+All 23 routes under `/api/admin`. The 19 in [`admin.controller.ts`](../backend/src/admin/admin.controller.ts) get `JwtAuthGuard` and `RolesGuard` at class level; the 4 in [`vehicle.controller.ts`](../backend/src/vehicle/vehicle.controller.ts) get them per method. Requirements come from the `@RequirePermissions` and `@RequireRoles` decorators.
+
+| Route | Requires | What it does |
+|---|---|---|
+| `GET /admin/dashboard` | `view_valuations` | Counts, the average stored cash offer, and the five latest valuations and consignment applications. |
+| `GET /admin/evaluations` | `view_valuations` | Stored valuations with customer data. |
+| `GET /admin/vehicle-requests` | `view_valuations` | "My car is not listed" requests. |
+| `POST /admin/vehicle-requests/:id/status` | **`manage_vehicles`** | Sets a request's status. |
+| `GET /admin/consignments` | `manage_consignments` | Consignment applications with their linked valuations. |
+| `POST /admin/consignments/:id/status` | `manage_consignments` | Sets status and notes; audit-logged. |
+| `GET /admin/logs` | `view_audit_logs` | Audit log. |
+| `POST /admin/import` | `manage_vehicles` | CSV, Excel or JSON catalogue import; audit-logged. |
+| `POST /admin/scraper/trigger` | `manage_vehicles` | Starts the price scraper in the background; audit-logged. |
+| `GET /admin/scraper/status` | `manage_vehicles` | Scraper running flag. |
+| `GET /admin/market-sync/settings` | `manage_vehicles` | Reads `market-sync-settings.json`. |
+| `POST /admin/market-sync/settings` | `manage_vehicles` | Merges the body into that file. |
+| `GET /admin/market-sync-settings` | `manage_vehicles` | Same as above, second path (`VehicleController`). |
+| `POST /admin/market-sync-settings` | `manage_vehicles` | Same as above, second path. |
+| `POST /admin/trigger-market-sync` | `manage_vehicles` | Runs the monthly `originalMSRP` sync now; does nothing while the sync is disabled in the settings. |
+| `POST /admin/adjust-market-prices` | `manage_vehicles` | Scales `originalMSRP` by a percentage, optionally for one brand. |
+| `GET /admin/users` | role `ADMIN` | Staff list. |
+| `POST /admin/users` | role `ADMIN` | Creates a user; the role defaults to `STAFF`. |
+| `DELETE /admin/users/:id` | role `ADMIN` | Deletes a user. |
+| `PATCH /admin/users/:id/password` | role `ADMIN` | Sets a password (at least 6 characters). |
+| `GET /admin/telegram/settings` | role `ADMIN` | Reads the Telegram settings. |
+| `POST /admin/telegram/settings` | role `ADMIN` | Saves them. |
+| `POST /admin/telegram/test` | role `ADMIN` | Sends a test message. |
+
+What the two seeded roles can do follows from this table. `ADMIN` has all four permissions and the `ADMIN` role, so it passes every route. `CRM_MANAGER` has `view_valuations` and `manage_consignments`: it can open the dashboard, the valuations, the vehicle-request list and the consignment CRM, and change consignment statuses. It **cannot** change a vehicle request's status, because that route needs `manage_vehicles`; the "Araç Talepleri" page shows the buttons, and the API answers 403. The e2e suite proves that every route rejects a role without permissions, and that the 7 role routes reject a non-`ADMIN` role with every permission. It does not pin which permission each of the other 16 routes needs; this table is read from the decorators.
 
 ---
 
@@ -522,11 +639,11 @@ Both jobs update catalogue prices only (see [Two kinds of price data](#two-kinds
 ## Design decisions and trade-offs
 
 - **Comparables over a depreciation formula.** The engine prices from what similar cars are listed for, not from a list price times an age curve. Formulas would need constant recalibration in a high-inflation market, while listing percentiles follow the market by construction. The cost is a hard dependency on a fresh listing archive, which is not in the repository. The demo seed exists so that the system still runs end to end without it.
-- **Percentiles instead of means.** P50 for fair value, P35 as a cap for the cash offer and P60 for the listing price. Listing prices are skewed and full of typos and fake prices; IQR cleaning plus nearest-rank percentiles make a single absurd listing irrelevant (unit test 5 feeds 1 TL and 111 TL listings).
+- **Percentiles instead of means.** P50 for fair value, P35 as a cap for the cash offer and P60 for the listing price. Listing prices are skewed and full of typos and fake prices; IQR cleaning plus nearest-rank percentiles make a single absurd listing irrelevant (unit test 5 feeds 1 TL and 111 TL listings). This holds for groups of four or more listings; smaller groups skip the cleaning and the sort (see [Snapshot building](#snapshot-building)).
 - **Matching levels with explicit confidence.** When the exact configuration has too few listings, the matcher widens the search in defined steps and reports which step it used. It does not quietly mix unrelated cars. Every answer says its level and listing count, and confidence drops with each level.
 - **Fail closed on prices.** With no comparables, the answer is `INSUFFICIENT_DATA`, not a formula guess. Below 400,000 TL, where a fixed minimum reserve would make the offer look unfair, a human decides. Neither case is stored or sent as a lead with a price.
 - **The dealer's risk sits in the cash offer.** The reserve has a minimum per segment and grows when data is thin (+2.5 pp under 8 listings). The offer is also capped by the adjusted P35, so it never exceeds the price level of the cheapest 35 % of comparable listings. The consignment side passes the market price through and takes a tiered commission with a minimum.
-- **Snapshots are precomputed and swapped atomically.** Valuations read a few aggregate rows instead of thousands of listings, and the import replaces the whole set in one transaction. The trade-off: snapshots are only as fresh as the last import.
+- **Snapshots are precomputed and swapped atomically.** Valuations read a few aggregate rows instead of thousands of listings, and the import replaces the whole set in one transaction. The trade-offs: snapshots are only as fresh as the last import, and without an index on the matcher's filter columns each lookup still scans the whole snapshot table (see [Limitations](#limitations-known-gaps-and-next-steps)).
 - **Quarantine instead of best-effort parsing.** Unrecognised makes and models are kept aside with a reason, rather than polluting a snapshot under a wrong name.
 - **RBAC checked against the database on every admin request.** The guard reloads the role, so revoking a permission takes effect immediately, at the cost of one query per admin request. The UI is deliberately not trusted: the e2e suite proves every admin route rejects missing, forged and under-privileged tokens.
 - **SQLite, PM2, one process.** Simple to run on a small VPS and in CI. The trade-offs: one writer at a time (the catalogue read endpoints retry on lock errors), throttle counters and cache that are per process, and settings in JSON files rather than the database.
@@ -536,7 +653,7 @@ Both jobs update catalogue prices only (see [Two kinds of price data](#two-kinds
 
 ## Testing strategy
 
-Commands, run on a fresh clone of this commit with Node 22, after `npm ci`, `npx prisma generate`, `npx tsc --noEmit -p tsconfig.json` (clean) and `npx prisma migrate deploy`, with `NODE_ENV=test` as in CI:
+Commands, run again for this revision on a fresh clone with Node 22.22, after `npm ci`, `npx prisma generate`, `npx tsc --noEmit -p tsconfig.json` (clean) and `npx prisma migrate deploy`, with `NODE_ENV=test` as in CI:
 
 | Suite | Result |
 |---|---|
@@ -564,6 +681,8 @@ End-to-end tests (Supertest against the full `AppModule` on the migrated SQLite 
 - [`admin-import.e2e-spec.ts`](../backend/test/admin-import.e2e-spec.ts): JSON file upload accepted; malformed JSON gets 400.
 - [`app.e2e-spec.ts`](../backend/test/app.e2e-spec.ts): smoke test.
 
+Not covered by any test: the order of the percentiles for groups of two or three listings, which snapshot supplies the mileage reference in Levels 2 and 3, the ingest's handling of demo listings, the consignment 404 path, and which permission each non-`ADMIN` admin route requires.
+
 CI ([`ci.yml`](../.github/workflows/ci.yml)) runs on every push and pull request. Backend: typecheck, migrations, unit and e2e tests, a seed plus demo-seed smoke test, and the build. Frontend: typecheck and production build. ESLint is not part of CI yet. There are no frontend tests; the wizard and the panel are verified by hand.
 
 ---
@@ -572,11 +691,19 @@ CI ([`ci.yml`](../.github/workflows/ci.yml)) runs on every push and pull request
 
 Honest list, from reading the code:
 
+**Pricing engine**
+
+- **Groups of two or three listings get percentiles from unsorted prices.** `cleanOutliersIQR` returns early, before its sort, when it has fewer than four prices, and `calculatePercentiles` assumes sorted input. The ingest passes prices in database order, so such a snapshot can have P5 above P50 or P35 above P50. Level 3 can price from a single three-listing snapshot, and Levels 2 and 3 can merge such snapshots with larger ones. See [Snapshot building](#snapshot-building).
+- **Levels 2 and 3 take the mileage reference from one snapshot.** The reference median, the km decay and the mileage source come from the last snapshot in the query order, which can be another model year (or, in Level 3, another variant). They are not weighted and not moved to the requested year, and the query has no tie-breaker for equal listing counts. The [worked example](#worked-example-fixed-snapshot-input) shows a 5,000 TL change in the cash offer from this rule on one database.
+- **Level 1 is effectively unreachable from the wizard.** `evaluateVehicle` does not pass the selected package as `trim`, while snapshots built from catalogue specs carry one. The preview method does pass it.
+- **The notes overstate the evidence.** The explanation notes call the comparables "gerçek" (real), the Level 1 note names a specific listing site, and the comparable cards are labelled "Gerçek Piyasa Emsal İlanı" (real market comparable), also when the snapshots come from the demo seed. The Level 1 note always says "%99 Güven" (99 % confidence), whatever the computed score.
+
 **Gaps that affect behaviour**
 
 - **The wizard's result step only renders priced answers.** For `INSUFFICIENT_DATA` (`results: null`) and `MANUAL_EVALUATION_REQUIRED` (no `finalOfferedPrice`), [`degerleme/page.tsx`](../frontend/src/app/degerleme/page.tsx) still reads `results.finalOfferedPrice`, so the page throws instead of showing the message. With an empty market database, or for any car under 400,000 TL, the customer sees an error.
+- **A consignment application can be lost.** When the standalone form's on-the-fly valuation finds no catalogue spec, the 404 from `evaluateVehicle` is not caught and the application is not saved (see [Consignment application](#2-consignment-application)).
 - **A low desired price passes straight through.** The desired price has no lower bound relative to the market. A desired price of 1 TL yields a consignment listing price of 1 TL (seen in a local run). The expected sale price is still floored at cash offer + 30,000 TL.
-- **Level 1 is effectively unreachable from the wizard.** `evaluateVehicle` does not pass the selected package as `trim`, while snapshots built from catalogue specs carry one. The preview method does pass it.
+- **`CRM_MANAGER` cannot process vehicle requests.** The role can list them (`view_valuations`), but changing their status needs `manage_vehicles`, so the buttons on the "Araç Talepleri" page get 403 for that role. See [Admin routes and their guards](#admin-routes-and-their-guards).
 - **Margin settings have no effect.** The "API Ayarları" page saves margin percentages and fixed luxury margins into `market-sync-settings.json`, but the calculator uses its own constants. The same goes for the monthly sync and the "adjust market prices" endpoint, which only move `originalMSRP`.
 - **Collected details are dropped.** The wizard collects a paint map, chassis and damage flags and a Tramer amount. None of them is stored or priced; only `damageStatus` moves the price, and only `features` is stored.
 - **The Telegram `enabled` flag is never read.** Notifications go out whenever a token and chat ids are set.
@@ -587,6 +714,9 @@ Honest list, from reading the code:
 **Data and structure**
 
 - **No real market data in the repository.** Valuations need the listing archive or the demo seed.
+- **Demo data is not reproducible across databases.** The demo seed's random draws follow the random catalogue UUIDs, so each fresh database gets different snapshots and offers ([details](#demo-data-is-not-reproducible-across-databases)).
+- **Demo and real listings can mix.** The ingest builds snapshots from every valid listing regardless of source, drops the demo marker and deletes the demo-marked snapshots in its swap ([details](#demo-and-real-listings-share-one-table)).
+- **The lookups scan whole tables.** The schema has no `@@index`. The matcher filters on `make`, `model`, `variant` and `year`, while the snapshot table's only composite index is the unique key on the `canonical*` columns plus `year` and `snapshotVersion`. `EXPLAIN QUERY PLAN` on a seeded database shows `SCAN VehicleMarketSnapshot` with a temporary B-tree for the sort. The sample-listing lookup filters on `sourceListingId`, which is the second column of the `(source, sourceListingId)` key, and shows `SCAN RawVehicleListing`. A priced valuation runs up to three snapshot scans and one listing scan. With the demo data (360 snapshots, 5,040 listings) this is small. The cost grows linearly with the archive and has not been measured on real data volumes.
 - **The scraper and the Chrome extension are not wired into the snapshot pipeline.** The scraper writes catalogue prices, and when it fails it writes a formula estimate over real ones. The extension targets an endpoint that does not exist.
 - **Hard-coded reference year.** Year 2026 is built into the catalogue formulas (seed, lazy generation, recalibration curves, scraper fallback) and the ingest year filter (≤ 2026).
 - **SQLite only.** The datasource URL is hard-coded to `file:./dev.db`; `DATABASE_URL` and the Postgres container in `docker-compose.yml` are not used.
@@ -594,16 +724,21 @@ Honest list, from reading the code:
 
 **Natural next steps**
 
-1. Render all three response states in the wizard.
-2. Clamp the desired price to a band around the fair value.
-3. Pass `trim` in `evaluateVehicle`, or drop trim from the Level 1 key.
-4. Read the margin settings in the calculator, or remove them from the UI.
-5. Store the paint map and price it per panel.
-6. Feed scraper output into `RawVehicleListing` so that it refreshes snapshots.
-7. Add a token version or a user check to `JwtAuthGuard`, and a permissions screen for roles.
-8. Move the settings files into the database.
-9. Make the datasource configurable for Postgres.
-10. Add frontend tests for the wizard states.
+1. Sort before the early return in `cleanOutliersIQR`, and decide on a minimum group size for a snapshot.
+2. In Levels 2 and 3, weight the mileage reference like the prices (or take it from the requested year), and add a tie-breaker to the snapshot query.
+3. Render all three response states in the wizard.
+4. Catch the 404 in `createConsignment` and save the application without a link.
+5. Clamp the desired price to a band around the fair value.
+6. Pass `trim` in `evaluateVehicle`, or drop trim from the Level 1 key.
+7. Filter the ingest by source (or delete `DEMO_SYNTHETIC` rows first), and order the demo seed by names so that its data is reproducible.
+8. Add indexes for the matcher's filter (for example `make, model, year`) and for `RawVehicleListing.sourceListingId`.
+9. Decide which permission vehicle-request status changes need, and hide panel actions the role cannot use.
+10. Read the margin settings in the calculator, or remove them from the UI.
+11. Store the paint map and price it per panel.
+12. Feed scraper output into `RawVehicleListing` so that it refreshes snapshots.
+13. Add a token version or a user check to `JwtAuthGuard`, and a permissions screen for roles.
+14. Move the settings files into the database, and make the datasource configurable for Postgres.
+15. Add frontend tests for the wizard states, and unit tests for the small-group and mileage-reference cases.
 
 ---
 
@@ -634,6 +769,7 @@ Read in this order:
 | Snapshot | One `VehicleMarketSnapshot` row: price percentiles and mileage statistics for a make · model · variant · year group. |
 | Level 1 to 4 | Matching depth: exact spec, same variant ± 1 year, same model ± 2 years, not enough data. |
 | Fair market value | Snapshot P50 adjusted for mileage and declared damage. |
+| Reference median mileage | The mileage a snapshot's prices stand for; the car's mileage is compared with it. In Levels 2 and 3 it comes from the last merged snapshot. |
 | Reserve | What the dealer keeps between fair value and the cash offer; a percentage with a minimum per segment. |
 | Nakit alım / cash offer | The price at which the dealer buys the car immediately. |
 | Konsinye / consignment | The dealer sells the car on the owner's behalf for a commission. |
@@ -643,6 +779,7 @@ Read in this order:
 | Boyalı / lokal boyalı / değişen | Painted / locally painted / replaced body panel (the paint map). |
 | Pert / ağır hasar | Write-off / heavy damage; such listings are excluded from snapshots. |
 | Karantina | Quarantine: a listing whose make or model could not be normalised. |
+| `DEMO_SYNTHETIC` | The `source` value of the demo seed's synthetic listings; their snapshots carry `"demo": true`. |
 | Paket / donanım | Trim package / equipment. |
 | Plaka | Licence plate. |
 | CRM status | The state of a consignment lead in the admin panel (for example `PENDING`, `APPROVED`, `COMPLETED`). |
@@ -651,15 +788,15 @@ Read in this order:
 
 ## Türkçe özet
 
-NakitGaraj, bir ikinci el galerisi için geliştirilmiş bir değerleme ve konsinye platformudur. Müşteri üç adımlı sihirbazda aracını seçer, kilometre ve hasar bilgisini girer ve iki teklif görür: galerinin aracı hemen satın alacağı **nakit teklif** ve aracın galeride komisyonla satılacağı **konsinye ilan fiyatı** (beklenen satış, komisyon ve müşteriye kalan net tutar ile). Fiyatlar sabit bir amortisman formülünden değil, kaydedilmiş ilan sayfalarından üretilen **piyasa snapshot'larından** (emsal istatistikleri) hesaplanır. Fiyatlanan değerlemeler ve konsinye başvuruları yönetim panelindeki CRM'e düşer ve görsel kartla Telegram grubuna gönderilir. Kod deterministiktir (yüzdelikler, doğrusal düzeltmeler, kademeli rezerv ve komisyon); gerçek ilan verisi depoda yoktur, denemek için `npm run seed:demo` sentetik veri üretir.
+NakitGaraj, bir ikinci el galerisi için geliştirilmiş bir değerleme ve konsinye platformudur. Müşteri üç adımlı sihirbazda aracını seçer, kilometre ve hasar bilgisini girer ve iki teklif görür: galerinin aracı hemen satın alacağı **nakit teklif** ve aracın galeride komisyonla satılacağı **konsinye ilan fiyatı** (beklenen satış, komisyon ve müşteriye kalan net tutar ile). Fiyatlar sabit bir amortisman formülünden değil, kaydedilmiş ilan sayfalarından üretilen **piyasa snapshot'larından** (emsal istatistikleri) hesaplanır. Fiyatlanan değerlemeler ve konsinye başvuruları yönetim panelindeki CRM'e düşer ve görsel kartla Telegram grubuna gönderilir. Kod deterministiktir (yüzdelikler, doğrusal düzeltmeler, kademeli rezerv ve komisyon); gerçek ilan verisi depoda yoktur, denemek için `npm run seed:demo` sentetik veri üretir. Bu sentetik fiyatlar her yeni veritabanında farklı çıkar, bu yüzden belgedeki örnek hesap sabit snapshot satırlarından başlar.
 
-Fiyatlama motoru dört seviyede emsal arar ve her cevapta hangi seviyeyi kullandığını söyler. Veri yoksa tahmin yürütmez, "yetersiz veri" der. Güvenlik tarafı "kapalı başla" ilkesine dayanır: JWT anahtarı yoksa ya da depo geçmişine sızmış bir anahtarsa backend açılmaz, production'da `CORS_ORIGIN` yoksa başka sitelere izin verilmez, her admin rotası sunucuda rol ve izinle kontrol edilir.
+Fiyatlama motoru dört seviyede emsal arar ve her cevapta hangi seviyeyi kullandığını söyler. Veri yoksa tahmin yürütmez, "yetersiz veri" der. Güvenlik tarafı "kapalı başla" ilkesine dayanır: JWT anahtarı yoksa ya da depo geçmişine sızmış bir anahtarsa backend açılmaz, production'da `CORS_ORIGIN` yoksa başka sitelere izin verilmez, her admin rotası sunucuda rol ve izinle kontrol edilir. Belgede herkese açık uç noktaların istek/yanıt biçimleri ve 23 admin rotasının hangi izni istediği tablo hâlinde verilmiştir.
 
 - **Akış:** sihirbaz → `POST /vehicle-evaluation` → katalog spesifikasyonu → emsal eşleştirme (Seviye 1: tam eşleşme, ≥ 5 ilan; Seviye 2: aynı versiyon ± 1 yıl, ≥ 5; Seviye 3: aynı model ± 2 yıl, ≥ 3; Seviye 4: yetersiz veri) → hesaplama → kayıt + Telegram.
-- **Piyasa değeri:** P50 + kilometre düzeltmesi (±, en fazla +%10 / −%12) − hasar (`YES` %8, `UNKNOWN` %4). Yıl farkı, Seviye 2 ve 3'te snapshot'lardan öğrenilen (yoksa %8) yıllık oranla normalleştirilir.
+- **Piyasa değeri:** P50 + kilometre düzeltmesi (±, en fazla +%10 / −%12) − hasar (`YES` %8, `UNKNOWN` %4). Yıl farkı, Seviye 2 ve 3'te snapshot'lardan öğrenilen (yoksa %8) yıllık oranla normalleştirilir. Bu seviyelerde referans medyan kilometre ağırlıklandırılmaz; sorgu sırasındaki son snapshot'tan (başka bir model yılı olabilir) alınır.
 - **Nakit teklif:** min(piyasa değeri − rezerv, düzeltilmiş P35); rezerv segmente göre %8 / %6,5 / %5,5 / %4,5, en az 65 / 85 / 130 / 220 bin TL; 8'den az ilan varsa +2,5 puan. 400.000 TL altındaki her araç manuel değerlendirmeye düşer.
-- **Konsinye:** ilan fiyatı P60'a (ya da müşterinin istediği fiyata) göre, piyasa değerinin en fazla %3 (istenen fiyatta yaklaşık %8,15) üstü; beklenen satış = ilan − %1,5 pazarlık, en az nakit teklif + 30.000 TL; komisyon %4,5 / %3,5 / %3 / %2,5, en az 50 / 80 / 120 / 175 bin TL.
-- **Veri:** iki ayrı fiyat dünyası var. Katalog fiyatları (seed, aylık senkronizasyon, fiyat tarayıcı, admin aktarımı) tekliflere girmez. Teklifler yalnızca ilanlardan üretilen snapshot'lardan gelir. Snapshot'lar IQR temizliği ve yüzdeliklerle üretilir ve tek bir transaction ile atomik olarak değiştirilir. Tarayıcı ve Chrome eklentisi üçüncü taraf sitelerden veri toplama araçlarıdır; kullanım koşulları proje sahibi tarafından kontrol edilmelidir.
-- **Güvenlik:** zorunlu ve sızmış anahtarları reddeden JWT; `@RequirePermissions` / `@RequireRoles` ile `RolesGuard` (izinler her istekte veritabanından okunur); girişte dakikada 5, formlarda dakikada 100 istek sınırı; production'da kapalı CORS; yalnızca localhost'tan gelen `X-Forwarded-For` başlığına güven; Telegram mesajlarında HTML kaçışı.
-- **Testler (bu commit'te çalıştırıldı):** birim testleri 10 dosya, 51 geçti, 2 atlandı; e2e testleri 4 dosya, 83 geçti. e2e testleri 23 admin rotasının tamamında 401/403 davranışını doğrular.
-- **Bilinen eksikler:** sihirbazın sonuç ekranı "yetersiz veri" ve "manuel değerlendirme" cevaplarını gösteremiyor; çok düşük istenen fiyat ilan fiyatına aynen geçiyor; panelin kâr marjı ayarları hesaplamada kullanılmıyor; boya şeması kaydedilmiyor ve fiyata yansımıyor; JWT süresi dolmadan oturum iptal edilemiyor.
+- **Konsinye:** ilan fiyatı P60'a (ya da müşterinin istediği fiyata) göre, piyasa değerinin en fazla %3 (istenen fiyatta yaklaşık %8,15) üstü; beklenen satış = ilan − %1,5 pazarlık, en az nakit teklif + 30.000 TL; komisyon %4,5 / %3,5 / %3 / %2,5, en az 50 / 80 / 120 / 175 bin TL. Bağımsız konsinye formundaki anlık değerleme katalogda karşılık bulamazsa 404 döner ve başvuru kaydedilmez.
+- **Veri:** iki ayrı fiyat dünyası var. Katalog fiyatları (seed, aylık senkronizasyon, fiyat tarayıcı, admin aktarımı) tekliflere girmez. Teklifler yalnızca ilanlardan üretilen snapshot'lardan gelir. Snapshot'lar IQR temizliği ve yüzdeliklerle üretilir ve tek bir transaction ile atomik olarak değiştirilir. İçe aktarma kaynağa bakmadığı için önce `seed:demo` çalıştırılmışsa demo ilanları gerçek snapshot'lara karışır. Tarayıcı ve Chrome eklentisi üçüncü taraf sitelerden veri toplama araçlarıdır; kullanım koşulları proje sahibi tarafından kontrol edilmelidir.
+- **Güvenlik:** zorunlu ve sızmış anahtarları reddeden JWT; `@RequirePermissions` / `@RequireRoles` ile `RolesGuard` (izinler her istekte veritabanından okunur); girişte dakikada 5, formlarda dakikada 100 istek sınırı; production'da kapalı CORS; yalnızca localhost'tan gelen `X-Forwarded-For` başlığına güven; Telegram mesajlarında HTML kaçışı. Araç talebinin durumunu değiştirmek `manage_vehicles` ister, bu yüzden CRM_MANAGER talepleri görür ama durumlarını değiştiremez.
+- **Testler (bu sürüm için yeniden çalıştırıldı):** birim testleri 10 dosya, 51 geçti, 2 atlandı; e2e testleri 4 dosya, 83 geçti. e2e testleri 23 admin rotasının tamamında 401/403 davranışını doğrular.
+- **Bilinen eksikler:** 2-3 ilanlı gruplarda yüzdelikler sıralanmamış fiyatlardan alınıyor; Seviye 2 ve 3'te kilometre referansı tek bir snapshot'tan geliyor; snapshot sorguları indeks kullanmadan tüm tabloyu tarıyor; sihirbazın sonuç ekranı "yetersiz veri" ve "manuel değerlendirme" cevaplarını gösteremiyor; çok düşük istenen fiyat ilan fiyatına aynen geçiyor; panelin kâr marjı ayarları hesaplamada kullanılmıyor; boya şeması kaydedilmiyor ve fiyata yansımıyor; JWT süresi dolmadan oturum iptal edilemiyor.
