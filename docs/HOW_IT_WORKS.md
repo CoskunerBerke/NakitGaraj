@@ -7,18 +7,20 @@ Contents:
 1. [What it is and what it is not](#what-it-is-and-what-it-is-not)
 2. [Architecture](#architecture)
 3. [Runtime flows](#runtime-flows)
-4. [Public API reference](#public-api-reference)
-5. [Data model](#data-model)
-6. [Where the data comes from](#where-the-data-comes-from)
-7. [Pricing engine in depth](#pricing-engine-in-depth)
-8. [Security model](#security-model)
-9. [Notifications and scheduled jobs](#notifications-and-scheduled-jobs)
-10. [Design decisions and trade-offs](#design-decisions-and-trade-offs)
-11. [Testing strategy](#testing-strategy)
-12. [Limitations, known gaps and next steps](#limitations-known-gaps-and-next-steps)
-13. [Code tour](#code-tour)
-14. [Glossary](#glossary)
-15. [Türkçe özet](#türkçe-özet)
+4. [Frontend internals](#frontend-internals)
+5. [Public API reference](#public-api-reference)
+6. [Data model](#data-model)
+7. [Where the data comes from](#where-the-data-comes-from)
+8. [Pricing engine in depth](#pricing-engine-in-depth)
+9. [Security model](#security-model) (including [personal data](#personal-data))
+10. [Notifications and scheduled jobs](#notifications-and-scheduled-jobs)
+11. [Deployment and operations](#deployment-and-operations) (including [observability and error handling](#observability-and-error-handling))
+12. [Design decisions and trade-offs](#design-decisions-and-trade-offs)
+13. [Testing strategy](#testing-strategy)
+14. [Limitations, known gaps and next steps](#limitations-known-gaps-and-next-steps)
+15. [Code tour](#code-tour)
+16. [Glossary](#glossary)
+17. [Türkçe özet](#türkçe-özet)
 
 ---
 
@@ -27,7 +29,7 @@ Contents:
 **What it is.** A web platform for a used-car dealer that offers sellers two ways to sell:
 
 - **Instant cash offer** ("anında nakit alım"): the dealer buys the car now. The price is the market value minus a reserve that covers the dealer's risk and costs.
-- **Consignment** ("konsinye"): the car stays with the dealer, who sells it for a commission. The seller sees a listing price, the expected sale price, the commission and their net payout.
+- **Consignment** ("konsinye"): the car stays with the dealer, who sells it for a commission. The API computes a listing price, the expected sale price, the commission and the seller's net payout; the result page shows the listing price as the headline figure. The two offers are computed independently, and the consignment net is not guaranteed to exceed the cash offer (see [How the net compares with the cash offer](#how-the-net-compares-with-the-cash-offer)).
 
 A seller fills in a three-step wizard. The backend prices the car from **market snapshots**, which are statistics aggregated from saved listing pages (comparables, "emsal"), and stores the valuation for the dealer's team. The team works the leads in an admin panel (CRM, users and roles, imports, settings) and gets each new lead in a Telegram group.
 
@@ -95,7 +97,7 @@ flowchart LR
 | Telegram | HTML-escaped messages, a PNG card drawn with `@napi-rs/canvas`, WhatsApp deep links. | [`telegram.service.ts`](../backend/src/telegram/telegram.service.ts), [`telegram.card-generator.ts`](../backend/src/telegram/telegram.card-generator.ts) |
 | Offline data tooling | Seeds, demo seed, the listing ingest that builds snapshots, and many one-off scripts from development. | [`prisma/seed.ts`](../backend/prisma/seed.ts), [`prisma/seed-demo.ts`](../backend/prisma/seed-demo.ts), [`ingest_all_desktop_html_recursive.ts`](../backend/src/scripts/ingest_all_desktop_html_recursive.ts) |
 
-The backend is one NestJS process with one SQLite file, and PM2 runs it next to the Next.js server ([`ecosystem.config.js`](../ecosystem.config.js)). In the documented deployment, Nginx serves both on one origin and forwards `/api` to port 3001 ([DEPLOYMENT.md](../DEPLOYMENT.md), in Turkish).
+The backend is one NestJS process with one SQLite file, and PM2 runs it next to the Next.js server ([`ecosystem.config.js`](../ecosystem.config.js)). In the documented deployment, Nginx serves both on one origin and forwards `/api` to port 3001. [Deployment and operations](#deployment-and-operations) summarises the Turkish [DEPLOYMENT.md](../DEPLOYMENT.md) in English.
 
 ---
 
@@ -107,8 +109,8 @@ The wizard in [`degerleme/page.tsx`](../frontend/src/app/degerleme/page.tsx) has
 
 - **Contact gate.** Before step 1, a modal asks for first name, last name and a mobile number matching `^(05|5)\d{9}$`. The values are kept in `sessionStorage`.
 - **Step 1, vehicle.** Model year, brand and model, then variant, package, body, fuel and transmission. Each choice re-queries `GET /vehicle-data`, which returns only the options that are still possible. A list with exactly one option is preselected through `autoPopulate`.
-- **Step 2, condition.** Plate (Turkish plate regex), mileage (at least 1), colour, damage record (`YES` / `NO` / `UNKNOWN`), selling timeline, desired price (at least 1), a 13-part paint/replacement map, chassis, heavy-damage, scratch and glass flags, and an equipment checklist. The checklist needs at least one answer (or "not sure") in each of its four categories before the form can be submitted.
-- **Step 3, result.** Cash offer, consignment listing price and the explanation notes.
+- **Step 2, condition.** Plate (Turkish plate regex), mileage (at least 1), colour, damage record (`YES` / `NO` / `UNKNOWN`), selling timeline, desired price (at least 1), a 13-part paint/replacement map, chassis, heavy-damage, scratch and glass flags, an equipment checklist and a mandatory KVKK consent checkbox (see [Personal data](#personal-data)). The checklist needs at least one answer (or "not sure") in each of its four categories before the form can be submitted.
+- **Step 3, result.** Two cards, the cash offer and the consignment listing price, followed by the explanation notes. The commission and the seller's net payout are not shown as figures; the net appears only inside the note about the desired price (see [How the net compares with the cash offer](#how-the-net-compares-with-the-cash-offer)).
 
 ```mermaid
 sequenceDiagram
@@ -244,7 +246,22 @@ flowchart TD
   T --> X["One transaction: delete v2.0,<br/>rename v2.0_temp to v2.0 and activate"]
 ```
 
-This runs on the operator's machine with `npx ts-node src/scripts/ingest_all_desktop_html_recursive.ts` ([source](../backend/src/scripts/ingest_all_desktop_html_recursive.ts)), not inside the API. Details are in [Snapshot building](#snapshot-building).
+This runs on the operator's machine with `npx ts-node src/scripts/ingest_all_desktop_html_recursive.ts` ([source](../backend/src/scripts/ingest_all_desktop_html_recursive.ts)), not inside the API. The expected page structure is in [Listing archive format](#listing-archive-format), the aggregation in [Snapshot building](#snapshot-building).
+
+---
+
+## Frontend internals
+
+The frontend is a Next.js 16 App Router project ([`frontend/src/app`](../frontend/src/app/layout.tsx)). Every page is a client component (`'use client'`), apart from the root layout and `/admin`, which only calls `notFound()`. There are no API routes, server actions or middleware: pages render in the browser and call the NestJS API from there.
+
+- **API base URL** ([`config/api.ts`](../frontend/src/config/api.ts) `API_BASE`). It is `NEXT_PUBLIC_API_URL` when that was set at build time; Next.js inlines `NEXT_PUBLIC_*` values into the bundle, so changing it means rebuilding. Otherwise the browser uses `http://<page host>:3001/api`, and a server-side render uses `http://127.0.0.1:3001/api`. The fallback suits `next dev` on a laptop. On an HTTPS site it fails, because the browser blocks plain-HTTP calls as mixed content.
+- **Data fetching.** Plain `fetch` calls in `useEffect` hooks and submit handlers. [`providers.tsx`](../frontend/src/app/providers.tsx) mounts a TanStack Query `QueryClientProvider`, but no component calls `useQuery` or `useMutation`, so there is no client cache or retry logic in use.
+- **Forms.** React Hook Form with a Zod resolver validates three forms: the wizard's step 2 (`step2Schema` in [`degerleme/page.tsx`](../frontend/src/app/degerleme/page.tsx)), the consignment contact step (`contactSchema` in [`konsinye/page.tsx`](../frontend/src/app/konsinye/page.tsx)) and the admin login (`loginSchema` in [`admin_panel/page.tsx`](../frontend/src/app/admin_panel/page.tsx)). The vehicle selects, the wizard's contact gate, the paint map and the equipment checklist are plain `useState` with hand-written checks. The plate and phone rules repeat the backend DTO regexes, and the backend checks them again.
+- **Language** ([`LanguageContext.tsx`](../frontend/src/context/LanguageContext.tsx)). One file holds a Turkish and an English dictionary of keys. `t(key)` returns the current language's string, falls back to Turkish and then to the key itself. The language defaults to `tr` and is kept in `localStorage` under `language`; the stored value is applied after the first render, so the page first paints in Turkish. Many strings are written inline in Turkish (for example the two offer cards on the result step), and the explanation notes come from the API in Turkish, so the English UI is partial.
+- **Theme** ([`ThemeContext.tsx`](../frontend/src/context/ThemeContext.tsx)). Light or dark, stored in `localStorage` under `theme`, applied as the `dark` class on `<html>`.
+- **Error display.** In the wizard and the consignment form, a non-2xx response is turned into an `Error` with the API's `message` and shown in a browser `alert()`. When the wizard cannot reach the API at all, it shows a fixed "backend not reachable" text instead.
+- **The result step assumes a priced answer.** `INSUFFICIENT_DATA` and `MANUAL_EVALUATION_REQUIRED` come back as HTTP 201, like a priced answer (see [Error handling](#error-handling-conventions)), so the wizard moves to step 3 and reads `results.finalOfferedPrice`. With `results: null`, or with a manual-review `results` that has no `finalOfferedPrice`, that read throws a `TypeError` during rendering. The app has no `error.tsx` boundary, so Next.js replaces the page with its generic client-side error screen.
+- **Admin panel.** The login page stores the JWT and the user object in `localStorage` (`admin_token`, `admin_user`). The dashboard layout only checks that the token exists; pages send it as `Authorization: Bearer …`. An expired token is not detected: most pages show a generic loading error (the settings page says the session may have expired), and the user has to log out and in again. The vehicle-request page ignores failed calls without any message, which is also what a `CRM_MANAGER` sees when a status change gets 403. The dashboard page polls `GET /admin/dashboard` every 3 seconds.
 
 ---
 
@@ -375,6 +392,42 @@ So the scraper, the monthly sync and the price-adjust endpoint change catalogue 
 
 The scraper and the extension are data-collection tooling aimed at third-party listing sites. Whether running them is allowed depends on those sites' terms of use, which the owner has to check.
 
+### Listing archive format
+
+The ingest reads search-result pages saved as HTML. It does not fetch anything itself; the pages have to be collected beforehand. What it expects, from [`ingest_all_desktop_html_recursive.ts`](../backend/src/scripts/ingest_all_desktop_html_recursive.ts) `main`:
+
+- **Folder layout.** Every file ending in `.html` (any case) under `LISTING_ARCHIVE_DIR`, searched recursively. The first folder level below the archive root is the raw make, and the file name without `.html` is the raw model, for example `Fiat/Egea.html`. Deeper sub-folders are read too, but only the first level counts as the make. The normaliser strips page suffixes such as ` - 2` from these names.
+- **Which part of the file.** Only the first `<table>…</table>` block (found with a regular expression) is loaded into Cheerio. Without a table, the first `<tbody>…</tbody>`; without either, the whole file. Listing rows inside a later table are not seen.
+- **Rows.** Each `tr` with a `data-id` attribute is one listing, and `data-id` becomes `sourceListingId`. Rows without it are skipped.
+- **Cells**, found by class anywhere in the row:
+
+| Selector | Read as | Rule |
+|---|---|---|
+| `td.searchResultsTitleValue` | title | Text, used by the normaliser to find the model. |
+| `td.searchResultsPriceValue` | price | All non-digits removed (`650.000 TL` becomes 650000). The row is dropped if the price is outside 50,000 to 150,000,000. |
+| `td.searchResultsAttributeValue`, 1st | model year | Digits only; the row is dropped unless the year is 1980 to 2026. |
+| `td.searchResultsAttributeValue`, 2nd | mileage | Digits only; kept if 0 to 2,000,000 and not equal to the year or the price, otherwise stored as unknown. |
+| `td.searchResultsTagAttributeValue` | raw variant | Text; when empty, the file name is used. |
+
+- **Damage.** The whole row text, lower-cased, is searched for `ağır hasar` or `pert`. A match sets `isDamaged`, and such listings are left out of snapshots. The check is a plain substring test, so it also matches `ekspertiz` (expert inspection report, common in clean listings) and the model name `Expert`; see [Limitations](#limitations-known-gaps-and-next-steps).
+- **Errors.** A file that throws while parsing becomes one quarantine record with reason `PARSER_EXCEPTION: …`. Rows that fail normalisation are quarantined with the normaliser's reason. Rows dropped for price or year leave no record.
+
+A minimal page that the parser accepts (fictional values):
+
+```html
+<table>
+  <tr data-id="900000001">
+    <td class="searchResultsTagAttributeValue">1.4 Fire</td>
+    <td class="searchResultsTitleValue">Temiz, bakımlı Egea</td>
+    <td class="searchResultsAttributeValue">2020</td>
+    <td class="searchResultsAttributeValue">90.000</td>
+    <td class="searchResultsPriceValue">650.000 TL</td>
+  </tr>
+</table>
+```
+
+The script has no dry-run mode. It writes listings, quarantine records and snapshots to the database in the same run, and prints the number of HTML files, valid listings and quarantined records. The quarantine reasons in `QuarantinedListing` are the way to see which rows of an archive were rejected.
+
 ### Demo data is not reproducible across databases
 
 [`seed-demo.ts`](../backend/prisma/seed-demo.ts) draws all random numbers from one PRNG stream with a fixed seed (`mulberry32(20260930)`). The comment there says this makes every run produce the same data, but that holds only for the same database. The groups consume the stream in the order of the catalogue query, which sorts by `manufacturerId`, `modelId` and `variantId`. These ids are random UUIDs that `prisma db seed` creates, so each fresh database hands different random numbers to each make · model · variant · year group.
@@ -416,7 +469,7 @@ The design choice is to **quarantine rather than guess**. A listing whose make o
 Inside the ingest script ([source](../backend/src/scripts/ingest_all_desktop_html_recursive.ts)):
 
 - **Row filter.** A row is kept only if its price is between 50,000 and 150,000,000 TL and its year is between 1980 and 2026. Mileage is kept if it is between 0 and 2,000,000 and not equal to the year or the price (a guard against shifted cells).
-- **Damage flag.** `isDamaged` is set when the row text contains "ağır hasar" (heavy damage) or "pert" (write-off). Damaged listings are stored but excluded from snapshots, so snapshots describe clean cars and damage is priced separately.
+- **Damage flag.** `isDamaged` is set when the row text contains "ağır hasar" (heavy damage) or "pert" (write-off). Damaged listings are stored but excluded from snapshots, so snapshots describe clean cars and damage is priced separately. The test is a plain substring match, so "ekspertiz" (an expert inspection report) also contains "pert": a listing titled "HATASIZ EKSPERTİZLİ" (flawless, inspected) was stored with `isDamaged = true` and left out of its snapshot when the real ingest ran on a scratch archive.
 - **Grouping and deduplication.** Listings are grouped by canonical make · model · variant · year. Within one run, a listing id is kept once, and existing rows are updated in place with a new `lastSeenAt`.
 - **Outliers** ([`RobustPricingCalculator.cleanOutliersIQR`](../backend/src/evaluation/robust-pricing-calculator.ts)). It keeps prices between 50,000 and 150,000,000. With four or more prices it sorts them, computes `Q1 = sorted[⌊0.25n⌋]`, `Q3 = sorted[⌊0.75n⌋]` and returns the sorted prices in `[max(50,000, Q1 − 1.5·IQR), Q3 + 1.5·IQR]`. With fewer than four it returns them unfiltered **and in input order** (an early return before the sort).
 - **Percentiles** (`calculatePercentiles`). Nearest rank `sorted[⌊p·n⌋]` for P5, P35, P50, P60 and P95. The function assumes sorted input. For groups of four or more listings that holds. For groups of two or three it does not: the ingest passes prices in database order, so the "percentiles" are positions in that order. For example, `[900,000, 500,000, 700,000]` gives P5 900,000, P35 to P60 500,000 and P95 700,000, so P5 is above P50 (checked by running the two functions). Level 3 accepts a single snapshot with three listings, so such values can reach an offer. The demo seed always has 14 listings per group and is not affected. The columns are named `weighted…` because the matcher later averages several snapshots with weights; inside one snapshot they are plain percentiles.
@@ -515,9 +568,41 @@ commission      = max(minCommission, round(expectedSale × rate))
 customerNet     = expectedSale − commission
 ```
 
-The listing price targets the 60th percentile, capped at 3 % above fair value and rounded to a "…000 − 1,000" price (650,500 becomes 649,000). If the seller states a desired price, the listing follows it, capped at about 8.15 % above fair value (1.05 × 1.03). The expected sale price assumes 1.5 % negotiation and never falls below cash offer + 30,000 TL. That floor means the consignment payout is meant to beat the cash offer; the unit test "keeps cash offer < fair value < consignment listing" in [`robust-pricing-calculator.spec.ts`](../backend/src/evaluation/robust-pricing-calculator.spec.ts) asserts this ordering.
+The listing price targets the 60th percentile, capped at 3 % above fair value and rounded to a "…000 − 1,000" price (650,500 becomes 649,000). If the seller states a desired price, the listing follows it, capped at about 8.15 % above fair value (1.05 × 1.03). There is no lower bound, so a desired price below the market pulls the listing price down with it. The expected sale price assumes 1.5 % negotiation and never falls below cash offer + 30,000 TL.
 
 The wizard requires a desired price of at least 1 TL, so wizard valuations always take the desired-price branch. The consignment form's on-the-fly valuation sends 0 and takes the P60 branch.
+
+#### How the net compares with the cash offer
+
+The calculator computes the two offers side by side and never compares them. Nothing in the code makes consignment the better deal for the seller:
+
+- **The floor applies to the sale price, not to the seller's net.** `expectedSale = max(cashOffer + 30,000, …)` sets a minimum for the price the dealer expects to sell at. The commission is then charged on that price, and it is at least 50,000 TL (80,000, 120,000 or 175,000 TL in the higher tiers). Whenever the floor applies, the net is `cashOffer + 30,000 − commission`, which is **at least 20,000 TL below the cash offer**. It is exactly 20,000 TL below while the floored sale price stays under 1,111,112 TL, the point where 4.5 % starts to exceed the 50,000 TL minimum.
+- **Without the floor, the net beats the cash offer only if the listing is high enough.** The condition is `listing − negotiation − commission > cashOffer`. In the first tier, under 1,111,112 TL, the commission is a flat 50,000 TL, so the expected sale has to exceed the cash offer by more than 50,000 TL.
+- **Consequence.** A desired price modestly below the market can already give a consignment net below the cash offer. In the [worked example](#worked-example-fixed-snapshot-input), the net beats the cash offer only for desired prices of 641,000 TL and more, about 1.1 % under the fair value. A desired price of 500,000 TL gives a net of 560,000 TL against a cash offer of 580,000 TL.
+- **What the customer sees.** The result step shows the cash offer next to the consignment **listing price**, with the text "we sell it in your name at this price" and the tag "Yüksek kazanç" (high earnings). The expected sale, the commission and the net are not shown as figures. The net appears only inside the explanation note about the desired price. So the two headline numbers compare a purchase price with an asking price before negotiation and commission.
+- **What the tests check.** The unit test named "keeps cash offer < fair value < consignment listing, and net = sale - commission" in [`robust-pricing-calculator.spec.ts`](../backend/src/evaluation/robust-pricing-calculator.spec.ts) asserts `cashOffer < fairMarketValue`, `consignmentListingPrice > cashOffer`, `net = sale − commission` and a cash offer divisible by 5,000. Despite its name, it does not compare the fair value with the listing price. Test 7 in [`pricing_engine.spec.ts`](../backend/src/evaluation/pricing_engine.spec.ts) asserts listing > expected sale > net and a positive commission. No test compares the net with the cash offer.
+
+The code does not say what the 30,000 TL floor is meant for, and this document does not guess. Its effect is that the dealer's expected sale price, and so the commission base, never drops below the cash offer plus 30,000 TL.
+
+### Confidence score
+
+Every priced answer carries a `confidenceScore`. The matcher sets a base per level, and the calculator ([`computeValuationFromSnapshot`](../backend/src/evaluation/robust-pricing-calculator.ts)) adjusts it:
+
+```text
+n = listing count (Level 1: the snapshot's; Levels 2 and 3: the sum over the merged snapshots)
+
+base   Level 1: min(99, max(83, 95 + ⌊n / 12⌋))
+       Level 2: min(88, max(76, 78 + ⌊n / 20⌋))
+       Level 3: min(78, max(62, 65 + ⌊n / 25⌋))
+
+final  = clamp(base − (n < 8 ? 10 : 0) − (level = 4 ? 20 : 0), 0, 99)
+```
+
+- **Dead branches.** The lower bounds in the matcher (83, 76, 62) never apply, because each formula already starts at 95, 78 or 65. The −20 for Level 4 never applies either: both `evaluateVehicle` and the preview return `INSUFFICIENT_DATA` with confidence 0 before the calculator runs.
+- **Possible values.** Level 1: 85 (5 to 7 listings) or 95 to 99. Level 2: 68 (5 to 7 listings) or 78 to 88. Level 3: 55 (3 to 7 listings) or 65 to 78. The worked example below (Level 2, 42 listings) gets 80.
+- **Same threshold as the reserve.** "Fewer than 8 listings" also adds 2.5 percentage points to the cash reserve, so thin data lowers both the score and the offer.
+- **Informational only.** The score is returned, stored in `VehicleEvaluation.confidenceScore` and returned as a string such as `"80%"` by `GET /vehicle-evaluation/:id`. No rule reads it, and no frontend page displays it.
+- **The limited-data note never shows.** The matcher's `isLimitedComps` flag is `true` only at Level 4, so the "limited comparables" warning that `evaluateVehicle` adds for that flag never appears in a priced answer.
 
 ### Worked example (fixed snapshot input)
 
@@ -544,8 +629,12 @@ All three rows have trim `Easy`, body `Sedan`, fuel `Benzin`, transmission `Manu
 | Fair market value | 649,525 − 1,299 = **648,226 TL** |
 | Reserve | 8 % − 0.5 % = 7.5 % gives 48,617 TL, below the 65,000 TL minimum, so 65,000 TL. |
 | Cash offer | `min(648,226 − 65,000, adjusted P35 624,189)` = 583,226, rounded down to **580,000 TL** (range 555,000 to 590,000), 7 to 18 days to sell. |
-| Consignment, desired price 0 | Adjusted P60 650,461 is under the cap of 667,673, so the listing is **649,000 TL**. Expected sale `max(610,000, 649,000 − 9,735)` = 639,265; commission `max(50,000, 28,767)` = 50,000; net 589,265. |
-| Consignment, desired price 700,000 | Cap `round(648,226 × 1.05 × 1.03)` = 701,056, so the listing is **699,000 TL**. Expected sale 688,515; commission 50,000; net 638,515. |
+| Consignment, desired price 0 (P60 branch) | Adjusted P60 650,461 is under the cap of 667,673, so the listing is **649,000 TL**. Expected sale `max(610,000, 649,000 − 9,735)` = 639,265; commission `max(50,000, 28,767)` = 50,000; net 589,265, which is 9,265 TL **above** the cash offer. |
+| Consignment, desired price 700,000 | Cap `round(648,226 × 1.05 × 1.03)` = 701,056, so the listing is **699,000 TL**. Expected sale 688,515; commission 50,000; net 638,515 (58,515 above the cash offer). |
+| Consignment, desired price 640,000 | Listing 639,000; expected sale 629,415; commission 50,000; net 579,415, which is 585 TL **below** the cash offer. |
+| Consignment, desired price 500,000 | Listing 499,000. `499,000 − 7,485` = 491,515 is under the floor, so the expected sale is 610,000 (cash offer + 30,000); commission 50,000; net **560,000**, 20,000 TL below the cash offer. A desired price of 1 TL gives the same net, with a listing price of 1 TL. |
+
+**Where consignment starts to pay more.** With these inputs, the floor applies to every desired price under 621,000 TL (net 560,000 TL). Above it, the first desired price whose net beats the 580,000 TL cash offer is 641,000 TL: listing 640,000, expected sale 630,400, net 580,400. A desired price equal to the fair value (648,226) gives a listing of 647,000 and a net of 587,295 TL. Every consignment figure in this table was produced by running the calculator's `computeValuationFromSnapshot` code on the merged percentiles above.
 
 **Effect of the last-snapshot rule.** The requested year's own snapshot (2020) has a median of 91,000 km. With that reference the mileage adjustment would be +260 TL, the fair value 649,785 TL and the P60 listing 651,000 TL; the cash offer would stay at 580,000 TL. In the second fresh database the same rule took the 2021 median (79,000 km) instead of the 2020 one (96,000 km) and lowered the cash offer from 575,000 to 570,000 TL. That database's full result was a learned rate of 9.5 %, a fair value of 636,129 TL and a cash offer of 570,000 TL: the same steps with different synthetic inputs.
 
@@ -560,6 +649,8 @@ All three rows have trim `Easy`, body `Sedan`, fuel `Benzin`, transmission `Manu
 | `INSUFFICIENT_DATA` | Level 4 | no | no |
 | HTTP 404 | no catalogue spec for the selection | no | no |
 | HTTP 400 | DTO validation (plate, phone, numbers, unknown fields) | no | no |
+
+The first three rows are all HTTP 201 responses; only the `status` field tells them apart (see [Error handling conventions](#error-handling-conventions)).
 
 `EvaluationService.calculateVehicleValuationPreview` runs the same pipeline without writing anything and returns `status: 'SUCCESS'` for priced results. Tests and a reporting script use it; no route exposes it.
 
@@ -577,7 +668,7 @@ All three rows have trim `Easy`, body `Sedan`, fuel `Benzin`, transmission `Manu
 | Client IP behind Nginx | `app.set('trust proxy', 'loopback')`: `X-Forwarded-For` is honoured only when the direct peer is localhost (Nginx on the same host). A remote client cannot spoof its IP to get around the login limit or pollute audit logs. | [`main.ts`](../backend/src/main.ts) |
 | CORS | `CORS_ORIGIN` set: only those origins, with credentials. Unset in production: `origin: false`, so no CORS headers are sent and browsers block cross-origin reads; the site calls the API on its own origin through Nginx `/api`. Unset outside production: every origin is allowed, so `next dev` on :3000 can call :3001. | [`cors.ts`](../backend/src/config/cors.ts) |
 | Input validation | Global `ValidationPipe` with `whitelist`, `forbidNonWhitelisted` and `transform`. Unknown fields are a 400. DTOs check the plate and phone regexes, numbers, minimums and e-mail. | [`main.ts`](../backend/src/main.ts), [`create-evaluation.dto.ts`](../backend/src/evaluation/dto/create-evaluation.dto.ts) |
-| Customer data | Public responses never echo another customer's personal data. The consignment endpoint strips the linked valuation, and `GET /vehicle-evaluation/:id` (looked up by an unguessable UUID) returns the vehicle, the offer figures and the notes, without name, phone, plate or IP. | [`consignment.service.ts`](../backend/src/consignment/consignment.service.ts), [`evaluation.service.ts` `getEvaluationById`](../backend/src/evaluation/evaluation.service.ts) |
+| Customer data | Public responses never echo another customer's personal data. The consignment endpoint strips the linked valuation, and `GET /vehicle-evaluation/:id` (looked up by an unguessable UUID) returns the vehicle, the offer figures and the notes, without name, phone, plate or IP. What is stored and for how long is in [Personal data](#personal-data). | [`consignment.service.ts`](../backend/src/consignment/consignment.service.ts), [`evaluation.service.ts` `getEvaluationById`](../backend/src/evaluation/evaluation.service.ts) |
 | Telegram injection | Messages use `parse_mode: HTML`. Every customer-typed value goes through `escapeTelegramHtml`, so a stray `<` cannot break the message or inject links. | [`telegram.service.ts`](../backend/src/telegram/telegram.service.ts) |
 | Seed | No default admin password: the seed stops before writing anything when `ADMIN_PASSWORD` is missing. | [`seed.ts`](../backend/prisma/seed.ts) |
 
@@ -615,6 +706,28 @@ All 23 routes under `/api/admin`. The 19 in [`admin.controller.ts`](../backend/s
 
 What the two seeded roles can do follows from this table. `ADMIN` has all four permissions and the `ADMIN` role, so it passes every route. `CRM_MANAGER` has `view_valuations` and `manage_consignments`: it can open the dashboard, the valuations, the vehicle-request list and the consignment CRM, and change consignment statuses. It **cannot** change a vehicle request's status, because that route needs `manage_vehicles`; the "Araç Talepleri" page shows the buttons, and the API answers 403. The e2e suite proves that every route rejects a role without permissions, and that the 7 role routes reject a non-`ADMIN` role with every permission. It does not pin which permission each of the other 16 routes needs; this table is read from the decorators.
 
+### Personal data
+
+Both public forms collect personal data, and the code keeps it with no time limit. What is stored, where it goes and what is missing:
+
+| Stored in | Personal fields | Written when |
+|---|---|---|
+| `VehicleEvaluation` | First and last name, mobile number, licence plate, client IP (`userIp`), desired price, selling timeline | Every priced valuation. The consignment form's on-the-fly valuation stores the placeholder plate `34ABC123`. |
+| `ConsignmentApplication` | First and last name, mobile number, e-mail, province, district, preferred contact channel, `notes` (the vehicle answers as JSON) | Every saved consignment application |
+| `VehicleRequest` | Optional phone and e-mail | "My car is not listed" requests |
+| `AuditLog` | Staff user id and IP address | Three admin actions |
+| `User` | Staff e-mail, names, bcrypt hash | Seed and user management |
+| Browser storage | `sessionStorage`: the name and phone from the wizard's contact gate. `localStorage`: the admin token and user object. | Frontend |
+
+- **Who can read it.** Staff with `view_valuations` get all valuations and vehicle requests, and the dashboard returns the five latest valuations, consignment applications and vehicle requests as full rows, contact data included. So `view_valuations` alone already shows the newest applicants; the full application list needs `manage_consignments`. The public API never returns personal data (see the "Customer data" row above).
+- **Where it leaves the server.** Every valuation and consignment notification posts the customer's name, phone and (when known) plate to the configured Telegram chats, and the WhatsApp button links embed them as well: the customer's number as the target, and the name, phone and plate in the prefilled texts. Those copies live on Telegram's servers and in each member's chat history, beyond the reach of anything in this repository.
+- **No retention or deletion.** Nothing expires. There is no retention period, no clean-up job, and no route or screen that deletes or anonymises a valuation, an application or a vehicle request; the only delete route is for staff users. Honouring an erasure request means editing the SQLite file by hand, and it cannot reach messages already posted to Telegram.
+- **At rest.** The SQLite file is not encrypted, and names, phones and plates are plain text columns.
+- **Consent is client-side only.** Both forms require a KVKK checkbox before they submit, through Zod. The value is not sent: the DTOs do not accept it (an extra `kvkkAccepted` field is a 400), and no consent record or timestamp is stored.
+- **The notice text does not match the code.** The KVKK notice shown in both forms says personal data is shared with named third-party vehicle-data providers for identification and pricing, and that users can request erasure under Article 11. The code sends no data to any such provider and has no erasure function, and the notice does not mention Telegram. The wizard's checkbox text speaks only of "vehicle data", although the wizard also collects name, phone and plate and records the IP.
+
+KVKK (Law No. 6698) compliance, including retention periods, the notice text and sending data to a messaging service, is a legal question for the owner. This section only states what the code does.
+
 ---
 
 ## Notifications and scheduled jobs
@@ -636,6 +749,62 @@ Both jobs update catalogue prices only (see [Two kinds of price data](#two-kinds
 
 ---
 
+## Deployment and operations
+
+[DEPLOYMENT.md](../DEPLOYMENT.md) is the step-by-step server guide, in Turkish. This section summarises it in English and adds what follows from the code and configuration.
+
+```mermaid
+flowchart LR
+  B["Browser"] -->|"HTTPS"| N["Nginx<br/>TLS via Certbot"]
+  N -->|"/ to :3000"| F["PM2 app nakitgaraj-frontend<br/>next start"]
+  N -->|"/api to :3001/api<br/>X-Forwarded-For"| A["PM2 app nakitgaraj-backend<br/>node dist/main"]
+  A --> D[("backend/prisma/dev.db")]
+  A --> S[("telegram-settings.json<br/>market-sync-settings.json")]
+  A -->|"Bot API"| T["Telegram"]
+```
+
+### Process layout
+
+- **One host, two PM2 apps** ([`ecosystem.config.js`](../ecosystem.config.js)). `nakitgaraj-backend` runs `npm run start:prod` (`node dist/main`) in `backend/` with `NODE_ENV=production` and `PORT=3001`. `nakitgaraj-frontend` runs `next start` in `frontend/` on port 3000. Neither sets `instances`, so each runs as one process, and PM2 restarts either one above 1 GB of memory (`max_memory_restart`).
+- **Nginx in front.** It terminates TLS and serves both apps on one origin: `/` goes to port 3000, `/api` to `http://localhost:3001/api` with `X-Forwarded-For`. Port 3001 stays closed to the outside. Because Nginx runs on the same host, the backend's `trust proxy 'loopback'` accepts its forwarded client IP.
+- **Keep the backend to one process.** The cron jobs run inside the API process, and the throttle counters (and the cache, when Redis is not available) live in its memory. A second instance would run every cron job twice and give each client a separate rate limit per instance.
+
+### Build and configuration
+
+- **Backend.** Install dependencies including dev dependencies (the build needs them), `npx prisma generate`, create the database (next section), `npx prisma db seed` with `ADMIN_PASSWORD`, then `npm run build` (Nest compiles to `dist/`).
+- **Secrets.** `JWT_SECRET` goes in `backend/.env`, and the backend refuses to start without a usable value (see [Security model](#security-model)). `ecosystem.config.js` contains no secrets. A `JWT_SECRET` in the PM2 process environment takes precedence over `.env` and survives `pm2 restart`. DEPLOYMENT.md gives the commands that recreate the process after rotating a secret that an older config file had set.
+- **Frontend.** `NEXT_PUBLIC_API_URL=/api npm run build`. The value is inlined at build time, so changing it means rebuilding. Without it, the browser calls `http://<host>:3001/api` (see [Frontend internals](#frontend-internals)). On an HTTPS site the browser blocks that as mixed content, and with `CORS_ORIGIN` unset the production backend sends no CORS headers for it.
+
+### Database and migrations
+
+- **Location.** The Prisma datasource is hard-coded to `file:./dev.db`, which Prisma resolves next to the schema: `backend/prisma/dev.db`. The `DATABASE_URL` in `ecosystem.config.js` is not read.
+- **Two ways to create the schema.** `npx prisma migrate deploy` (README quick start, CI) applies the two migrations in [`prisma/migrations`](../backend/prisma/migrations/migration_lock.toml) and records them in the `_prisma_migrations` table. `npx prisma db push` (DEPLOYMENT.md and [`run_project.bat`](../run_project.bat)) writes the schema directly and records no migration history.
+- **Why it matters.** Today both give the same tables: `prisma migrate diff` from the migrations to the schema reports no difference (Prisma 5.22). The difference shows at the next schema change. On a database created with `db push`, `prisma migrate deploy` stops with error P3005 ("The database schema is not empty"). Such a database can be baselined with `npx prisma migrate resolve --applied <migration>` for each of the two existing migrations; after that, `migrate deploy` reports no pending migrations. All three behaviours were checked on a scratch database. A server that uses `migrate deploy` from the start avoids the problem.
+- **Re-seeding.** The seed upserts the permissions, the roles and the admin user, and leaves the catalogue alone once more than 1,000 specs exist, so running it again to reset the admin password does not duplicate data.
+
+### Backups
+
+The repository has no backup job. The whole state is three files: `backend/prisma/dev.db` and the two git-ignored settings files, `telegram-settings.json` and `market-sync-settings.json`, in the backend's working directory (`backend/` under PM2). Copying the database file while the API writes to it can capture a half-written state. SQLite's online backup (for example `sqlite3 dev.db ".backup '/path/backup.db'"`) takes a consistent copy. The listing archive, if one is used, lives on the operator's machine and not on the server.
+
+### Observability and error handling
+
+#### Logging and monitoring
+
+- **Where logs go.** Everything is written to stdout and stderr; under PM2 it lands in PM2's log files (`pm2 logs`). The repository configures no log files or rotation of its own.
+- **What is logged.** Nest's `Logger` is used in four services: the Redis cache, Telegram, the monthly sync and the scraper. Other code uses `console.log` and `console.error`: startup, environment warnings, failed Telegram sends and failed comparable-listing lookups. Nest's exception handler logs the stack trace of every unexpected error.
+- **No request log.** The API logs no requests. A scratch server that answered a valuation, a validation error, a 404 and a 500 logged only its startup lines and the one 500. In the documented setup, Nginx's access log is the only request log.
+- **No metrics or health endpoint.** There are no metrics, traces or alerts. `GET /api` returns `Hello World!` and is the closest thing to a liveness check. PM2 restarts a process that crashes.
+- **Business events.** Apart from the database rows themselves, the audit log (three admin actions) is the only record of what staff did.
+
+#### Error handling conventions
+
+- **Expected failures are HTTP exceptions.** Services and guards throw Nest's `BadRequestException`, `UnauthorizedException`, `ForbiddenException`, `NotFoundException` and `ConflictException`. There is no custom exception filter, so Nest's default turns them into `{ "statusCode", "message", "error" }`. For validation errors `message` is an array, for example `["property kvkkAccepted should not exist", "Lütfen geçerli bir plaka giriniz."]` (observed on a scratch server).
+- **Everything else is a bare 500.** An unexpected error becomes `{"statusCode":500,"message":"Internal server error"}`. One reachable example: an unknown `vehicleEvaluationId` on `POST /consignment` fails the foreign key (Prisma `P2003`).
+- **Business outcomes are not errors.** `INSUFFICIENT_DATA` and `MANUAL_EVALUATION_REQUIRED` are HTTP 201 responses with a `status` field, the same code as a priced answer. A client has to read `status`, not the HTTP code; the wizard does not (see [Frontend internals](#frontend-internals)).
+- **Side effects never fail a request.** The Telegram call is not awaited and ends in a logging `.catch`. The comparable-listing lookup is wrapped in `try/catch` and returns an empty list on error.
+
+---
+
 ## Design decisions and trade-offs
 
 - **Comparables over a depreciation formula.** The engine prices from what similar cars are listed for, not from a list price times an age curve. Formulas would need constant recalibration in a high-inflation market, while listing percentiles follow the market by construction. The cost is a hard dependency on a fresh listing archive, which is not in the repository. The demo seed exists so that the system still runs end to end without it.
@@ -653,7 +822,7 @@ Both jobs update catalogue prices only (see [Two kinds of price data](#two-kinds
 
 ## Testing strategy
 
-Commands, run again for this revision on a fresh clone with Node 22.22, after `npm ci`, `npx prisma generate`, `npx tsc --noEmit -p tsconfig.json` (clean) and `npx prisma migrate deploy`, with `NODE_ENV=test` as in CI:
+Commands, run again for this revision (October 2026) on a fresh clone with Node 22.22, after `npm ci`, `npx prisma generate`, `npx tsc --noEmit -p tsconfig.json` (clean) and `npx prisma migrate deploy`, with `NODE_ENV=test` as in CI:
 
 | Suite | Result |
 |---|---|
@@ -664,8 +833,8 @@ Unit tests by file:
 
 | File | Tests | What they pin down |
 |---|---|---|
-| [`pricing_engine.spec.ts`](../backend/src/evaluation/pricing_engine.spec.ts) | 9 passed, 2 skipped | Level 4 for an unknown car, variants priced apart, mileage decay, IQR outlier removal, the P35 reserve guard, consignment figures, no Level 1 on mismatched metadata, idempotent quarantine upsert, preview writes nothing. The 2 skipped tests need the real scraped database (`PRICING_REAL_DATA_TESTS=1`). |
-| [`robust-pricing-calculator.spec.ts`](../backend/src/evaluation/robust-pricing-calculator.spec.ts) | 2 | Expected mileage from age; ordering cash < fair value < listing and net = sale − commission. |
+| [`pricing_engine.spec.ts`](../backend/src/evaluation/pricing_engine.spec.ts) | 9 passed, 2 skipped | Level 4 for an unknown car, variants priced apart, mileage decay, IQR outlier removal, the P35 reserve guard, consignment figures (listing > expected sale > net, net = sale − commission), no Level 1 on mismatched metadata, idempotent quarantine upsert, preview writes nothing. The 2 skipped tests need the real scraped database (`PRICING_REAL_DATA_TESTS=1`). |
+| [`robust-pricing-calculator.spec.ts`](../backend/src/evaluation/robust-pricing-calculator.spec.ts) | 2 | Expected mileage from age. The second test, named "keeps cash offer < fair value < consignment listing, and net = sale - commission", asserts cash offer < fair value, listing price > cash offer, net = sale − commission and a cash offer divisible by 5,000. It does not compare the fair value with the listing price. |
 | [`canonical-normalizer.spec.ts`](../backend/src/evaluation/canonical-normalizer.spec.ts) | 5 | Boilerplate stripping and brand-specific model rules. |
 | [`vehicle.service.spec.ts`](../backend/src/vehicle/vehicle.service.spec.ts) | 11 | Year range follows the current year; `getVehicleData` rejects years outside it and missing ids. |
 | [`env.validation.spec.ts`](../backend/src/config/env.validation.spec.ts) | 10 | Missing secret, placeholders, both leaked digests, the recovery message. |
@@ -681,7 +850,7 @@ End-to-end tests (Supertest against the full `AppModule` on the migrated SQLite 
 - [`admin-import.e2e-spec.ts`](../backend/test/admin-import.e2e-spec.ts): JSON file upload accepted; malformed JSON gets 400.
 - [`app.e2e-spec.ts`](../backend/test/app.e2e-spec.ts): smoke test.
 
-Not covered by any test: the order of the percentiles for groups of two or three listings, which snapshot supplies the mileage reference in Levels 2 and 3, the ingest's handling of demo listings, the consignment 404 path, and which permission each non-`ADMIN` admin route requires.
+Not covered by any test: how the consignment net compares with the cash offer, the order of the percentiles for groups of two or three listings, which snapshot supplies the mileage reference in Levels 2 and 3, the ingest (row parsing, the damage keywords, its handling of demo listings), the consignment 404 path, the calculator's confidence adjustments, and which permission each non-`ADMIN` admin route requires.
 
 CI ([`ci.yml`](../.github/workflows/ci.yml)) runs on every push and pull request. Backend: typecheck, migrations, unit and e2e tests, a seed plus demo-seed smoke test, and the build. Frontend: typecheck and production build. ESLint is not part of CI yet. There are no frontend tests; the wizard and the panel are verified by hand.
 
@@ -696,13 +865,15 @@ Honest list, from reading the code:
 - **Groups of two or three listings get percentiles from unsorted prices.** `cleanOutliersIQR` returns early, before its sort, when it has fewer than four prices, and `calculatePercentiles` assumes sorted input. The ingest passes prices in database order, so such a snapshot can have P5 above P50 or P35 above P50. Level 3 can price from a single three-listing snapshot, and Levels 2 and 3 can merge such snapshots with larger ones. See [Snapshot building](#snapshot-building).
 - **Levels 2 and 3 take the mileage reference from one snapshot.** The reference median, the km decay and the mileage source come from the last snapshot in the query order, which can be another model year (or, in Level 3, another variant). They are not weighted and not moved to the requested year, and the query has no tie-breaker for equal listing counts. The [worked example](#worked-example-fixed-snapshot-input) shows a 5,000 TL change in the cash offer from this rule on one database.
 - **Level 1 is effectively unreachable from the wizard.** `evaluateVehicle` does not pass the selected package as `trim`, while snapshots built from catalogue specs carry one. The preview method does pass it.
-- **The notes overstate the evidence.** The explanation notes call the comparables "gerçek" (real), the Level 1 note names a specific listing site, and the comparable cards are labelled "Gerçek Piyasa Emsal İlanı" (real market comparable), also when the snapshots come from the demo seed. The Level 1 note always says "%99 Güven" (99 % confidence), whatever the computed score.
+- **Consignment is presented as the better deal, but the numbers do not guarantee it.** The seller's net beats the cash offer only when the listing price is well above it; the 30,000 TL floor sits under the sale price, not under the net (see [How the net compares with the cash offer](#how-the-net-compares-with-the-cash-offer)). The result step shows the listing price, not the net, on a card tagged "Yüksek kazanç" (high earnings).
+- **Clean listings with an inspection report count as damaged.** The damage check is a substring match on "pert", which also matches "ekspertiz" and the model name "Expert". Such listings are left out of snapshots, so the percentiles are computed without them. The price scraper also tests for "pert" as a substring. See [Listing archive format](#listing-archive-format).
+- **The notes and the site copy overstate the evidence.** The explanation notes call the comparables "gerçek" (real), the Level 1 note names a specific listing site, and the comparable cards are labelled "Gerçek Piyasa Emsal İlanı" (real market comparable), also when the snapshots come from the demo seed. The Level 1 note always says "%99 Güven" (99 % confidence), whatever the computed score. The home page, the footer and the page metadata describe an AI-supported engine using coefficients from named commercial data providers; the code uses neither. The result step labels a cash offer below the desired price "Yapay Zeka Pazarlık Teklifi" (AI negotiation offer).
 
 **Gaps that affect behaviour**
 
 - **The wizard's result step only renders priced answers.** For `INSUFFICIENT_DATA` (`results: null`) and `MANUAL_EVALUATION_REQUIRED` (no `finalOfferedPrice`), [`degerleme/page.tsx`](../frontend/src/app/degerleme/page.tsx) still reads `results.finalOfferedPrice`, so the page throws instead of showing the message. With an empty market database, or for any car under 400,000 TL, the customer sees an error.
 - **A consignment application can be lost.** When the standalone form's on-the-fly valuation finds no catalogue spec, the 404 from `evaluateVehicle` is not caught and the application is not saved (see [Consignment application](#2-consignment-application)).
-- **A low desired price passes straight through.** The desired price has no lower bound relative to the market. A desired price of 1 TL yields a consignment listing price of 1 TL (seen in a local run). The expected sale price is still floored at cash offer + 30,000 TL.
+- **A low desired price passes straight through.** The desired price has no lower bound relative to the market. A desired price of 1 TL yields a consignment listing price of 1 TL (seen in a local run). The expected sale price is then floored at cash offer + 30,000 TL, but the commission is charged on that floor, so the seller's net ends 20,000 TL **below** the cash offer (560,000 against 580,000 TL in the [worked example](#worked-example-fixed-snapshot-input)). Every wizard valuation takes this desired-price branch, so ordinary wizard input reaches the floor: in the worked example, every desired price under 621,000 TL (4.2 % under the fair value) does.
 - **`CRM_MANAGER` cannot process vehicle requests.** The role can list them (`view_valuations`), but changing their status needs `manage_vehicles`, so the buttons on the "Araç Talepleri" page get 403 for that role. See [Admin routes and their guards](#admin-routes-and-their-guards).
 - **Margin settings have no effect.** The "API Ayarları" page saves margin percentages and fixed luxury margins into `market-sync-settings.json`, but the calculator uses its own constants. The same goes for the monthly sync and the "adjust market prices" endpoint, which only move `originalMSRP`.
 - **Collected details are dropped.** The wizard collects a paint map, chassis and damage flags and a Tramer amount. None of them is stored or priced; only `damageStatus` moves the price, and only `features` is stored.
@@ -710,6 +881,7 @@ Honest list, from reading the code:
 - **Sessions cannot be revoked early.** A JWT stays valid for up to one day after the user is deleted or their password changes. The guard reloads the role, but not the user.
 - **New roles start empty.** A role created from the panel (the panel offers `STAFF`, which the seed does not create) gets no permissions, and there is no screen to grant them.
 - **The audit log covers three actions only.** User management, settings changes and logins are not recorded.
+- **Personal data is kept forever.** Names, phones, plates, e-mails and IPs have no retention period and no deletion or anonymisation path. The KVKK consent is checked only in the browser and not recorded, and the notice text promises provider sharing that does not happen and erasure that the system cannot perform, while it leaves out Telegram ([details](#personal-data)).
 
 **Data and structure**
 
@@ -720,6 +892,8 @@ Honest list, from reading the code:
 - **The scraper and the Chrome extension are not wired into the snapshot pipeline.** The scraper writes catalogue prices, and when it fails it writes a formula estimate over real ones. The extension targets an endpoint that does not exist.
 - **Hard-coded reference year.** Year 2026 is built into the catalogue formulas (seed, lazy generation, recalibration curves, scraper fallback) and the ingest year filter (≤ 2026).
 - **SQLite only.** The datasource URL is hard-coded to `file:./dev.db`; `DATABASE_URL` and the Postgres container in `docker-compose.yml` are not used.
+- **Two schema-creation paths.** DEPLOYMENT.md and `run_project.bat` use `prisma db push`, CI and the README use `prisma migrate deploy`. A server set up with `db push` has to be baselined before its first `migrate deploy` ([details](#database-and-migrations)).
+- **Thin operations tooling.** No backup job, no request logging, no metrics and no health endpoint ([details](#observability-and-error-handling)).
 - **Development leftovers.** `backend/src/scripts` holds many one-off data scripts. ESLint reports existing errors, so lint is not in CI.
 
 **Natural next steps**
@@ -739,6 +913,10 @@ Honest list, from reading the code:
 13. Add a token version or a user check to `JwtAuthGuard`, and a permissions screen for roles.
 14. Move the settings files into the database, and make the datasource configurable for Postgres.
 15. Add frontend tests for the wizard states, and unit tests for the small-group and mileage-reference cases.
+16. Show the expected sale, the commission and the net on the result step, and decide whether the floor should protect the seller's net rather than the sale price; then add a test that pins the intended relation between the net and the cash offer.
+17. Match the damage keywords on word boundaries (or on a structured damage field), in the ingest and in the scraper.
+18. Add a retention period and a delete or anonymise action for leads, record consent with a timestamp, and align the KVKK notice with what the code does.
+19. Use `prisma migrate deploy` in DEPLOYMENT.md and `run_project.bat`, add a backup job for the database and the settings files, and add request logging and a health endpoint.
 
 ---
 
@@ -771,13 +949,16 @@ Read in this order:
 | Fair market value | Snapshot P50 adjusted for mileage and declared damage. |
 | Reference median mileage | The mileage a snapshot's prices stand for; the car's mileage is compared with it. In Levels 2 and 3 it comes from the last merged snapshot. |
 | Reserve | What the dealer keeps between fair value and the cash offer; a percentage with a minimum per segment. |
+| Confidence score | A 0 to 99 number per valuation, from the match level and the listing count; returned and stored, not used in any decision. |
 | Nakit alım / cash offer | The price at which the dealer buys the car immediately. |
 | Konsinye / consignment | The dealer sells the car on the owner's behalf for a commission. |
-| Listing price / expected sale / net | Consignment ad price; that price minus expected negotiation; the sale minus commission (what the owner receives). |
+| Listing price / expected sale / net | Consignment ad price; that price minus expected negotiation, but at least cash offer + 30,000 TL; the sale minus commission (what the owner receives, which can be below the cash offer). |
 | Değerleme | Valuation. `/degerleme` is the wizard. |
 | Hasar kaydı / Tramer | Damage record; Tramer is the Turkish insurance damage-record system, and the wizard asks for its recorded amount. |
 | Boyalı / lokal boyalı / değişen | Painted / locally painted / replaced body panel (the paint map). |
 | Pert / ağır hasar | Write-off / heavy damage; such listings are excluded from snapshots. |
+| Ekspertiz | An independent pre-sale inspection report. The word contains "pert", which is why the ingest's damage check also flags listings that mention it. |
+| KVKK | Turkey's Personal Data Protection Law (No. 6698); both public forms show a KVKK notice and consent checkbox. |
 | Karantina | Quarantine: a listing whose make or model could not be normalised. |
 | `DEMO_SYNTHETIC` | The `source` value of the demo seed's synthetic listings; their snapshots carry `"demo": true`. |
 | Paket / donanım | Trim package / equipment. |
@@ -788,15 +969,18 @@ Read in this order:
 
 ## Türkçe özet
 
-NakitGaraj, bir ikinci el galerisi için geliştirilmiş bir değerleme ve konsinye platformudur. Müşteri üç adımlı sihirbazda aracını seçer, kilometre ve hasar bilgisini girer ve iki teklif görür: galerinin aracı hemen satın alacağı **nakit teklif** ve aracın galeride komisyonla satılacağı **konsinye ilan fiyatı** (beklenen satış, komisyon ve müşteriye kalan net tutar ile). Fiyatlar sabit bir amortisman formülünden değil, kaydedilmiş ilan sayfalarından üretilen **piyasa snapshot'larından** (emsal istatistikleri) hesaplanır. Fiyatlanan değerlemeler ve konsinye başvuruları yönetim panelindeki CRM'e düşer ve görsel kartla Telegram grubuna gönderilir. Kod deterministiktir (yüzdelikler, doğrusal düzeltmeler, kademeli rezerv ve komisyon); gerçek ilan verisi depoda yoktur, denemek için `npm run seed:demo` sentetik veri üretir. Bu sentetik fiyatlar her yeni veritabanında farklı çıkar, bu yüzden belgedeki örnek hesap sabit snapshot satırlarından başlar.
+NakitGaraj, bir ikinci el galerisi için geliştirilmiş bir değerleme ve konsinye platformudur. Müşteri üç adımlı sihirbazda aracını seçer, kilometre ve hasar bilgisini girer ve iki teklif görür: galerinin aracı hemen satın alacağı **nakit teklif** ve aracın galeride komisyonla satılacağı **konsinye ilan fiyatı**. Fiyatlar sabit bir amortisman formülünden değil, kaydedilmiş ilan sayfalarından üretilen **piyasa snapshot'larından** (emsal istatistikleri) hesaplanır. Fiyatlanan değerlemeler ve konsinye başvuruları yönetim panelindeki CRM'e düşer ve görsel kartla Telegram grubuna gönderilir. Kod deterministiktir (yüzdelikler, doğrusal düzeltmeler, kademeli rezerv ve komisyon); gerçek ilan verisi depoda yoktur, denemek için `npm run seed:demo` sentetik veri üretir. Bu sentetik fiyatlar her yeni veritabanında farklı çıkar, bu yüzden belgedeki örnek hesap sabit snapshot satırlarından başlar.
 
-Fiyatlama motoru dört seviyede emsal arar ve her cevapta hangi seviyeyi kullandığını söyler. Veri yoksa tahmin yürütmez, "yetersiz veri" der. Güvenlik tarafı "kapalı başla" ilkesine dayanır: JWT anahtarı yoksa ya da depo geçmişine sızmış bir anahtarsa backend açılmaz, production'da `CORS_ORIGIN` yoksa başka sitelere izin verilmez, her admin rotası sunucuda rol ve izinle kontrol edilir. Belgede herkese açık uç noktaların istek/yanıt biçimleri ve 23 admin rotasının hangi izni istediği tablo hâlinde verilmiştir.
+Fiyatlama motoru dört seviyede emsal arar ve her cevapta hangi seviyeyi kullandığını söyler. Veri yoksa tahmin yürütmez, "yetersiz veri" der. Nakit teklif ile konsinye net tutarı birbirinden bağımsız hesaplanır ve kod ikisini karşılaştırmaz: konsinyenin müşteriye daha fazla kazandırdığı garanti değildir. Güvenlik tarafı "kapalı başla" ilkesine dayanır: JWT anahtarı yoksa ya da depo geçmişine sızmış bir anahtarsa backend açılmaz, production'da `CORS_ORIGIN` yoksa başka sitelere izin verilmez, her admin rotası sunucuda rol ve izinle kontrol edilir. Belge ayrıca ön yüzün iç yapısını, ilan arşivinin beklenen HTML biçimini, kişisel verilerin nasıl saklandığını ve sunucu kurulumunu (PM2, Nginx, migration'lar, yedekleme, loglama) İngilizce olarak özetler.
 
-- **Akış:** sihirbaz → `POST /vehicle-evaluation` → katalog spesifikasyonu → emsal eşleştirme (Seviye 1: tam eşleşme, ≥ 5 ilan; Seviye 2: aynı versiyon ± 1 yıl, ≥ 5; Seviye 3: aynı model ± 2 yıl, ≥ 3; Seviye 4: yetersiz veri) → hesaplama → kayıt + Telegram.
-- **Piyasa değeri:** P50 + kilometre düzeltmesi (±, en fazla +%10 / −%12) − hasar (`YES` %8, `UNKNOWN` %4). Yıl farkı, Seviye 2 ve 3'te snapshot'lardan öğrenilen (yoksa %8) yıllık oranla normalleştirilir. Bu seviyelerde referans medyan kilometre ağırlıklandırılmaz; sorgu sırasındaki son snapshot'tan (başka bir model yılı olabilir) alınır.
+- **Akış:** sihirbaz → `POST /vehicle-evaluation` → katalog spesifikasyonu → emsal eşleştirme (Seviye 1: tam eşleşme, ≥ 5 ilan; Seviye 2: aynı versiyon ± 1 yıl, ≥ 5; Seviye 3: aynı model ± 2 yıl, ≥ 3; Seviye 4: yetersiz veri) → hesaplama → kayıt + Telegram. "Yetersiz veri" ve "manuel değerlendirme" yanıtları da HTTP 201 ile döner; sihirbazın sonuç ekranı bunları gösteremez ve hata verir.
+- **Piyasa değeri:** P50 + kilometre düzeltmesi (en fazla +%10 / −%12) − hasar (`YES` %8, `UNKNOWN` %4). Yıl farkı, Seviye 2 ve 3'te snapshot'lardan öğrenilen (yoksa %8) yıllık oranla normalleştirilir. Bu seviyelerde referans medyan kilometre ağırlıklandırılmaz; sorgu sırasındaki son snapshot'tan (başka bir model yılı olabilir) alınır.
 - **Nakit teklif:** min(piyasa değeri − rezerv, düzeltilmiş P35); rezerv segmente göre %8 / %6,5 / %5,5 / %4,5, en az 65 / 85 / 130 / 220 bin TL; 8'den az ilan varsa +2,5 puan. 400.000 TL altındaki her araç manuel değerlendirmeye düşer.
-- **Konsinye:** ilan fiyatı P60'a (ya da müşterinin istediği fiyata) göre, piyasa değerinin en fazla %3 (istenen fiyatta yaklaşık %8,15) üstü; beklenen satış = ilan − %1,5 pazarlık, en az nakit teklif + 30.000 TL; komisyon %4,5 / %3,5 / %3 / %2,5, en az 50 / 80 / 120 / 175 bin TL. Bağımsız konsinye formundaki anlık değerleme katalogda karşılık bulamazsa 404 döner ve başvuru kaydedilmez.
-- **Veri:** iki ayrı fiyat dünyası var. Katalog fiyatları (seed, aylık senkronizasyon, fiyat tarayıcı, admin aktarımı) tekliflere girmez. Teklifler yalnızca ilanlardan üretilen snapshot'lardan gelir. Snapshot'lar IQR temizliği ve yüzdeliklerle üretilir ve tek bir transaction ile atomik olarak değiştirilir. İçe aktarma kaynağa bakmadığı için önce `seed:demo` çalıştırılmışsa demo ilanları gerçek snapshot'lara karışır. Tarayıcı ve Chrome eklentisi üçüncü taraf sitelerden veri toplama araçlarıdır; kullanım koşulları proje sahibi tarafından kontrol edilmelidir.
+- **Konsinye:** ilan fiyatı P60'a (sihirbazda her zaman müşterinin istediği fiyata) göre belirlenir, piyasa değerinin en fazla %3 (istenen fiyatta yaklaşık %8,15) üstü olabilir, alt sınırı yoktur. Beklenen satış = ilan − %1,5 pazarlık, en az nakit teklif + 30.000 TL; komisyon %4,5 / %3,5 / %3 / %2,5, en az 50 / 80 / 120 / 175 bin TL. Bu taban satış fiyatına uygulanır, müşteriye kalan nete değil: taban devreye girdiğinde komisyon en az 50.000 TL olduğu için net, nakit tekliften en az 20.000 TL **düşük** kalır. Örnek hesapta nakit teklif 580.000 TL iken 500.000 TL istenen fiyat 560.000 TL net verir; net ancak 641.000 TL ve üzeri istenen fiyatta nakit teklifi geçer. Sonuç ekranı neti değil ilan fiyatını gösterir. Adındaki iddiaya rağmen birim testi neti nakit teklifle karşılaştırmaz.
+- **Güven skoru:** seviyeye göre taban (Seviye 1: 95–99, Seviye 2: 78–88, Seviye 3: 65–78), 8'den az ilanda −10, 0–99 arasına sıkıştırılır. Seviye 4 için yazılmış −20 hiç çalışmaz. Skor saklanır ama hiçbir kararda ve hiçbir ekranda kullanılmaz.
+- **Veri:** iki ayrı fiyat dünyası var. Katalog fiyatları (seed, aylık senkronizasyon, fiyat tarayıcı, admin aktarımı) tekliflere girmez. Teklifler yalnızca ilanlardan üretilen snapshot'lardan gelir. İlan arşivi, her satırı `tr[data-id]` olan ve `td.searchResults…` sınıflı hücreler içeren kayıtlı HTML sayfalarıdır (ilk öznitelik hücresi yıl, ikincisi kilometre). Hasar kontrolü "pert" kelimesini alt dize olarak aradığı için "ekspertiz" geçen temiz ilanlar da hasarlı sayılıp snapshot dışında kalır. İçe aktarma kaynağa bakmadığı için önce `seed:demo` çalıştırılmışsa demo ilanları gerçek snapshot'lara karışır. Tarayıcı ve Chrome eklentisi üçüncü taraf sitelerden veri toplama araçlarıdır; kullanım koşulları proje sahibi tarafından kontrol edilmelidir.
 - **Güvenlik:** zorunlu ve sızmış anahtarları reddeden JWT; `@RequirePermissions` / `@RequireRoles` ile `RolesGuard` (izinler her istekte veritabanından okunur); girişte dakikada 5, formlarda dakikada 100 istek sınırı; production'da kapalı CORS; yalnızca localhost'tan gelen `X-Forwarded-For` başlığına güven; Telegram mesajlarında HTML kaçışı. Araç talebinin durumunu değiştirmek `manage_vehicles` ister, bu yüzden CRM_MANAGER talepleri görür ama durumlarını değiştiremez.
+- **Kişisel veriler:** ad, telefon, plaka, e-posta ve IP süresiz saklanır; silme veya anonimleştirme yolu yoktur. KVKK onayı yalnızca tarayıcıda kontrol edilir ve kaydedilmez. Formlardaki aydınlatma metni koddaki davranışla örtüşmez (veri sağlayıcılarıyla paylaşım yok, silme işlevi yok, Telegram'a gönderim anılmıyor). Uyum değerlendirmesi proje sahibine aittir.
+- **Sunucu ve işletim:** PM2 iki uygulamayı (backend :3001, ön yüz :3000) tek süreç olarak çalıştırır, Nginx `/api` isteklerini backend'e iletir. Ön yüz `NEXT_PUBLIC_API_URL=/api` ile derlenmelidir (değer derlemeye gömülür). DEPLOYMENT.md ve `run_project.bat` şemayı `prisma db push` ile oluşturur; böyle bir veritabanında `prisma migrate deploy` P3005 hatası verir ve önce `prisma migrate resolve --applied` ile baseline gerekir. Yedekleme betiği, istek logu, metrik ve sağlık uç noktası yoktur; beklenmeyen hatalar `500 Internal server error` olarak döner ve yığın izi loglanır.
 - **Testler (bu sürüm için yeniden çalıştırıldı):** birim testleri 10 dosya, 51 geçti, 2 atlandı; e2e testleri 4 dosya, 83 geçti. e2e testleri 23 admin rotasının tamamında 401/403 davranışını doğrular.
-- **Bilinen eksikler:** 2-3 ilanlı gruplarda yüzdelikler sıralanmamış fiyatlardan alınıyor; Seviye 2 ve 3'te kilometre referansı tek bir snapshot'tan geliyor; snapshot sorguları indeks kullanmadan tüm tabloyu tarıyor; sihirbazın sonuç ekranı "yetersiz veri" ve "manuel değerlendirme" cevaplarını gösteremiyor; çok düşük istenen fiyat ilan fiyatına aynen geçiyor; panelin kâr marjı ayarları hesaplamada kullanılmıyor; boya şeması kaydedilmiyor ve fiyata yansımıyor; JWT süresi dolmadan oturum iptal edilemiyor.
+- **Bilinen eksikler:** 2-3 ilanlı gruplarda yüzdelikler sıralanmamış fiyatlardan alınıyor; Seviye 2 ve 3'te kilometre referansı tek bir snapshot'tan geliyor; snapshot sorguları indeks kullanmadan tüm tabloyu tarıyor; sihirbazın sonuç ekranı "yetersiz veri" ve "manuel değerlendirme" cevaplarını gösteremiyor; düşük istenen fiyat ilan fiyatına aynen geçiyor ve konsinye netini nakit teklifin altına düşürüyor; panelin kâr marjı ayarları hesaplamada kullanılmıyor; boya şeması kaydedilmiyor ve fiyata yansımıyor; JWT süresi dolmadan oturum iptal edilemiyor.
