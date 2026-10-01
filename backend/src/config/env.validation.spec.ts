@@ -1,4 +1,10 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import { LEAKED_JWT_SECRETS, validateEnv } from './env.validation';
+
+const PM2_RECREATE_BACKEND =
+  'pm2 delete nakitgaraj-backend && ' +
+  'pm2 start ecosystem.config.js --only nakitgaraj-backend && pm2 save';
 
 describe('validateEnv', () => {
   let warnSpy: jest.SpyInstance;
@@ -52,12 +58,26 @@ describe('validateEnv', () => {
           }
           expect(error).toBeDefined();
           expect(error?.message).toMatch(/Rotate your JWT_SECRET/);
+          // Editing backend/.env alone does not help when the old secret is
+          // still in the PM2 environment, so the message must say so.
+          expect(error?.message).toMatch(
+            /process or PM2 environment overrides backend\/\.env/,
+          );
+          expect(error?.message).toContain(PM2_RECREATE_BACKEND);
           // The message must not repeat the secret.
           expect(error?.message).not.toContain(leaked);
         }
       }
     },
   );
+
+  it('names the PM2 app from ecosystem.config.js in the recovery command', () => {
+    const ecosystem = fs.readFileSync(
+      path.join(__dirname, '../../../ecosystem.config.js'),
+      'utf8',
+    );
+    expect(ecosystem).toContain("name: 'nakitgaraj-backend'");
+  });
 
   it('accepts a real secret', () => {
     const config = { JWT_SECRET: 'a'.repeat(64), NODE_ENV: 'production' };

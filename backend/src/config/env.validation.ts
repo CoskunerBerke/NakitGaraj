@@ -31,12 +31,23 @@ export function validateEnv(
     );
   }
   if (LEAKED_JWT_SECRETS.includes(secret.trim())) {
+    // Old ecosystem.config.js files put the leaked secret into the PM2
+    // environment. PM2 keeps that environment across restarts and process.env
+    // wins over backend/.env, so editing backend/.env alone is not enough.
     throw new Error(
       'JWT_SECRET is a value that was published in the git history of this ' +
         'repository, so anyone can forge admin tokens with it. ' +
+        'Refusing to start. ' +
         'Rotate your JWT_SECRET: set a new random value ' +
-        '(openssl rand -hex 32) in backend/.env and restart the backend. ' +
-        'Refusing to start.',
+        '(openssl rand -hex 32) in backend/.env. ' +
+        'A JWT_SECRET in the process or PM2 environment overrides ' +
+        'backend/.env, and PM2 keeps the environment a process was first ' +
+        'started with (pm2 restart does not remove it). Under PM2, remove ' +
+        'any old JWT_SECRET from the shell or server environment, then ' +
+        'recreate the backend from the project root: ' +
+        'pm2 delete nakitgaraj-backend && ' +
+        'pm2 start ecosystem.config.js --only nakitgaraj-backend && ' +
+        'pm2 save (see DEPLOYMENT.md).',
     );
   }
   if (PLACEHOLDER_SECRETS.has(secret.trim())) {
