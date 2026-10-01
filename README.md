@@ -246,25 +246,82 @@ Still in progress / known gaps:
 
 **NakitGaraj**, ikinci el bir aracın fiyatını benzer piyasa ilanlarından (emsal) hesaplayan ve bu fiyatı **anında nakit alım teklifine** ve **konsinye satış fiyatına** çeviren bir platformdur. Galeri ekibi için yönetim paneli/CRM içerir.
 
-<sub>Ekran görüntüleri yerel bir kurulumda, tamamen hayali demo verisiyle alınmıştır (<code>npm run seed:demo</code> ve "Deniz Örnek, 05550000000" gibi test kayıtları). Fiyatlar sentetiktir, gerçek piyasa verisi değildir.</sub>
+<sub>Tüm ekran görüntüleri yerel bir kurulumda, tamamen hayali demo verisiyle alınmıştır (<code>npm run seed:demo</code> ve "Deniz Örnek, 05550000000" gibi test kayıtları). Fiyatlar sentetiktir, gerçek piyasa verisi değildir. Marka logoları görünmüyor, çünkü ekran görüntülerinin alındığı ortamdan logoların CDN'ine erişilemedi.</sub>
 
-> **Durum:** geliştirme sürüyor, ticari kullanımda değil. Değerleme, konsinye başvurusu, yönetim paneli ve fiyatlama motoru uçtan uca çalışıyor; bazı bölümler henüz prototip (aşağıda *Durum ve yol haritası*).
+> **Durum:** geliştirme sürüyor, ticari kullanımda değil. Değerleme akışı, konsinye akışı, yönetim paneli ve fiyatlama motoru uçtan uca çalışıyor (bkz. *Testler*). Bazı bölümler henüz prototip (bkz. *Durum ve yol haritası*).
 
 ### Genel bakış
 
-Galeri iki seçenek sunar: aracı **hemen nakit satın almak** ya da aracı **konsinye bırakıp** müşteri adına satmak. Müşteri marka → model yılı → model → motor → paket seçer; kilometre, hasar ve donanım bilgisini girer ve iki teklifi saniyeler içinde görür. Fiyatlanan değerlemeler ve tüm başvurular yönetim paneline kaydedilir; isteğe bağlı olarak WhatsApp kısayollu görsel kartla Telegram grubuna da gönderilir.
+NakitGaraj ("nakit garaj"), araç sahiplerine iki satış yolu sunan bir ikinci el galerisi için geliştirildi: aracı **hemen nakit karşılığında galeriye satmak** ya da **konsinye bırakıp** galerinin satmasını beklemek. Müşteri marka → model yılı → model → motor → paket seçer; kilometre, hasar ve donanım bilgisini girer ve iki teklifi saniyeler içinde görür. Fiyatlanan değerlemeler ve tüm başvurular yönetim paneli için kaydedilir; ayrıca WhatsApp kısayollu görsel kart olarak bir Telegram grubuna da gönderilebilir.
 
-Fiyatlar sabit bir amortisman formülünden değil, piyasa istatistiklerinden gelir. Kaydedilmiş ilan sayfaları kanonik marka/model/versiyon adlarına dönüştürülür. Aykırı değerler IQR ile temizlenir. Her marka · model · versiyon · yıl grubu için P5–P95 yüzdelikleri, medyan kilometre ve kilometre eğimi içeren bir piyasa snapshot'ı oluşur. Değerleme en yakın snapshot'ı bulur (tam eşleşmeden "yetersiz veri"ye kadar dört seviye). Ardından kilometre ve hasar düzeltmesi, fiyat segmentine göre nakit rezervi ve kademeli konsinye komisyonu uygular.
+Fiyatlar sabit bir amortisman formülünden değil, gerçek piyasa istatistiklerinden gelir. Kaydedilmiş ilan sayfaları kanonik marka/model/versiyon adlarına dönüştürülür. Aykırı değerler IQR ile temizlenir ve her marka · model · versiyon · yıl grubu, P5–P95 yüzdelikleri, medyan kilometre ve kilometre eğimi içeren bir piyasa snapshot'ı olur. Değerleme en yakın snapshot'ı bulur (tam spesifikasyon eşleşmesinden "yetersiz veri"ye kadar dört seviye). Ardından kilometre ve hasar düzeltmesi, fiyat segmentine göre değişen nakit rezervi ve kademeli konsinye komisyonu uygular.
 
 ### Özellikler
 
-- **Müşteri sitesi:** adım adım değerleme sihirbazı (`/degerleme`), 13 parçalı boya/değişen şeması, donanım listesi, sonuç ekranında nakit teklif + konsinye fiyatı + açıklama notları; konsinye başvurusu (`/konsinye`); katalogda olmayan araç için talep formu; TR/EN, açık/koyu tema, mobil uyumlu.
-- **Yönetim paneli:** özet ekranı, değerlemeler, konsinye CRM (durum güncelleme), araç talepleri, rol tabanlı çalışan yönetimi, işlem kayıtları, CSV/Excel/JSON veri aktarımı, Telegram ve piyasa senkronizasyonu ayarları.
-- **Arka uç:** emsal eşleştirme + sağlam fiyat hesaplayıcı, JWT kimlik doğrulama, sunucu tarafında rol/izin kontrolü, girişte dakikada 5 deneme sınırı, girdi doğrulama, görsel kartlı Telegram bildirimleri, zamanlanmış piyasa senkronizasyonu ve ilan tarayıcı, isteğe bağlı Redis önbelleği.
+**Müşteri sitesi (Next.js)**
+- Değerleme sihirbazı (`/degerleme`): adım adım daralan katalog seçimleri, kilometre, hasar kaydı, 13 parçalı boya/değişen şeması, donanım listesi, istenen fiyat.
+- Sonuç ekranı: anında nakit teklif, konsinye ilan fiyatı ve açıklama notları (eşleşme seviyesi, emsal sayısı, kilometre düzeltmesi).
+- Konsinye başvurusu (`/konsinye`): bir değerlemeden ya da doğrudan açılır, React Hook Form + Zod ile doğrulanır. Müşteriler katalogda olmayan bir araç için talep de bırakabilir.
+- Türkçe/İngilizce arayüz, açık/koyu tema, mobil uyumlu tasarım.
+
+**Yönetim paneli (`/admin_panel`)**
+- Özet ekranı (toplamlar, bekleyen başvurular, ortalama değerleme, katalog büyüklüğü), değerlemeler, durum güncellemeli konsinye CRM'i, araç talepleri.
+- Rollü çalışan hesapları (ADMIN, CRM_MANAGER, özel roller). İzinler her admin rotasında sunucuda kontrol edilir.
+- İşlem kayıtları (audit log), CSV / Excel / JSON katalog aktarımı, Telegram bildirim ayarları, piyasa senkronizasyonu ayarları.
+
+**Backend (`/api` altında NestJS REST API)**
+- Fiyatlama motoru: emsal eşleştirici (`emsal-matcher.service.ts`), sağlam fiyat hesaplayıcı (`robust-pricing-calculator.ts`), kanonik ad normalleştirici; şüpheli ilanlar içe aktarma sırasında karantinaya alınır.
+- JWT kimlik doğrulama, rol ve izin guard'ları, istek doğrulama (class-validator, whitelist), girişte (dakikada 5) ve herkese açık formlarda istek sınırı.
+- Oluşturulan görsel kartla Telegram bildirimleri (`@napi-rs/canvas`).
+- Zamanlanmış görevler: aylık piyasa fiyatı senkronizasyonu ve ilan tarayıcı (Playwright, isteğe bağlı proxy'ler).
+- Bellek içi yedeği olan isteğe bağlı Redis önbelleği.
+
+### Ekran görüntüleri
+
+Yönetim paneli özeti, değerleme listesi (CRM) ve mobil görünüm (390 × 844) için yukarıdaki [Screenshots](#screenshots) bölümüne bakın. Hepsi hayali demo verisidir.
 
 ### Mimari
 
-Yukarıdaki [Architecture](#architecture) ve [How a price is calculated](#how-a-price-is-calculated) diyagramları geçerlidir: Next.js ön yüz → NestJS REST API (`/api`) → Prisma → SQLite; bildirimler Telegram Bot API'ye gider.
+Yukarıdaki [Architecture](#architecture) ve [How a price is calculated](#how-a-price-is-calculated) diyagramları geçerlidir: Next.js sitesi ve yönetim paneli → NestJS REST API (`:3001`, `/api`; JWT ve rol/izin guard'ları, giriş ve formlarda istek sınırı) → fiyatlama motoru → Prisma → SQLite. Cron görevleri (aylık piyasa senkronizasyonu, ilan tarayıcı) ve içe aktarma betikleri de veritabanına yazar; bildirimler Telegram Bot API'ye gider, Redis önbelleği isteğe bağlıdır.
+
+2. ve 3. seviye eşleşmeler birkaç snapshot'ı birleştirir ve istenen model yılına göre normalleştirir (yıllık fiyat değişimi yeterli snapshot varsa onlardan öğrenilir, yoksa %8 kullanılır). Fiyatı 400.000 TL'nin altında olup nakit teklifi piyasa değerinin %85'inin altında kalacak araçlara otomatik teklif yerine "manuel değerlendirme" yanıtı verilir.
+
+### Teknolojiler
+
+| Katman | Araçlar |
+|---|---|
+| Ön yüz | Next.js 16 (App Router), React 19, TypeScript, Tailwind CSS 4, Framer Motion, TanStack Query, React Hook Form, Zod, Lucide ikonları |
+| Backend | NestJS 11, Prisma 5, @nestjs/jwt, bcrypt, @nestjs/throttler, @nestjs/schedule, class-validator, Playwright, Cheerio, jsdom, xlsx, csv-parser, @napi-rs/canvas |
+| Veri | SQLite (`backend/prisma/dev.db`), isteğe bağlı Redis önbelleği |
+| Test ve CI | Jest (birim + Supertest ile e2e), GitHub Actions |
+| İşletim | PM2 (`ecosystem.config.js`), Nginx + Certbot ([DEPLOYMENT.md](DEPLOYMENT.md)) |
+
+### Proje yapısı
+
+```text
+NakitGaraj/
+├── frontend/                   # Next.js müşteri sitesi + yönetim paneli
+│   └── src/
+│       ├── app/                # /, /degerleme, /konsinye, /admin_panel/...
+│       ├── components/         # menü, alt bilgi, hasar şeması, animasyonlu arayüz
+│       ├── context/            # dil + tema sağlayıcıları
+│       └── config/api.ts       # API adresi (NEXT_PUBLIC_API_URL)
+├── backend/                    # NestJS API
+│   ├── prisma/                 # şema, migration'lar, seed.ts, seed-demo.ts
+│   ├── src/
+│   │   ├── evaluation/         # fiyatlama motoru, emsal eşleştirici, ad normalleştirici
+│   │   ├── vehicle/            # katalog uç noktaları, aylık piyasa senkronizasyonu
+│   │   ├── consignment/ admin/ auth/ audit/ import/ telegram/ scraper/
+│   │   └── scripts/            # tek seferlik veri aktarma / temizlik betikleri
+│   └── test/                   # e2e testleri
+├── chrome-extension/           # ilan aktarma yardımcısı (prototip)
+├── docs/screenshots/           # README görselleri (demo verisi)
+├── .github/workflows/ci.yml    # CI: tip kontrolü, testler, seed denemesi, derlemeler
+├── docker-compose.yml          # isteğe bağlı Postgres + Redis container'ları (notlara bakın)
+├── ecosystem.config.js         # PM2: backend :3001, frontend :3000
+├── run_project.bat             # Windows: veritabanını hazırlar ve iki uygulamayı başlatır
+└── DEPLOYMENT.md               # VPS kılavuzu (Türkçe): PM2, Nginx, SSL
+```
 
 ### Kurulum
 
@@ -277,24 +334,38 @@ npm ci
 cp .env.example .env              # ardından JWT_SECRET girin (örn. openssl rand -hex 32)
 npx prisma generate
 npx prisma migrate deploy         # prisma/dev.db (SQLite) migration'lardan oluşturulur
-ADMIN_PASSWORD='bir-sifre-secin' npx prisma db seed    # katalog, roller, admin kullanıcı
+ADMIN_PASSWORD='bir-sifre-secin' npx prisma db seed   # katalog, roller, admin kullanıcı
 npm run seed:demo                 # isteğe bağlı: değerlemelerin fiyat döndürmesi için sentetik piyasa verisi
 npm run start:dev                 # http://localhost:3001/api
+```
 
-# ikinci terminal
+İkinci bir terminalde:
+
+```bash
 cd NakitGaraj/frontend
 npm ci
 npm run dev                       # http://localhost:3000
 ```
 
-Yönetim paneli: <http://localhost:3000/admin_panel>. Giriş için `ADMIN_EMAIL` (varsayılan `admin@nakitgaraj.com`) ve seed sırasında kullandığınız `ADMIN_PASSWORD` gerekir. Gerçek ilan verisi depoda olmadığından `seed:demo` (veya kendi içe aktardığınız ilanlar) olmadan değerlemeler "yeterli piyasa verisi yok" yanıtı verir. Windows'ta `run_project.bat` veritabanını `prisma db push` ile hazırlar, seed'i çalıştırır ve iki uygulamayı başlatır.
+<http://localhost:3000/admin_panel> adresinden `ADMIN_EMAIL` (varsayılan `admin@nakitgaraj.com`) ve seed sırasında kullandığınız `ADMIN_PASSWORD` ile giriş yapın. Gerçek ilan verisi depoda olmadığından `npm run seed:demo` (veya kendi içe aktardığınız ilanlar) olmadan değerlemeler "yeterli piyasa verisi yok" yanıtı verir. Windows'ta `run_project.bat` veritabanını bunun yerine `prisma db push` ile oluşturur, seed'i çalıştırır ve iki uygulamayı başlatır.
 
 ### Yapılandırma
 
-Değişkenlerin tam listesi yukarıdaki [Configuration](#configuration) tablosundadır. Sunucu için gerekenler:
+Backend değişkenleri `backend/.env` dosyasına yazılır (şablon: [`backend/.env.example`](backend/.env.example)). Ön yüz değişkenleri derleme sırasında okunur.
 
-- `backend/.env` dosyasında `JWT_SECRET` (zorunlu; production'da "change-me" gibi örnek değerler reddedilir), `CORS_ORIGIN` ve seed için `ADMIN_PASSWORD`;
-- ön yüzü `NEXT_PUBLIC_API_URL=/api` ile derlemek.
+| Değişken | Nerede | Zorunlu | Amaç |
+|---|---|---|---|
+| `JWT_SECRET` | backend | **evet** | Yönetici oturumlarını imzalar. Backend bu değer olmadan başlamaz, `NODE_ENV=production` iken `change-me` gibi örnek değerleri reddeder ve daha önce bu depoya eklenmiş (git geçmişinde herkese açık) iki JWT anahtarını her ortamda "rotate your JWT_SECRET" hatasıyla reddeder. |
+| `NODE_ENV` | backend | sunucularda | Sunucularda `production` (PM2 yapılandırması bunu ayarlar). |
+| `PORT` | backend | hayır | API portu, varsayılan `3001`. |
+| `CORS_ORIGIN` | backend | hayır | API'yi başka bir siteden çağırabilecek tarayıcı origin'leri, virgülle ayrılmış. `NODE_ENV=production` iken boşsa hiçbir cross-origin isteğe izin verilmez (site API'ye kendi alan adından, Nginx `/api` üzerinden ulaşır). Geliştirmede boşsa her origin'e izin verilir. |
+| `ADMIN_EMAIL` / `ADMIN_PASSWORD` | seed | şifre: **evet** | `npx prisma db seed` ile oluşturulan veya güncellenen admin hesabı. Varsayılan şifre yoktur. |
+| `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_IDS`, `GALLERY_WHATSAPP_PHONE` | backend | hayır | Başlangıç Telegram ayarları (sonra yönetim panelinden değiştirilebilir). |
+| `REDIS_URL` | backend | hayır | Redis önbelleği, örn. `redis://localhost:6379`. Yoksa bellek kullanılır. |
+| `SCRAPER_PROXY` / `SCRAPER_PROXIES` | backend | hayır | İlan tarayıcı için proxy'ler. |
+| `LISTING_ARCHIVE_DIR` | backend, betikler | hayır | İçe aktarma betiklerinin kullandığı, kaydedilmiş ilan sayfalarının bulunduğu yerel klasör. |
+| `NEXT_PUBLIC_API_URL` | ön yüz derlemesi | sunucularda | API adresi, örn. Nginx arkasında `/api`. Varsayılan: `http://<host>:3001/api`. |
+| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | kök dizindeki `.env` | docker compose için | Yalnızca `docker-compose.yml` içindeki isteğe bağlı container'lar için. |
 
 ### Testler
 
@@ -305,28 +376,40 @@ npm test                    # 10 test dosyası: 50 geçti, 2 atlandı
 npm run test:e2e            # 4 test dosyası: 83 geçti
 ```
 
-Testler `prisma/dev.db` veritabanını kullanır. Veritabanı `prisma db push` ile oluşturulduysa (örneğin `run_project.bat` ile) `migrate deploy` adımını atlayın: Prisma kendi oluşturmadığı bir şemaya migration uygulamaz (P3005 hatası); testler o veritabanında da çalışır.
+Testler `prisma/dev.db` veritabanını kullanır. Veritabanı `prisma db push` ile oluşturulduysa (örneğin `run_project.bat` ile) `migrate deploy` adımını atlayın: Prisma kendi oluşturmadığı bir şemaya migration uygulamaz (P3005 hatası); testler o veritabanında olduğu gibi çalışır.
 
-Birim testleri fiyatlama motorunu, emsal eşleştirmeyi, ortam değişkeni doğrulamasını, servisleri ve Telegram mesajlarındaki kaçış işlemini kapsar. e2e testleri 23 admin rotasının tamamını dener: token yokken ve başka bir anahtarla imzalanmış token'da 401, izni olmayan rolde 403; yalnızca ADMIN'e açık 7 rotada (çalışan yönetimi, Telegram ayarları) tüm izinlere sahip ama ADMIN olmayan rolde 403. Yeni bir admin rotası bu listeye eklenmezse test başarısız olur. Diğer e2e testleri giriş sınırını ve JSON veri aktarımını doğrular. Kazınmış piyasa verisi gerektiren 2 test yalnızca `PRICING_REAL_DATA_TESTS=1` ile çalışır. GitHub Actions her push ve pull request'te tip kontrolü, testler, seed denemesi ve iki uygulamanın derlemesini çalıştırır.
+- **Birim testleri:** fiyat hesaplayıcı, emsal eşleştirme, ad normalleştirici, ortam değişkeni doğrulaması (reddedilen sızmış anahtarlar dahil), CORS varsayılanları, konsinye/admin/araç servisleri (kabul edilen model yılları dahil) ve Telegram mesajlarındaki kaçış işlemi. Kazınmış piyasa veritabanı gerektiren 2 fiyatlama regresyon testi yalnızca `PRICING_REAL_DATA_TESTS=1` ile çalışır.
+- **e2e testleri** (gerçek Nest uygulamasına karşı Supertest) 23 admin rotasının tamamını dener: token yokken ve başka bir anahtarla imzalanmış token'da 401, izni olmayan rolde 403; yalnızca ADMIN'e açık 7 rotada (çalışan yönetimi, Telegram ayarları) tüm izinlere sahip ama ADMIN olmayan rolde 403. Yeni bir admin rotası bu listeye eklenmezse test başarısız olur. Diğer e2e testleri giriş deneme sınırını ve admin JSON aktarımını doğrular.
+- **CI** ([`ci.yml`](.github/workflows/ci.yml)) her push ve pull request'te çalışır. Backend: tip kontrolü, migration'lar, birim ve e2e testleri, seed + demo seed denemesi, derleme. Ön yüz: tip kontrolü, production derlemesi.
 
 ### Sunucuya kurulum
 
-PM2 + Nginx + SSL adımları için [DEPLOYMENT.md](DEPLOYMENT.md) dosyasına bakın. `ecosystem.config.js` gizli anahtar içermez. 3001 portunu dışarı açmayın; Nginx `/api` isteklerini backend'e iletir.
+`ecosystem.config.js`, derlenmiş backend'i (`npm run start:prod`) ve ön yüzü (`npm run start`) PM2 ile çalıştırır. [DEPLOYMENT.md](DEPLOYMENT.md), PM2, Nginx ve Let's Encrypt ile bir Linux VPS kurulumunu adım adım anlatır. Sunucuda:
+
+- `backend/.env` dosyasına `JWT_SECRET` ve (seed için) `ADMIN_PASSWORD` yazın; `ecosystem.config.js` gizli anahtar içermez;
+- tarayıcının API'ye Nginx üzerinden, HTTPS ile ve aynı origin'den ulaşması için ön yüzü `NEXT_PUBLIC_API_URL=/api` ile derleyin. Production'da API, `CORS_ORIGIN` çağıran siteyi listelemedikçe cross-origin istekleri reddeder; bu yüzden `/api` olmadan derlenmiş (doğrudan `:3001`'i çağıran) bir ön yüz `CORS_ORIGIN` gerektirir;
+- 3001 portunu dışarı açmayın; Nginx `/api` isteklerini iletir ve `X-Forwarded-For` başlığını ekler, backend bu başlığa yalnızca localhost'tan geldiğinde güvenir.
 
 ### Güvenlik notları
 
-- Depoda gizli anahtar yok. Backend'de yedek JWT anahtarı bulunmaz ve production'da örnek anahtarlar reddedilir. Seed'in varsayılan admin şifresi yoktur.
-- Admin rotaları sunucuda kontrol edilir: çalışan yönetimi ve Telegram ayarları yalnızca ADMIN, fiyat/aktarım/senkronizasyon işlemleri `manage_vehicles` izni ister.
-- Giriş denemeleri IP başına dakikada 5 ile sınırlıdır. Herkese açık yanıtlar başka müşterilerin verisini içermez.
+- Mevcut dosyalarda gizli anahtar yok. Backend'de yedek JWT anahtarı bulunmaz ve production'da örnek anahtarlar reddedilir. Önceki sürümlerden iki JWT anahtarı git geçmişinde hâlâ görünür; backend ikisini de her ortamda reddeder, bu yüzden hâlâ birini kullanan bir sunucu anahtarını değiştirmek zorundadır. Seed'in varsayılan admin şifresi yoktur.
+- Production'da CORS kapalı başlar: `CORS_ORIGIN` yoksa API hiçbir cross-origin tarayıcı isteğine yanıt vermez.
+- Admin rotaları geçerli bir JWT ister ve sunucuda kontrol edilir: çalışan yönetimi ve Telegram ayarları yalnızca ADMIN'e açıktır; fiyat, aktarım ve piyasa senkronizasyonu `manage_vehicles` izni ister.
+- Giriş denemeleri IP başına dakikada 5 ile sınırlıdır. Herkese açık form gönderimlerinde de istek sınırı vardır.
+- Herkese açık yanıtlar başka müşterilerin verisini içermez. Müşteri girdileri Telegram HTML mesajlarında kaçışlanır (escape).
+- Güvenlik açıklarını herkese açık bir issue açmak yerine doğrudan proje sahibine bildirin.
 
 ### Durum ve yol haritası
 
-- **Piyasa verisi:** gerçek snapshot'lar yerel betiklerle içe aktarılan ilan sayfalarından üretilir ve depoda yoktur; `seed:demo` deneme için sentetik veri üretir.
-- **İlan kaynakları:** tarayıcı (cron) ve Chrome eklentisi üçüncü taraf ilan sitelerini (sahibinden.com, arabam.com) okur. Canlıya almadan önce bu sitelerin kullanım koşulları kontrol edilmelidir. Eklenti prototiptir; backend'de henüz olmayan bir içe aktarma adresine istek atar.
-- **Sağlayıcı entegrasyonları:** "API Ayarları" sayfasındaki veri sağlayıcı kartları ve API anahtarı alanı yalnızca arayüz taslağıdır. Aynı sayfadaki Telegram ve piyasa senkronizasyonu ayarları çalışır.
-- **Beyaz etiket:** `site-config.ts` marka ayarlarını `NEXT_PUBLIC_*` değişkenlerinden okur ama arayüz henüz bunu kullanmıyor.
-- **Veritabanı:** yalnızca SQLite; `DATABASE_URL` ve `docker-compose.yml` içindeki Postgres henüz kullanılmıyor.
-- **Kod kalitesi:** iki pakette de mevcut ESLint hataları var, bu yüzden CI henüz lint çalıştırmıyor.
+Tamamlanan ve doğrulanan: değerleme sihirbazı, fiyatlama motoru, konsinye akışı, yönetim paneli/CRM, roller ve izinler, Telegram bildirimleri, CI.
+
+Devam eden işler / bilinen eksikler:
+- **Piyasa verisi:** gerçek snapshot'lar, yerel betiklerle (`backend/src/scripts`) içe aktarılan kayıtlı ilan sayfalarından üretilir. Bu veri depoda yoktur; `seed:demo` uygulamayı denemek için sentetik veri üretir.
+- **İlan kaynakları:** tarayıcı (cron) ve Chrome eklentisi üçüncü taraf ilan sitelerini (sahibinden.com, arabam.com) okur. Bu çalışma production'a alınmadan önce sitelerin kullanım koşulları kontrol edilmelidir. Eklenti prototiptir ve backend'in henüz sunmadığı bir içe aktarma adresine istek atar.
+- **Sağlayıcı entegrasyonları:** yönetim panelindeki "API Ayarları" sayfasında yer alan veri sağlayıcı kartları ve API anahtarı alanı yalnızca arayüz taslağıdır; hiçbir şey kaydedilmez veya çağrılmaz. Aynı sayfadaki Telegram ve piyasa senkronizasyonu ayarları çalışır.
+- **Beyaz etiket:** `frontend/src/config/site-config.ts` marka ayarlarını `NEXT_PUBLIC_*` değişkenlerinden tanımlar, ancak arayüz henüz bunu kullanmıyor (alt bilgideki iletişim bilgileri sabit yazılmıştır).
+- **Veritabanı:** yalnızca SQLite. `prisma/schema.prisma` içinde `file:./dev.db` sabit yazılı olduğundan `DATABASE_URL` ve `docker-compose.yml` içindeki Postgres container'ı henüz kullanılmıyor.
+- **Kod kalitesi:** iki pakette de mevcut ESLint hataları var, bu yüzden CI henüz lint çalıştırmıyor. `backend/src/scripts` geliştirme sürecinden kalma çok sayıda tek seferlik veri betiği içerir.
 
 ---
 
