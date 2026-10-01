@@ -61,6 +61,38 @@ describe('TelegramService notifications (HTML parse mode)', () => {
     expect(forward.url).toContain('wa.me/905550000000');
   });
 
+  it('omits the "forward to manager" button when no gallery phone is configured', async () => {
+    (service.getSettings as jest.Mock).mockReturnValue({
+      botToken: 'test-token',
+      chatIds: '1',
+      galleryWhatsAppPhone: '',
+      enabled: true,
+    });
+    const savedEnv = process.env.GALLERY_WHATSAPP_PHONE;
+    delete process.env.GALLERY_WHATSAPP_PHONE;
+    try {
+      await service.sendEvaluationNotification({
+        licensePlate: '06ABC123',
+        vehicleName: '2020 Fiat Egea (1.4 Fire)',
+        mileage: 85000,
+        color: 'Beyaz',
+        damageStatus: 'NO',
+        phone: '05551112233',
+        fairMarketValue: 640000,
+        finalOfferedPrice: 570000,
+        finalConsignmentPrice: 654000,
+      });
+    } finally {
+      if (savedEnv !== undefined) process.env.GALLERY_WHATSAPP_PHONE = savedEnv;
+    }
+
+    const replyMarkup = sendPhoto.mock.calls[0][4];
+    const buttons = replyMarkup.inline_keyboard.flat();
+    expect(buttons.some((b: any) => b.text.startsWith('📩'))).toBe(false);
+    // The customer's own WhatsApp button is still there.
+    expect(buttons.some((b: any) => b.url.includes('wa.me/905551112233'))).toBe(true);
+  });
+
   it('escapes free-text notes in consignment notifications', async () => {
     await service.sendConsignmentNotification({
       firstName: 'Ayşe',
