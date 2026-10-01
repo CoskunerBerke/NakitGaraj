@@ -67,9 +67,10 @@ Prices come from real market statistics instead of a fixed depreciation formula.
    - Fair value: P50, adjusted for mileage and declared damage.
    - Cash offer: the lower of fair value minus a segment reserve and the adjusted P35, rounded down. Below 400,000 TL the answer is "manual evaluation" instead.
    - Consignment: a listing price near P60 (or the seller's desired price, capped), 1.5 % expected negotiation, a tiered commission and the seller's net payout.
+   - The two offers are computed independently. The expected sale price never drops below cash offer + 30,000 TL, but the commission (at least 50,000 TL) is charged on that floor, so whenever the floor applies the seller's net is at least 20,000 TL *below* the cash offer. Consignment pays the seller more only when the listing price is well above the cash offer.
 5. **Leads.** Priced valuations and consignment applications are stored for the admin CRM and sent to Telegram as an image card. Admin routes need a JWT and pass role and permission guards on the server.
 
-The full walkthrough is in **[docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md)**: diagrams, every formula and constant with a worked example, the public API with its response shapes, the data model, the security model with a route → permission table, test counts and known gaps.
+The full walkthrough is in **[docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md)**: diagrams, every formula and constant with a worked example, the confidence score, the public API with its response shapes, the frontend internals, the data model and the expected listing-archive HTML, the security model with a route → permission table and personal-data handling, deployment and operations in English, test counts and known gaps.
 
 ## Screenshots
 
@@ -132,7 +133,7 @@ Level 2 and 3 matches combine several snapshots and normalise them to the reques
 
 | Layer | Tools |
 |---|---|
-| Frontend | Next.js 16 (App Router), React 19, TypeScript, Tailwind CSS 4, Framer Motion, TanStack Query, React Hook Form, Zod, Lucide icons |
+| Frontend | Next.js 16 (App Router), React 19, TypeScript, Tailwind CSS 4, Framer Motion, React Hook Form, Zod, Lucide icons; TanStack Query is installed and its provider mounted, but no component uses it yet |
 | Backend | NestJS 11, Prisma 5, @nestjs/jwt, bcrypt, @nestjs/throttler, @nestjs/schedule, class-validator, Playwright, Cheerio, jsdom, xlsx, csv-parser, @napi-rs/canvas |
 | Data | SQLite (`backend/prisma/dev.db`), optional Redis cache |
 | Tests & CI | Jest (unit + e2e with Supertest), GitHub Actions |
@@ -230,7 +231,11 @@ The tests use `prisma/dev.db`. If that database was created with `prisma db push
 
 - set `JWT_SECRET` and (for seeding) `ADMIN_PASSWORD` in `backend/.env`; `ecosystem.config.js` contains no secrets;
 - build the frontend with `NEXT_PUBLIC_API_URL=/api` so the browser reaches the API through Nginx over HTTPS on the same origin. In production the API refuses cross-origin requests unless `CORS_ORIGIN` lists the calling site, so a frontend built without `/api` (calling `:3001` directly) needs `CORS_ORIGIN`;
-- keep port 3001 private; Nginx forwards `/api` and passes `X-Forwarded-For`, which the backend trusts only from localhost.
+- keep port 3001 private; Nginx forwards `/api` and passes `X-Forwarded-For`, which the backend trusts only from localhost;
+- create the database with `npx prisma migrate deploy`. DEPLOYMENT.md and `run_project.bat` use `prisma db push`, which records no migration history: on such a database a later `migrate deploy` fails with P3005 until the two existing migrations are marked as applied (`npx prisma migrate resolve --applied <name>`);
+- run one backend process (cron jobs and rate-limit counters live in it), and back up `backend/prisma/dev.db` plus the two settings files `backend/telegram-settings.json` and `backend/market-sync-settings.json`; the repository has no backup job, request logging, metrics or health endpoint.
+
+An English summary of the whole setup (process layout, build, migrations, backups, logging and error handling) is in [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md#deployment-and-operations).
 
 ## Security notes
 
@@ -239,6 +244,7 @@ The tests use `prisma/dev.db`. If that database was created with `prisma db push
 - Admin routes need a valid JWT and are checked on the server: user management and Telegram settings are ADMIN-only; catalogue prices, import, scraper, market sync and vehicle-request status changes need `manage_vehicles`; the consignment CRM needs `manage_consignments`. The full route → permission table is in [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md#admin-routes-and-their-guards).
 - Login is limited to 5 attempts per minute per IP. Public form submissions are rate-limited.
 - Public responses do not include other customers' data. Customer input is escaped in Telegram HTML messages.
+- Personal data (names, phones, plates, e-mails, IPs) is stored without a retention period and there is no delete or anonymise function for leads; Telegram messages also carry names, phones and plates. The KVKK consent checkbox is checked only in the browser and not recorded. See [Personal data](docs/HOW_IT_WORKS.md#personal-data).
 - Report security issues privately to the maintainer instead of opening a public issue.
 
 ## Status & roadmap
@@ -248,7 +254,8 @@ Done and verified: valuation wizard, pricing engine, consignment flow, admin pan
 Still in progress / known gaps:
 - **Market data:** real snapshots come from saved listing pages imported with local scripts (`backend/src/scripts`). That data is not in the repository; `seed:demo` generates synthetic data for trying the app. The synthetic prices differ on every fresh database, and the listing import does not filter by source, so demo listings created before an import end up in its snapshots.
 - **Listing sources:** the scraper cron and the Chrome extension read third-party listing sites (sahibinden.com, arabam.com). Their terms of use have to be checked before this runs in production. The extension is a prototype and posts to an import endpoint that the backend does not implement yet.
-- **Pricing engine:** snapshots built from two or three listings take their percentiles from unsorted prices, and Level 2 and 3 matches take the reference mileage from a single merged snapshot instead of a weighted value. The snapshot lookups have no index yet.
+- **Pricing engine:** snapshots built from two or three listings take their percentiles from unsorted prices, and Level 2 and 3 matches take the reference mileage from a single merged snapshot instead of a weighted value. The snapshot lookups have no index yet. The import's damage check matches "pert" as a substring, so clean listings that mention an inspection report ("ekspertiz") are treated as damaged and left out of snapshots.
+- **Consignment offer:** the result step shows the listing price, not the seller's net. The commission (at least 50,000 TL) comes off the expected sale, so a desired price somewhat below the market can already give a net below the cash offer.
 - **Valuation wizard:** the result step only renders priced answers. `INSUFFICIENT_DATA` and `MANUAL_EVALUATION_REQUIRED` responses (the latter for every car valued under 400,000 TL) are not displayed yet. The paint map, chassis and damage flags are sent but not stored or priced; only the damage record (yes / no / unknown) changes the price.
 - **Provider integrations:** the data-provider cards and API key field on the admin "API Ayarları" page are a UI mock-up; nothing is stored or called. The Telegram settings on that page work. The market-sync switch and monthly rate work too, but the sync only scales the catalogue list prices (`originalMSRP`), which the pricing engine does not read. The margin fields on that page are saved but not used: offers come from the constants in `backend/src/evaluation/robust-pricing-calculator.ts`.
 - **Roles:** the seed creates ADMIN and CRM_MANAGER. A role that the panel creates on the fly (such as STAFF) starts without permissions, and there is no screen to grant them yet.
@@ -301,9 +308,10 @@ Fiyatlar sabit bir amortisman formülünden değil, gerçek piyasa istatistikler
    - Piyasa değeri: kilometreye ve beyan edilen hasara göre düzeltilmiş P50.
    - Nakit teklif: piyasa değeri eksi segment rezervi ile düzeltilmiş P35'ten küçük olanı, aşağı yuvarlanmış hâli. 400.000 TL altında bunun yerine "manuel değerlendirme" yanıtı verilir.
    - Konsinye: P60 civarında bir ilan fiyatı (ya da sınırlandırılmış olarak müşterinin istediği fiyat), %1,5 beklenen pazarlık, kademeli komisyon ve müşteriye kalan net tutar.
+   - İki teklif birbirinden bağımsız hesaplanır. Beklenen satış fiyatı nakit teklif + 30.000 TL'nin altına inmez, ancak komisyon (en az 50.000 TL) bu tabana uygulanır; taban devreye girdiğinde müşteriye kalan net, nakit tekliften en az 20.000 TL *düşük* olur. Konsinye ancak ilan fiyatı nakit teklifin belirgin biçimde üstündeyse müşteriye daha fazla kazandırır.
 5. **Talepler.** Fiyatlanan değerlemeler ve konsinye başvuruları yönetim panelindeki CRM için kaydedilir ve görsel kartla Telegram'a gönderilir. Admin rotaları JWT ister; rol ve izin kontrolleri sunucuda yapılır.
 
-Ayrıntılı anlatım **[docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md)** içindedir (İngilizce, sonunda Türkçe özet): diyagramlar, örnek hesapla birlikte tüm formüller ve sabitler, yanıt biçimleriyle herkese açık API, veri modeli, rota → izin tablosuyla güvenlik modeli, test sayıları ve bilinen eksikler.
+Ayrıntılı anlatım **[docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md)** içindedir (İngilizce, sonunda Türkçe özet): diyagramlar, örnek hesapla birlikte tüm formüller ve sabitler, güven skoru, yanıt biçimleriyle herkese açık API, ön yüzün iç yapısı, veri modeli ve ilan arşivinin beklenen HTML biçimi, rota → izin tablosu ve kişisel veri işleyişiyle güvenlik modeli, sunucu kurulumu ve işletim, test sayıları ve bilinen eksikler.
 
 ### Ekran görüntüleri
 
@@ -319,7 +327,7 @@ Yukarıdaki [Architecture](#architecture) ve [How a price is calculated](#how-a-
 
 | Katman | Araçlar |
 |---|---|
-| Ön yüz | Next.js 16 (App Router), React 19, TypeScript, Tailwind CSS 4, Framer Motion, TanStack Query, React Hook Form, Zod, Lucide ikonları |
+| Ön yüz | Next.js 16 (App Router), React 19, TypeScript, Tailwind CSS 4, Framer Motion, React Hook Form, Zod, Lucide ikonları; TanStack Query kurulu ve sağlayıcısı bağlı, ancak henüz hiçbir bileşen kullanmıyor |
 | Backend | NestJS 11, Prisma 5, @nestjs/jwt, bcrypt, @nestjs/throttler, @nestjs/schedule, class-validator, Playwright, Cheerio, jsdom, xlsx, csv-parser, @napi-rs/canvas |
 | Veri | SQLite (`backend/prisma/dev.db`), isteğe bağlı Redis önbelleği |
 | Test ve CI | Jest (birim + Supertest ile e2e), GitHub Actions |
@@ -417,7 +425,11 @@ Testler `prisma/dev.db` veritabanını kullanır. Veritabanı `prisma db push` i
 
 - `backend/.env` dosyasına `JWT_SECRET` ve (seed için) `ADMIN_PASSWORD` yazın; `ecosystem.config.js` gizli anahtar içermez;
 - tarayıcının API'ye Nginx üzerinden, HTTPS ile ve aynı origin'den ulaşması için ön yüzü `NEXT_PUBLIC_API_URL=/api` ile derleyin. Production'da API, `CORS_ORIGIN` çağıran siteyi listelemedikçe cross-origin istekleri reddeder; bu yüzden `/api` olmadan derlenmiş (doğrudan `:3001`'i çağıran) bir ön yüz `CORS_ORIGIN` gerektirir;
-- 3001 portunu dışarı açmayın; Nginx `/api` isteklerini iletir ve `X-Forwarded-For` başlığını ekler, backend bu başlığa yalnızca localhost'tan geldiğinde güvenir.
+- 3001 portunu dışarı açmayın; Nginx `/api` isteklerini iletir ve `X-Forwarded-For` başlığını ekler, backend bu başlığa yalnızca localhost'tan geldiğinde güvenir;
+- veritabanını `npx prisma migrate deploy` ile oluşturun. DEPLOYMENT.md ve `run_project.bat` `prisma db push` kullanır ve migration geçmişi kaydetmez: böyle bir veritabanında sonraki `migrate deploy`, mevcut iki migration uygulanmış olarak işaretlenene kadar (`npx prisma migrate resolve --applied <ad>`) P3005 hatası verir;
+- tek bir backend süreci çalıştırın (cron görevleri ve istek sınırı sayaçları bu süreçtedir); `backend/prisma/dev.db` ile `backend/telegram-settings.json` ve `backend/market-sync-settings.json` ayar dosyalarını yedekleyin. Depoda yedekleme betiği, istek logu, metrik veya sağlık uç noktası yoktur.
+
+Kurulumun tamamının İngilizce özeti (süreç düzeni, derleme, migration'lar, yedekleme, loglama ve hata işleme) [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md#deployment-and-operations) içindedir.
 
 ### Güvenlik notları
 
@@ -426,6 +438,7 @@ Testler `prisma/dev.db` veritabanını kullanır. Veritabanı `prisma db push` i
 - Admin rotaları geçerli bir JWT ister ve sunucuda kontrol edilir: çalışan yönetimi ve Telegram ayarları yalnızca ADMIN'e açıktır; katalog fiyatları, aktarım, fiyat tarayıcı, piyasa senkronizasyonu ve araç talebi durum değişikliği `manage_vehicles`, konsinye CRM'i `manage_consignments` izni ister. Rota → izin tablosunun tamamı [docs/HOW_IT_WORKS.md](docs/HOW_IT_WORKS.md#admin-routes-and-their-guards) içindedir.
 - Giriş denemeleri IP başına dakikada 5 ile sınırlıdır. Herkese açık form gönderimlerinde de istek sınırı vardır.
 - Herkese açık yanıtlar başka müşterilerin verisini içermez. Müşteri girdileri Telegram HTML mesajlarında kaçışlanır (escape).
+- Kişisel veriler (ad, telefon, plaka, e-posta, IP) saklama süresi olmadan tutulur; talepleri silen veya anonimleştiren bir işlev yoktur. Telegram mesajları da ad, telefon ve plakayı içerir. KVKK onay kutusu yalnızca tarayıcıda kontrol edilir ve kaydedilmez. Ayrıntılar: [Personal data](docs/HOW_IT_WORKS.md#personal-data).
 - Güvenlik açıklarını herkese açık bir issue açmak yerine doğrudan proje sahibine bildirin.
 
 ### Durum ve yol haritası
@@ -435,7 +448,8 @@ Tamamlanan ve doğrulanan: değerleme sihirbazı, fiyatlama motoru, konsinye ak�
 Devam eden işler / bilinen eksikler:
 - **Piyasa verisi:** gerçek snapshot'lar, yerel betiklerle (`backend/src/scripts`) içe aktarılan kayıtlı ilan sayfalarından üretilir. Bu veri depoda yoktur; `seed:demo` uygulamayı denemek için sentetik veri üretir. Sentetik fiyatlar her yeni veritabanında farklı çıkar; ilan aktarımı kaynağa göre süzmediği için aktarımdan önce eklenmiş demo ilanları onun snapshot'larına karışır.
 - **İlan kaynakları:** tarayıcı (cron) ve Chrome eklentisi üçüncü taraf ilan sitelerini (sahibinden.com, arabam.com) okur. Bu çalışma production'a alınmadan önce sitelerin kullanım koşulları kontrol edilmelidir. Eklenti prototiptir ve backend'in henüz sunmadığı bir içe aktarma adresine istek atar.
-- **Fiyatlama motoru:** iki veya üç ilandan üretilen snapshot'lar yüzdeliklerini sıralanmamış fiyatlardan alır; Seviye 2 ve 3 eşleşmeleri referans kilometreyi ağırlıklı bir değer yerine birleştirilen snapshot'lardan yalnızca birinden alır. Snapshot sorguları için henüz indeks yok.
+- **Fiyatlama motoru:** iki veya üç ilandan üretilen snapshot'lar yüzdeliklerini sıralanmamış fiyatlardan alır; Seviye 2 ve 3 eşleşmeleri referans kilometreyi ağırlıklı bir değer yerine birleştirilen snapshot'lardan yalnızca birinden alır. Snapshot sorguları için henüz indeks yok. İçe aktarmanın hasar kontrolü "pert" kelimesini alt dize olarak aradığından "ekspertiz" geçen temiz ilanlar hasarlı sayılır ve snapshot dışında kalır.
+- **Konsinye teklifi:** sonuç ekranı müşteriye kalan neti değil ilan fiyatını gösterir. Komisyon (en az 50.000 TL) beklenen satıştan düşüldüğü için piyasanın biraz altındaki bir istenen fiyat bile nakit tekliften düşük bir net verebilir.
 - **Değerleme sihirbazı:** sonuç ekranı yalnızca fiyatlanmış yanıtları gösterir. `INSUFFICIENT_DATA` ve `MANUAL_EVALUATION_REQUIRED` yanıtları (ikincisi değeri 400.000 TL'nin altındaki her araç için) henüz gösterilmiyor. Boya şeması, şasi ve hasar işaretleri gönderilir ama kaydedilmez ve fiyata yansımaz; fiyatı yalnızca hasar kaydı (var / yok / bilinmiyor) değiştirir.
 - **Sağlayıcı entegrasyonları:** yönetim panelindeki "API Ayarları" sayfasında yer alan veri sağlayıcı kartları ve API anahtarı alanı yalnızca arayüz taslağıdır; hiçbir şey kaydedilmez veya çağrılmaz. Aynı sayfadaki Telegram ayarları çalışır. Piyasa senkronizasyonunun aç/kapa ayarı ve aylık oranı da çalışır, ancak senkronizasyon yalnızca katalog liste fiyatlarını (`originalMSRP`) ölçekler; fiyatlama motoru bu değeri okumaz. Aynı sayfadaki kâr marjı alanları kaydedilir ama kullanılmaz: teklifler `backend/src/evaluation/robust-pricing-calculator.ts` içindeki sabitlerden hesaplanır.
 - **Roller:** seed, ADMIN ve CRM_MANAGER rollerini oluşturur. Panelin anında oluşturduğu bir rol (örneğin STAFF) izinsiz başlar ve izin vermek için henüz bir ekran yoktur.
