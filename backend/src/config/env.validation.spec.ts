@@ -1,6 +1,14 @@
+import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
-import { LEAKED_JWT_SECRETS, validateEnv } from './env.validation';
+import { LEAKED_JWT_SECRET_SHA256, validateEnv } from './env.validation';
+
+// Stand-in for a leaked secret: the real values are kept out of the current
+// source, so the refusal path is tested with this value's digest instead.
+const LEAKED_FOR_TEST = 'leaked-secret-for-tests';
+const TEST_DIGESTS = [
+  createHash('sha256').update(LEAKED_FOR_TEST, 'utf8').digest('hex'),
+];
 
 const PM2_RECREATE_BACKEND =
   'pm2 delete nakitgaraj-backend && ' +
@@ -38,21 +46,26 @@ describe('validateEnv', () => {
     );
   });
 
-  it('lists both secrets that were published in the git history', () => {
-    expect(LEAKED_JWT_SECRETS).toHaveLength(2);
-    expect(LEAKED_JWT_SECRETS).toContain(
-      'your-jwt-secret-key-change-in-production',
+  it('keeps SHA-256 digests (not the values) of both leaked secrets', () => {
+    expect(LEAKED_JWT_SECRET_SHA256).toHaveLength(2);
+    for (const digest of LEAKED_JWT_SECRET_SHA256) {
+      expect(digest).toMatch(/^[0-9a-f]{64}$/);
+    }
+    const source = fs.readFileSync(
+      path.join(__dirname, 'env.validation.ts'),
+      'utf8',
     );
+    expect(source).not.toMatch(/secret-key/);
   });
 
   it.each(['production', 'development', 'test', undefined])(
     'refuses a leaked secret and asks to rotate it (NODE_ENV=%s)',
     (nodeEnv) => {
-      for (const leaked of LEAKED_JWT_SECRETS) {
+      for (const leaked of [LEAKED_FOR_TEST]) {
         for (const value of [leaked, `  ${leaked}\n`]) {
           let error: Error | undefined;
           try {
-            validateEnv({ JWT_SECRET: value, NODE_ENV: nodeEnv });
+            validateEnv({ JWT_SECRET: value, NODE_ENV: nodeEnv }, TEST_DIGESTS);
           } catch (e) {
             error = e as Error;
           }

@@ -1,3 +1,5 @@
+import { createHash } from 'crypto';
+
 /**
  * Validates the process environment when the app boots (ConfigModule.forRoot).
  * The backend refuses to start without a JWT secret instead of silently
@@ -9,18 +11,25 @@ const PLACEHOLDER_SECRETS = new Set([
 ]);
 
 /**
- * JWT secrets that were committed to this repository in the past (the old PM2
- * config and the old fallback in the auth module). They are public in the git
- * history, so anyone could forge admin tokens with them: they are refused in
- * every environment, not only in production. The error never echoes them.
+ * SHA-256 digests of the JWT secrets that were committed to this repository in
+ * the past (the old PM2 config and the old fallback in the auth module). They
+ * are public in the git history, so anyone could forge admin tokens with them:
+ * they are refused in every environment, not only in production. Only the
+ * digests are kept here so the current source does not republish the values,
+ * and the error never echoes the configured secret.
  */
-export const LEAKED_JWT_SECRETS: readonly string[] = [
-  'super-secret-key-nakitgaraj-premium-2026',
-  'your-jwt-secret-key-change-in-production',
+export const LEAKED_JWT_SECRET_SHA256: readonly string[] = [
+  '0cfaf3d206d2f0ae80ecd8dddc7d18f9e981b2267ba2a739c1a6c7b1728ef23c',
+  '03e0d1ff6a48214ad0117e482f047bce1440e3328b84e3e23a10e0a1468612f5',
 ];
+
+function sha256Hex(value: string): string {
+  return createHash('sha256').update(value, 'utf8').digest('hex');
+}
 
 export function validateEnv(
   config: Record<string, unknown>,
+  leakedSecretDigests: readonly string[] = LEAKED_JWT_SECRET_SHA256,
 ): Record<string, unknown> {
   const secret = config.JWT_SECRET;
   if (typeof secret !== 'string' || secret.trim() === '') {
@@ -30,7 +39,7 @@ export function validateEnv(
         '(generate one with: openssl rand -hex 32).',
     );
   }
-  if (LEAKED_JWT_SECRETS.includes(secret.trim())) {
+  if (leakedSecretDigests.includes(sha256Hex(secret.trim()))) {
     // Old ecosystem.config.js files put the leaked secret into the PM2
     // environment. PM2 keeps that environment across restarts and process.env
     // wins over backend/.env, so editing backend/.env alone is not enough.
